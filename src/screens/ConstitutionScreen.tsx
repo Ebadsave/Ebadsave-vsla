@@ -9,6 +9,13 @@ import {
   View,
 } from 'react-native';
 
+import {
+  initializeDatabase,
+  registerGroup,
+  getAllGroups,
+  type GroupRecord,
+} from '../database/database';
+
 type ConstitutionScreenProps = {
   navigation: any;
 };
@@ -64,39 +71,6 @@ const articles = [
   },
 ];
 
-const MIN_GROUP_NUMBER = 2010;
-const MAX_GROUP_NUMBER = 9090;
-
-const usedGroupNumbers = new Set<number>();
-
-function generateUniqueGroupNumber(): number {
-  const availableNumbers: number[] = [];
-
-  for (
-    let number = MIN_GROUP_NUMBER;
-    number <= MAX_GROUP_NUMBER;
-    number++
-  ) {
-    if (!usedGroupNumbers.has(number)) {
-      availableNumbers.push(number);
-    }
-  }
-
-  if (availableNumbers.length === 0) {
-    throw new Error('No group numbers are available.');
-  }
-
-  const randomIndex = Math.floor(
-    Math.random() * availableNumbers.length,
-  );
-
-  const selectedNumber = availableNumbers[randomIndex];
-
-  usedGroupNumbers.add(selectedNumber);
-
-  return selectedNumber;
-}
-
 export default function ConstitutionScreen({
   navigation,
 }: ConstitutionScreenProps) {
@@ -115,6 +89,10 @@ export default function ConstitutionScreen({
     null,
   );
 
+  const [databaseReady, setDatabaseReady] = useState(false);
+  const [registering, setRegistering] = useState(false);
+  const [registrationMessage, setRegistrationMessage] = useState('');
+
   const signatureValid = signatureCode.trim().length >= 4;
 
   const toggleArticle = (index: number) => {
@@ -123,16 +101,169 @@ export default function ConstitutionScreen({
     );
   };
 
+  /*
+   * Initialize SQLite when this screen opens.
+   */
   useEffect(() => {
-    if (agreed && signatureValid && groupNumber === null) {
-      setGroupNumber(generateUniqueGroupNumber());
+    let mounted = true;
+
+    const prepareDatabase = async () => {
+      try {
+        await initializeDatabase();
+
+        if (mounted) {
+          setDatabaseReady(true);
+        }
+
+        /*
+         * If an active group already exists on this device,
+         * load the most recently registered active group.
+         *
+         * This allows the KYA number to remain visible after
+         * closing and reopening the app.
+         */
+        const groups = await getAllGroups();
+
+        const activeGroups = groups.filter(
+          (group: GroupRecord) => group.status === 'active',
+        );
+
+        if (activeGroups.length > 0 && mounted) {
+          const currentGroup =
+            activeGroups[activeGroups.length - 1];
+
+          setGroupName(currentGroup.group_name);
+          setDistrict(currentGroup.district);
+          setCountry(currentGroup.country);
+          setGroupNumber(currentGroup.group_number);
+        }
+      } catch (error) {
+        console.error(
+          'Database initialization error:',
+          error,
+        );
+
+        if (mounted) {
+          setRegistrationMessage(
+            'Unable to initialize the group database.',
+          );
+        }
+      }
+    };
+
+    prepareDatabase();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  /*
+   * Register the group only when:
+   *
+   * 1. Database is ready
+   * 2. Group name is entered
+   * 3. District is entered
+   * 4. Country is entered
+   * 5. Agreement is checked
+   * 6. Signature code has at least 4 characters
+   * 7. A KYA number has not already been assigned
+   *
+   * Once a number has been registered in SQLite, it is NOT
+   * removed when the user unchecks the agreement or changes
+   * the signature code.
+   *
+   * The number can only become available again after the
+   * group's recorded activity has been inactive for 3 months.
+   */
+  useEffect(() => {
+    if (!databaseReady) {
+      return;
     }
 
-    if ((!agreed || !signatureValid) && groupNumber !== null) {
-      usedGroupNumbers.delete(groupNumber);
-      setGroupNumber(null);
+    if (groupNumber !== null) {
+      return;
     }
-  }, [agreed, signatureValid, groupNumber]);
+
+    if (!agreed) {
+      return;
+    }
+
+    if (!signatureValid) {
+      return;
+    }
+
+    if (!groupName.trim()) {
+      return;
+    }
+
+    if (!district.trim()) {
+      return;
+    }
+
+    if (!country.trim()) {
+      return;
+    }
+
+    if (registering) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const createGroup = async () => {
+      try {
+        setRegistering(true);
+        setRegistrationMessage('');
+
+        const group = await registerGroup({
+          groupName,
+          district,
+          country,
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        setGroupNumber(group.group_number);
+
+        setRegistrationMessage(
+          `Group successfully registered as KYA ${group.group_number}.`,
+        );
+      } catch (error) {
+        console.error(
+          'Group registration error:',
+          error,
+        );
+
+        if (!cancelled) {
+          setRegistrationMessage(
+            'Unable to register the group. Please try again.',
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setRegistering(false);
+        }
+      }
+    };
+
+    createGroup();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    databaseReady,
+    agreed,
+    signatureValid,
+    groupName,
+    district,
+    country,
+    groupNumber,
+    registering,
+  ]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -145,7 +276,9 @@ export default function ConstitutionScreen({
           <Text style={styles.backText}>‹</Text>
         </TouchableOpacity>
 
-        <Text style={styles.headerTitle}>Group Constitution</Text>
+        <Text style={styles.headerTitle}>
+          Group Constitution
+        </Text>
 
         <View style={styles.headerSpacer} />
       </View>
@@ -208,7 +341,7 @@ export default function ConstitutionScreen({
                         placeholderTextColor="#9ca3af"
                         autoCorrect={false}
                         autoCapitalize="words"
-                        editable={true}
+                        editable={groupNumber === null}
                       />
 
                       {/* District */}
@@ -224,7 +357,7 @@ export default function ConstitutionScreen({
                         placeholderTextColor="#9ca3af"
                         autoCorrect={false}
                         autoCapitalize="words"
-                        editable={true}
+                        editable={groupNumber === null}
                       />
 
                       {/* Country */}
@@ -240,7 +373,7 @@ export default function ConstitutionScreen({
                         placeholderTextColor="#9ca3af"
                         autoCorrect={false}
                         autoCapitalize="words"
-                        editable={true}
+                        editable={groupNumber === null}
                       />
 
                       {/* Group Number */}
@@ -249,14 +382,27 @@ export default function ConstitutionScreen({
                           Group Number
                         </Text>
 
-                        {groupNumber !== null ? (
-                          <Text style={styles.groupNumber}>
-                            KYA {groupNumber}
+                        {registering ? (
+                          <Text style={styles.numberWaiting}>
+                            Registering group...
                           </Text>
+                        ) : groupNumber !== null ? (
+                          <>
+                            <Text style={styles.groupNumber}>
+                              KYA {groupNumber}
+                            </Text>
+
+                            <Text style={styles.permanentText}>
+                              This number is permanently recorded
+                              for this active group.
+                            </Text>
+                          </>
                         ) : (
                           <Text style={styles.numberWaiting}>
-                            Check "I have read and agreed" and enter
-                            a signature code of at least 4 characters.
+                            Enter Group Name, District and Country,
+                            then check "I have read and agreed" and
+                            enter a signature code of at least 4
+                            characters.
                           </Text>
                         )}
                       </View>
@@ -264,6 +410,12 @@ export default function ConstitutionScreen({
                       <Text style={styles.rangeText}>
                         Available range: KYA 2010 - KYA 9090
                       </Text>
+
+                      {registrationMessage !== '' && (
+                        <Text style={styles.registrationMessage}>
+                          {registrationMessage}
+                        </Text>
+                      )}
                     </>
                   ) : (
                     <Text style={styles.articleText}>
@@ -311,7 +463,7 @@ export default function ConstitutionScreen({
           placeholderTextColor="#9ca3af"
           autoCapitalize="characters"
           autoCorrect={false}
-          editable={true}
+          editable={groupNumber === null}
         />
       </ScrollView>
     </SafeAreaView>
@@ -504,6 +656,21 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     fontSize: 13,
     lineHeight: 19,
+  },
+
+  permanentText: {
+    color: '#166534',
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 5,
+  },
+
+  registrationMessage: {
+    color: '#166534',
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 8,
+    fontWeight: '600',
   },
 
   rangeText: {
