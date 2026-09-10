@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useCallback, useState } from 'react';
 import {
+  Alert,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -7,6 +8,12 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+
+import {
+  getAllGroups,
+  recordGroupActivity,
+  GroupRecord,
+} from '../database/database';
 
 type HomeScreenProps = {
   navigation: any;
@@ -60,6 +67,73 @@ const summaryCards = [
 export default function HomeScreen({
   navigation,
 }: HomeScreenProps) {
+  const [activeGroup, setActiveGroup] =
+    useState<GroupRecord | null>(null);
+
+  const loadActiveGroup = useCallback(async () => {
+    try {
+      const groups = await getAllGroups();
+
+      const activeGroups = groups.filter(
+        (group) => group.status === 'active',
+      );
+
+      if (activeGroups.length > 0) {
+        setActiveGroup(activeGroups[0]);
+      } else {
+        setActiveGroup(null);
+      }
+    } catch (error) {
+      console.error(
+        'Failed to load active group:',
+        error,
+      );
+    }
+  }, []);
+
+  React.useEffect(() => {
+    loadActiveGroup();
+  }, [loadActiveGroup]);
+
+  const handleNewMeeting = async () => {
+    try {
+      if (!activeGroup) {
+        Alert.alert(
+          'No Active Group',
+          'Please register a group before starting a meeting.',
+        );
+        return;
+      }
+
+      await recordGroupActivity(activeGroup.id);
+
+      const updatedGroups = await getAllGroups();
+
+      const updatedGroup = updatedGroups.find(
+        (group) => group.id === activeGroup.id,
+      );
+
+      if (updatedGroup) {
+        setActiveGroup(updatedGroup);
+      }
+
+      Alert.alert(
+        'Meeting Started',
+        `${activeGroup.group_name} (${activeGroup.group_number}) activity has been recorded.`,
+      );
+    } catch (error) {
+      console.error(
+        'Failed to record meeting activity:',
+        error,
+      );
+
+      Alert.alert(
+        'Error',
+        'The meeting activity could not be recorded. Please try again.',
+      );
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       {/* Green Header */}
@@ -70,7 +144,9 @@ export default function HomeScreen({
           </View>
 
           <View style={styles.titleContainer}>
-            <Text style={styles.appName}>Ebadsave VSLA</Text>
+            <Text style={styles.appName}>
+              Ebadsave VSLA
+            </Text>
 
             <Text style={styles.tagline}>
               save together,grow together
@@ -80,7 +156,9 @@ export default function HomeScreen({
 
         <TouchableOpacity
           style={styles.constitutionButton}
-          onPress={() => navigation.navigate('Constitution')}
+          onPress={() =>
+            navigation.navigate('Constitution')
+          }
           activeOpacity={0.8}
         >
           <Text style={styles.constitutionText}>
@@ -96,12 +174,16 @@ export default function HomeScreen({
         {/* Summary Cards */}
         <View style={styles.cardsGrid}>
           {summaryCards.map((card) => (
-            <View key={card.title} style={styles.card}>
+            <View
+              key={card.title}
+              style={styles.card}
+            >
               <View
                 style={[
                   styles.iconCircle,
                   {
-                    backgroundColor: card.iconBackground,
+                    backgroundColor:
+                      card.iconBackground,
                   },
                 ]}
               >
@@ -144,6 +226,7 @@ export default function HomeScreen({
         {/* New Meeting */}
         <TouchableOpacity
           style={styles.meetingButton}
+          onPress={handleNewMeeting}
           activeOpacity={0.8}
         >
           <Text style={styles.meetingButtonText}>
