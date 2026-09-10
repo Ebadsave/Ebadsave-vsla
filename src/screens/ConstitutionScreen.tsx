@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   SafeAreaView,
   ScrollView,
@@ -64,6 +64,39 @@ const articles = [
   },
 ];
 
+const MIN_GROUP_NUMBER = 2010;
+const MAX_GROUP_NUMBER = 9090;
+
+const usedGroupNumbers = new Set<number>();
+
+function generateUniqueGroupNumber(): number {
+  const availableNumbers: number[] = [];
+
+  for (
+    let number = MIN_GROUP_NUMBER;
+    number <= MAX_GROUP_NUMBER;
+    number++
+  ) {
+    if (!usedGroupNumbers.has(number)) {
+      availableNumbers.push(number);
+    }
+  }
+
+  if (availableNumbers.length === 0) {
+    throw new Error('No group numbers are available.');
+  }
+
+  const randomIndex = Math.floor(
+    Math.random() * availableNumbers.length,
+  );
+
+  const selectedNumber = availableNumbers[randomIndex];
+
+  usedGroupNumbers.add(selectedNumber);
+
+  return selectedNumber;
+}
+
 export default function ConstitutionScreen({
   navigation,
 }: ConstitutionScreenProps) {
@@ -74,11 +107,32 @@ export default function ConstitutionScreen({
   const [agreed, setAgreed] = useState(false);
   const [signatureCode, setSignatureCode] = useState('');
 
+  const [groupName, setGroupName] = useState('');
+  const [district, setDistrict] = useState('');
+  const [country, setCountry] = useState('');
+
+  const [groupNumber, setGroupNumber] = useState<number | null>(
+    null,
+  );
+
   const toggleArticle = (index: number) => {
     setExpandedArticle(
       expandedArticle === index ? null : index,
     );
   };
+
+  const signatureValid = signatureCode.trim().length >= 4;
+
+  useEffect(() => {
+    if (agreed && signatureValid && groupNumber === null) {
+      setGroupNumber(generateUniqueGroupNumber());
+    }
+
+    if ((!agreed || !signatureValid) && groupNumber !== null) {
+      usedGroupNumbers.delete(groupNumber);
+      setGroupNumber(null);
+    }
+  }, [agreed, signatureValid, groupNumber]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -130,9 +184,77 @@ export default function ConstitutionScreen({
 
               {isExpanded && (
                 <View style={styles.articleBody}>
-                  <Text style={styles.articleText}>
-                    {article.text}
-                  </Text>
+                  {index === 0 ? (
+                    <>
+                      <Text style={styles.articleText}>
+                        {article.text}
+                      </Text>
+
+                      <Text style={styles.inputLabel}>
+                        Group Name
+                      </Text>
+
+                      <TextInput
+                        style={styles.input}
+                        value={groupName}
+                        onChangeText={setGroupName}
+                        placeholder="Enter group name"
+                        placeholderTextColor="#9ca3af"
+                        autoCorrect={false}
+                      />
+
+                      <Text style={styles.inputLabel}>
+                        District
+                      </Text>
+
+                      <TextInput
+                        style={styles.input}
+                        value={district}
+                        onChangeText={setDistrict}
+                        placeholder="Enter district"
+                        placeholderTextColor="#9ca3af"
+                        autoCorrect={false}
+                      />
+
+                      <Text style={styles.inputLabel}>
+                        Country
+                      </Text>
+
+                      <TextInput
+                        style={styles.input}
+                        value={country}
+                        onChangeText={setCountry}
+                        placeholder="Enter country"
+                        placeholderTextColor="#9ca3af"
+                        autoCorrect={false}
+                      />
+
+                      <View style={styles.numberBox}>
+                        <Text style={styles.numberLabel}>
+                          Group Number
+                        </Text>
+
+                        {groupNumber !== null ? (
+                          <Text style={styles.groupNumber}>
+                            KYA {groupNumber}
+                          </Text>
+                        ) : (
+                          <Text style={styles.numberWaiting}>
+                            Check agreement and enter a signature
+                            code of at least 4 characters
+                          </Text>
+                        )}
+                      </View>
+
+                      <Text style={styles.rangeText}>
+                        Available range: KYA 2010 - KYA 9090
+                      </Text>
+                    </>
+                  ) : (
+                    <Text style={styles.articleText}>
+                      {article.text}
+                    </Text>
+                  )}
                 </View>
               )}
             </TouchableOpacity>
@@ -323,6 +445,7 @@ const styles = StyleSheet.create({
     color: '#111827',
     fontSize: 14,
     fontWeight: '700',
+    marginTop: 14,
     marginBottom: 7,
   },
 
@@ -335,5 +458,39 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     color: '#111827',
     fontSize: 15,
+  },
+
+  numberBox: {
+    marginTop: 18,
+    padding: 15,
+    borderRadius: 10,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+
+  numberLabel: {
+    color: '#166534',
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 5,
+  },
+
+  groupNumber: {
+    color: '#16a34a',
+    fontSize: 25,
+    fontWeight: '900',
+  },
+
+  numberWaiting: {
+    color: '#6b7280',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+
+  rangeText: {
+    color: '#6b7280',
+    fontSize: 12,
+    marginTop: 8,
   },
 });
