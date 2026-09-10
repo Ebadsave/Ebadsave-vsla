@@ -1,69 +1,78 @@
 import React from 'react';
 import {
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
-  ScrollView,
 } from 'react-native';
 
 type HomeScreenProps = {
   navigation: any;
 };
 
-export default function HomeScreen({ navigation }: HomeScreenProps) {
-  const cards = [
-    {
-      title: 'Total Savings',
-      value: 'UGX 0',
-      icon: '💰',
-      iconColor: '#16a34a',
-    },
-    {
-      title: 'Loans Out',
-      value: 'UGX 0',
-      icon: '💳',
-      iconColor: '#f97316',
-    },
-    {
-      title: 'Members',
-      value: '0',
-      icon: '👥',
-      iconColor: '#2563eb',
-    },
-    {
-      title: 'Fund Balance',
-      value: 'UGX 0',
-      icon: '🏦',
-      iconColor: '#166534',
-    },
-    {
-      title: 'Insurance fund',
-      value: 'UGX 0',
-      icon: '🛡️',
-      iconColor: '#dc2626',
-    },
-    {
-      title: 'Fines fund',
-      value: 'UGX 0',
-      icon: '📋',
-      iconColor: '#ffffff',
-    },
-  ];
+const summaryCards = [
+  {
+    title: 'Total Savings',
+    value: 'UGX 0',
+    icon: 'S',
+    iconBackground: '#dcfce7',
+    iconColor: '#16a34a',
+  },
+  {
+    title: 'Loans Out',
+    value: 'UGX 0',
+    icon: 'L',
+    iconBackground: '#ffedd5',
+    iconColor: '#f97316',
+  },
+  {
+    title: 'Members',
+    value: '0',
+    icon: 'M',
+    iconBackground: '#dbeafe',
+    iconColor: '#2563eb',
+  },
+  {
+    title: 'Fund Balance',
+    value: 'UGX 0',
+    icon: 'F',
+    iconBackground: '#dcfce7',
+    iconColor: '#166534',
+  },
+  {
+    title: 'Insurance fund',
+    value: 'UGX 0',
+    icon: 'I',
+    iconBackground: '#fee2e2',
+    iconColor: '#dc2626',
+  },
+  {
+    title: 'Fines fund',
+    value: 'UGX 0',
+    icon: 'N',
+    iconBackground: '#ffffff',
+    iconColor: '#374151',
+  },
+];
 
+export default function HomeScreen({
+  navigation,
+}: HomeScreenProps) {
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
+      {/* Green Header */}
       <View style={styles.header}>
-        <View style={styles.headerLeft}>
+        <View style={styles.headerInfo}>
           <View style={styles.logo}>
             <Text style={styles.logoText}>E</Text>
           </View>
 
-          <View>
+          <View style={styles.titleContainer}>
             <Text style={styles.appName}>Ebadsave VSLA</Text>
-            <Text style={styles.subtitle}>
+
+            <Text style={styles.tagline}>
               save together,grow together
             </Text>
           </View>
@@ -72,47 +81,74 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
         <TouchableOpacity
           style={styles.constitutionButton}
           onPress={() => navigation.navigate('Constitution')}
+          activeOpacity={0.8}
         >
-          <Text style={styles.constitutionButtonText}>Constitution</Text>
+          <Text style={styles.constitutionText}>
+            Constitution
+          </Text>
         </TouchableOpacity>
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.content}
       >
         {/* Summary Cards */}
         <View style={styles.cardsGrid}>
-          {cards.map((card) => (
+          {summaryCards.map((card) => (
             <View key={card.title} style={styles.card}>
               <View
                 style={[
                   styles.iconCircle,
-                  { backgroundColor: card.iconColor },
+                  {
+                    backgroundColor: card.iconBackground,
+                  },
                 ]}
               >
-                <Text style={styles.icon}>{card.icon}</Text>
+                <Text
+                  style={[
+                    styles.iconText,
+                    { color: card.iconColor },
+                  ]}
+                >
+                  {card.icon}
+                </Text>
               </View>
 
-              <Text style={styles.cardTitle}>{card.title}</Text>
-              <Text style={styles.cardValue}>{card.value}</Text>
+              <Text style={styles.cardTitle}>
+                {card.title}
+              </Text>
+
+              <Text style={styles.cardValue}>
+                {card.value}
+              </Text>
             </View>
           ))}
         </View>
 
         {/* Recent Activity */}
-        <View style={styles.activitySection}>
-          <Text style={styles.sectionTitle}>Recent Activity</Text>
+        <View style={styles.activityContainer}>
+          <Text style={styles.sectionTitle}>
+            Recent Activity
+          </Text>
 
           <View style={styles.emptyActivity}>
-            <Text style={styles.emptyIcon}>📭</Text>
-            <Text style={styles.emptyText}>No transactions yet</Text>
+            <Text style={styles.emptyIcon}>—</Text>
+
+            <Text style={styles.emptyText}>
+              No transactions yet
+            </Text>
           </View>
         </View>
 
         {/* New Meeting */}
-        <TouchableOpacity style={styles.meetingButton}>
-          <Text style={styles.meetingButtonText}>New Meeting</Text>
+        <TouchableOpacity
+          style={styles.meetingButton}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.meetingButtonText}>
+            New Meeting
+          </Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
@@ -127,14 +163,14 @@ const styles = StyleSheet.create({
 
   header: {
     backgroundColor: '#16a34a',
-    paddingHorizontal: 16,
-    paddingVertical: 16,
+    paddingHorizontal: 15,
+    paddingVertical: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
 
-  headerLeft: {
+  headerInfo: {
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
@@ -147,13 +183,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
+    marginRight: 11,
   },
 
   logoText: {
     color: '#16a34a',
     fontSize: 26,
-    fontWeight: '800',
+    fontWeight: '900',
+  },
+
+  titleContainer: {
+    flex: 1,
   },
 
   appName: {
@@ -162,7 +202,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
 
-  subtitle: {
+  tagline: {
     color: '#ffffff',
     fontSize: 12,
     marginTop: 2,
@@ -170,15 +210,16 @@ const styles = StyleSheet.create({
 
   constitutionButton: {
     backgroundColor: '#ffffff',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
     borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    marginLeft: 8,
   },
 
-  constitutionButtonText: {
+  constitutionText: {
     color: '#16a34a',
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
   },
 
   content: {
@@ -196,10 +237,10 @@ const styles = StyleSheet.create({
     width: '48%',
     backgroundColor: '#ffffff',
     borderRadius: 12,
-    padding: 14,
-    marginBottom: 14,
     borderWidth: 1,
     borderColor: '#e5e7eb',
+    padding: 14,
+    marginBottom: 14,
     elevation: 2,
   },
 
@@ -212,8 +253,9 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
 
-  icon: {
-    fontSize: 20,
+  iconText: {
+    fontSize: 18,
+    fontWeight: '900',
   },
 
   cardTitle: {
@@ -229,8 +271,8 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
 
-  activitySection: {
-    marginTop: 8,
+  activityContainer: {
+    marginTop: 5,
   },
 
   sectionTitle: {
@@ -241,18 +283,20 @@ const styles = StyleSheet.create({
   },
 
   emptyActivity: {
-    minHeight: 130,
+    height: 125,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#e5e7eb',
-    borderRadius: 12,
+    backgroundColor: '#f9fafb',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#f9fafb',
   },
 
   emptyIcon: {
+    color: '#9ca3af',
     fontSize: 28,
-    marginBottom: 8,
+    fontWeight: '300',
+    marginBottom: 6,
   },
 
   emptyText: {
@@ -261,6 +305,7 @@ const styles = StyleSheet.create({
   },
 
   meetingButton: {
+    width: '100%',
     backgroundColor: '#16a34a',
     borderRadius: 10,
     paddingVertical: 15,
