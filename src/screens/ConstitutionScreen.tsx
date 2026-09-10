@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import {
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
-  ScrollView,
-  TextInput,
 } from 'react-native';
 
 type ConstitutionScreenProps = {
@@ -16,64 +16,67 @@ type ConstitutionScreenProps = {
 const articles = [
   {
     title: 'Article 1: Name and Purpose',
-    text: 'This group shall operate as Ebadsave VSLA. Its purpose is to encourage members to save together, access loans, support one another and improve the financial wellbeing of members.',
+    text: 'This group shall operate as Ebadsave VSLA. Its purpose is to encourage members to save together, grow together, access appropriate financial services, support one another, and improve the financial wellbeing of members.',
   },
   {
     title: 'Article 2: Membership',
-    text: 'Membership shall be open to eligible persons who accept the group constitution, contribute regularly and participate in group activities.',
+    text: 'Membership shall be open to eligible persons who accept this constitution, follow group rules, contribute regularly, attend meetings, and participate in group activities.',
   },
   {
     title: 'Article 3: Contributions',
-    text: 'Members shall make savings contributions according to the agreed group contribution amount and schedule.',
+    text: 'Members shall make regular savings contributions according to the amount and schedule approved by the group. All contributions shall be properly recorded.',
   },
   {
     title: 'Article 4: Loans',
-    text: 'Members may apply for loans subject to group approval. The maximum loan shall default to three times the member savings, unless the group constitution is amended.',
+    text: 'Members may apply for loans subject to group approval and the availability of funds. The default maximum loan amount shall be three times the member savings, unless the group approves another limit through an amendment.',
   },
   {
     title: 'Article 5: Meetings and Attendance',
-    text: 'Members shall attend scheduled meetings on time and participate in group activities. Absence may attract penalties according to the agreed rules.',
+    text: 'Members shall attend scheduled meetings on time and participate in group activities. Members who are absent or late without an acceptable reason may be subject to penalties approved by the group.',
   },
   {
     title: 'Article 6: Leadership',
-    text: 'The group shall have a Chair, Vice Chair, Secretary, Treasurer, two Money Counters, three Key Keepers and a Supervisor.',
+    text: 'The group shall have a Chair, Vice Chair, Secretary, Treasurer, two Money Counters, three Key Keepers, and a Supervisor. Leaders shall perform their duties honestly and in the interests of the group.',
   },
   {
     title: 'Article 7: Welfare, and Insurance Fund',
-    text: 'The group may maintain welfare and insurance funds to support members during qualifying emergencies and other approved circumstances.',
+    text: 'The group may maintain welfare and insurance funds to support members during qualifying emergencies, approved welfare needs, and other circumstances agreed upon by members.',
   },
   {
     title: 'Article 8: Penalties and Fines',
-    text: 'Members who fail to follow approved group rules may be required to pay penalties or fines as agreed by the group.',
+    text: 'Members who fail to follow approved group rules may be required to pay penalties or fines. All fines shall be recorded and allocated to the group fines fund.',
   },
   {
     title: 'Article 9: Sharing and Dissolution',
-    text: 'Savings, profits and other group funds shall be shared according to approved group rules. Dissolution shall follow a decision of the members and proper settlement of obligations.',
+    text: 'Savings, profits, and other group funds shall be shared according to approved group rules. If the group is dissolved, all outstanding obligations shall first be settled before the remaining funds are distributed.',
   },
   {
     title: 'Article 10: Amendments',
-    text: 'This constitution may be amended when members approve the proposed changes according to the agreed voting procedure.',
+    text: 'This constitution may be amended when members approve proposed changes according to the agreed voting procedure. Approved amendments shall be recorded as part of the group constitution.',
   },
   {
     title: 'Article 11: Executive expire period',
-    text: 'The executive committee shall serve for the period agreed by members. At the end of the period, elections or approved replacements shall take place.',
+    text: 'The executive committee shall serve for the period agreed by the members. At the end of the approved period, elections or approved replacements shall take place according to group rules.',
   },
   {
     title: 'Article 12: Interest percentage and period of loan',
-    text: 'The group shall determine the applicable loan interest percentage and loan repayment period. These terms shall be approved by members and recorded in the group rules.',
+    text: 'The group shall determine the applicable loan interest percentage and repayment period. These terms shall be approved by members and recorded in the group rules before loans are issued.',
   },
 ];
 
 export default function ConstitutionScreen({
   navigation,
 }: ConstitutionScreenProps) {
-  const [expandedArticle, setExpandedArticle] = useState<number | null>(null);
+  const [expandedArticle, setExpandedArticle] = useState<number | null>(
+    null,
+  );
+
   const [agreed, setAgreed] = useState(false);
   const [signatureCode, setSignatureCode] = useState('');
 
   const toggleArticle = (index: number) => {
     setExpandedArticle(
-      expandedArticle === index ? null : index
+      expandedArticle === index ? null : index,
     );
   };
 
@@ -90,15 +93,21 @@ export default function ConstitutionScreen({
 
         <Text style={styles.headerTitle}>Group Constitution</Text>
 
-        <View style={styles.headerSpace} />
+        <View style={styles.headerSpacer} />
       </View>
 
       <ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
+        <Text style={styles.intro}>
+          Please review the group constitution. Tap an article to
+          expand or collapse it.
+        </Text>
+
+        {/* Articles */}
         {articles.map((article, index) => {
-          const expanded = expandedArticle === index;
+          const isExpanded = expandedArticle === index;
 
           return (
             <TouchableOpacity
@@ -112,15 +121,19 @@ export default function ConstitutionScreen({
                   {article.title}
                 </Text>
 
-                <Text style={styles.expandIcon}>
-                  {expanded ? '−' : '+'}
-                </Text>
+                <View style={styles.expandCircle}>
+                  <Text style={styles.expandText}>
+                    {isExpanded ? '−' : '+'}
+                  </Text>
+                </View>
               </View>
 
-              {expanded && (
-                <Text style={styles.articleText}>
-                  {article.text}
-                </Text>
+              {isExpanded && (
+                <View style={styles.articleBody}>
+                  <Text style={styles.articleText}>
+                    {article.text}
+                  </Text>
+                </View>
               )}
             </TouchableOpacity>
           );
@@ -128,17 +141,19 @@ export default function ConstitutionScreen({
 
         {/* Agreement */}
         <TouchableOpacity
-          style={styles.checkboxRow}
+          style={styles.agreementRow}
           onPress={() => setAgreed(!agreed)}
           activeOpacity={0.8}
         >
           <View
             style={[
               styles.checkbox,
-              agreed && styles.checkboxChecked,
+              agreed && styles.checkboxSelected,
             ]}
           >
-            {agreed && <Text style={styles.checkmark}>✓</Text>}
+            {agreed && (
+              <Text style={styles.checkmark}>✓</Text>
+            )}
           </View>
 
           <Text style={styles.agreementText}>
@@ -150,12 +165,13 @@ export default function ConstitutionScreen({
         <Text style={styles.inputLabel}>Signature Code</Text>
 
         <TextInput
+          style={styles.input}
           value={signatureCode}
           onChangeText={setSignatureCode}
           placeholder="Enter signature code"
           placeholderTextColor="#9ca3af"
-          style={styles.input}
           autoCapitalize="characters"
+          autoCorrect={false}
         />
       </ScrollView>
     </SafeAreaView>
@@ -174,12 +190,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
   },
 
   backButton: {
-    width: 42,
-    height: 42,
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -187,8 +203,8 @@ const styles = StyleSheet.create({
   backText: {
     color: '#ffffff',
     fontSize: 38,
-    lineHeight: 40,
     fontWeight: '300',
+    lineHeight: 42,
   },
 
   headerTitle: {
@@ -197,8 +213,8 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
 
-  headerSpace: {
-    width: 42,
+  headerSpacer: {
+    width: 44,
   },
 
   content: {
@@ -206,16 +222,26 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
 
+  intro: {
+    color: '#6b7280',
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 14,
+  },
+
   articleCard: {
     backgroundColor: '#ffffff',
     borderRadius: 12,
-    marginBottom: 10,
-    padding: 15,
     borderWidth: 1,
     borderColor: '#e5e7eb',
+    marginBottom: 10,
+    overflow: 'hidden',
   },
 
   articleHeader: {
+    minHeight: 58,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -229,20 +255,36 @@ const styles = StyleSheet.create({
     paddingRight: 10,
   },
 
-  expandIcon: {
+  expandCircle: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#dcfce7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  expandText: {
     color: '#16a34a',
-    fontSize: 24,
+    fontSize: 21,
     fontWeight: '700',
+    lineHeight: 24,
+  },
+
+  articleBody: {
+    borderTopWidth: 1,
+    borderTopColor: '#f0fdf4',
+    paddingHorizontal: 15,
+    paddingVertical: 14,
   },
 
   articleText: {
     color: '#4b5563',
     fontSize: 14,
     lineHeight: 21,
-    marginTop: 12,
   },
 
-  checkboxRow: {
+  agreementRow: {
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 12,
@@ -255,13 +297,13 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     borderWidth: 2,
     borderColor: '#16a34a',
+    backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
-    backgroundColor: '#ffffff',
   },
 
-  checkboxChecked: {
+  checkboxSelected: {
     backgroundColor: '#16a34a',
   },
 
@@ -285,7 +327,7 @@ const styles = StyleSheet.create({
   },
 
   input: {
-    height: 48,
+    height: 50,
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#d1d5db',
