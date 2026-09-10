@@ -93,6 +93,12 @@ export default function ConstitutionScreen({
   const [registering, setRegistering] = useState(false);
   const [registrationMessage, setRegistrationMessage] = useState('');
 
+  const [registeredGroups, setRegisteredGroups] = useState<GroupRecord[]>(
+    [],
+  );
+
+  const [isRegisteringNewGroup, setIsRegisteringNewGroup] = useState(false);
+
   const signatureValid = signatureCode.trim().length >= 4;
 
   const toggleArticle = (index: number) => {
@@ -102,7 +108,7 @@ export default function ConstitutionScreen({
   };
 
   /*
-   * Initialize SQLite when this screen opens.
+   * Initialize SQLite and load previously registered groups.
    */
   useEffect(() => {
     let mounted = true;
@@ -111,24 +117,29 @@ export default function ConstitutionScreen({
       try {
         await initializeDatabase();
 
-        if (mounted) {
-          setDatabaseReady(true);
+        if (!mounted) {
+          return;
         }
 
-        /*
-         * If an active group already exists on this device,
-         * load the most recently registered active group.
-         *
-         * This allows the KYA number to remain visible after
-         * closing and reopening the app.
-         */
+        setDatabaseReady(true);
+
         const groups = await getAllGroups();
 
+        if (!mounted) {
+          return;
+        }
+
+        setRegisteredGroups(groups);
+
+        /*
+         * Show the most recently registered active group
+         * when the screen opens.
+         */
         const activeGroups = groups.filter(
-          (group: GroupRecord) => group.status === 'active',
+          (group) => group.status === 'active',
         );
 
-        if (activeGroups.length > 0 && mounted) {
+        if (activeGroups.length > 0) {
           const currentGroup =
             activeGroups[activeGroups.length - 1];
 
@@ -136,6 +147,7 @@ export default function ConstitutionScreen({
           setDistrict(currentGroup.district);
           setCountry(currentGroup.country);
           setGroupNumber(currentGroup.group_number);
+          setIsRegisteringNewGroup(false);
         }
       } catch (error) {
         console.error(
@@ -159,25 +171,15 @@ export default function ConstitutionScreen({
   }, []);
 
   /*
-   * Register the group only when:
-   *
-   * 1. Database is ready
-   * 2. Group name is entered
-   * 3. District is entered
-   * 4. Country is entered
-   * 5. Agreement is checked
-   * 6. Signature code has at least 4 characters
-   * 7. A KYA number has not already been assigned
-   *
-   * Once a number has been registered in SQLite, it is NOT
-   * removed when the user unchecks the agreement or changes
-   * the signature code.
-   *
-   * The number can only become available again after the
-   * group's recorded activity has been inactive for 3 months.
+   * Register a new group only when all required conditions
+   * have been satisfied.
    */
   useEffect(() => {
     if (!databaseReady) {
+      return;
+    }
+
+    if (!isRegisteringNewGroup) {
       return;
     }
 
@@ -228,9 +230,21 @@ export default function ConstitutionScreen({
 
         setGroupNumber(group.group_number);
 
+        /*
+         * Reload all groups so the new registration appears
+         * in the registered-groups list.
+         */
+        const updatedGroups = await getAllGroups();
+
+        if (!cancelled) {
+          setRegisteredGroups(updatedGroups);
+        }
+
         setRegistrationMessage(
           `Group successfully registered as KYA ${group.group_number}.`,
         );
+
+        setIsRegisteringNewGroup(false);
       } catch (error) {
         console.error(
           'Group registration error:',
@@ -256,6 +270,7 @@ export default function ConstitutionScreen({
     };
   }, [
     databaseReady,
+    isRegisteringNewGroup,
     agreed,
     signatureValid,
     groupName,
@@ -264,6 +279,38 @@ export default function ConstitutionScreen({
     groupNumber,
     registering,
   ]);
+
+  /*
+   * Start a completely new group registration.
+   */
+  const startNewGroupRegistration = () => {
+    setGroupNumber(null);
+    setGroupName('');
+    setDistrict('');
+    setCountry('');
+    setSignatureCode('');
+    setAgreed(false);
+    setRegistrationMessage('');
+    setIsRegisteringNewGroup(true);
+  };
+
+  /*
+   * Display an existing registered group.
+   */
+  const selectExistingGroup = (group: GroupRecord) => {
+    if (group.status !== 'active') {
+      return;
+    }
+
+    setGroupName(group.group_name);
+    setDistrict(group.district);
+    setCountry(group.country);
+    setGroupNumber(group.group_number);
+    setSignatureCode('');
+    setAgreed(false);
+    setRegistrationMessage('');
+    setIsRegisteringNewGroup(false);
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -302,7 +349,7 @@ export default function ConstitutionScreen({
               key={article.title}
               style={styles.articleCard}
             >
-              {/* Article Header - only this part expands/collapses */}
+              {/* Article Header */}
               <TouchableOpacity
                 style={styles.articleHeader}
                 onPress={() => toggleArticle(index)}
@@ -341,7 +388,10 @@ export default function ConstitutionScreen({
                         placeholderTextColor="#9ca3af"
                         autoCorrect={false}
                         autoCapitalize="words"
-                        editable={groupNumber === null}
+                        editable={
+                          isRegisteringNewGroup &&
+                          groupNumber === null
+                        }
                       />
 
                       {/* District */}
@@ -357,7 +407,10 @@ export default function ConstitutionScreen({
                         placeholderTextColor="#9ca3af"
                         autoCorrect={false}
                         autoCapitalize="words"
-                        editable={groupNumber === null}
+                        editable={
+                          isRegisteringNewGroup &&
+                          groupNumber === null
+                        }
                       />
 
                       {/* Country */}
@@ -373,7 +426,10 @@ export default function ConstitutionScreen({
                         placeholderTextColor="#9ca3af"
                         autoCorrect={false}
                         autoCapitalize="words"
-                        editable={groupNumber === null}
+                        editable={
+                          isRegisteringNewGroup &&
+                          groupNumber === null
+                        }
                       />
 
                       {/* Group Number */}
@@ -393,8 +449,8 @@ export default function ConstitutionScreen({
                             </Text>
 
                             <Text style={styles.permanentText}>
-                              This number is permanently recorded
-                              for this active group.
+                              This number is currently assigned
+                              to this active group.
                             </Text>
                           </>
                         ) : (
@@ -428,10 +484,75 @@ export default function ConstitutionScreen({
           );
         })}
 
+        {/* Existing Groups */}
+        {registeredGroups.length > 0 && (
+          <View style={styles.groupsSection}>
+            <Text style={styles.sectionTitle}>
+              Registered Groups
+            </Text>
+
+            {registeredGroups.map((group) => (
+              <TouchableOpacity
+                key={group.id}
+                style={[
+                  styles.groupRow,
+                  group.status === 'active'
+                    ? styles.activeGroupRow
+                    : styles.dormantGroupRow,
+                ]}
+                onPress={() => selectExistingGroup(group)}
+                activeOpacity={
+                  group.status === 'active' ? 0.8 : 1
+                }
+              >
+                <View style={styles.groupRowInfo}>
+                  <Text style={styles.savedGroupNumber}>
+                    KYA {group.group_number}
+                  </Text>
+
+                  <Text style={styles.savedGroupName}>
+                    {group.group_name}
+                  </Text>
+
+                  <Text style={styles.savedGroupLocation}>
+                    {group.district}, {group.country}
+                  </Text>
+                </View>
+
+                <Text
+                  style={[
+                    styles.statusText,
+                    group.status === 'active'
+                      ? styles.activeStatus
+                      : styles.dormantStatus,
+                  ]}
+                >
+                  {group.status}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        {/* Register New Group */}
+        <TouchableOpacity
+          style={styles.newGroupButton}
+          onPress={startNewGroupRegistration}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.newGroupButtonText}>
+            + Register New Group
+          </Text>
+        </TouchableOpacity>
+
         {/* Agreement */}
         <TouchableOpacity
           style={styles.agreementRow}
-          onPress={() => setAgreed(!agreed)}
+          onPress={() => {
+            if (isRegisteringNewGroup) {
+              setAgreed(!agreed);
+            }
+          }}
           activeOpacity={0.8}
         >
           <View
@@ -463,7 +584,10 @@ export default function ConstitutionScreen({
           placeholderTextColor="#9ca3af"
           autoCapitalize="characters"
           autoCorrect={false}
-          editable={groupNumber === null}
+          editable={
+            isRegisteringNewGroup &&
+            groupNumber === null
+          }
         />
       </ScrollView>
     </SafeAreaView>
@@ -677,5 +801,92 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     fontSize: 12,
     marginTop: 8,
+  },
+
+  groupsSection: {
+    marginTop: 12,
+  },
+
+  sectionTitle: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+
+  groupRow: {
+    minHeight: 70,
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+
+  activeGroupRow: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#bbf7d0',
+  },
+
+  dormantGroupRow: {
+    backgroundColor: '#f9fafb',
+    borderColor: '#e5e7eb',
+  },
+
+  groupRowInfo: {
+    flex: 1,
+    paddingRight: 10,
+  },
+
+  savedGroupNumber: {
+    color: '#16a34a',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+
+  savedGroupName: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+
+  savedGroupLocation: {
+    color: '#6b7280',
+    fontSize: 12,
+    marginTop: 2,
+  },
+
+  statusText: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+
+  activeStatus: {
+    color: '#16a34a',
+  },
+
+  dormantStatus: {
+    color: '#6b7280',
+  },
+
+  newGroupButton: {
+    height: 50,
+    backgroundColor: '#16a34a',
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 14,
+    marginBottom: 4,
+  },
+
+  newGroupButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
   },
 });
