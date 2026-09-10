@@ -115,13 +115,13 @@ export default function ConstitutionScreen({
     null,
   );
 
+  const signatureValid = signatureCode.trim().length >= 4;
+
   const toggleArticle = (index: number) => {
     setExpandedArticle(
       expandedArticle === index ? null : index,
     );
   };
-
-  const signatureValid = signatureCode.trim().length >= 4;
 
   useEffect(() => {
     if (agreed && signatureValid && groupNumber === null) {
@@ -153,6 +153,7 @@ export default function ConstitutionScreen({
       <ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         <Text style={styles.intro}>
           Please review the group constitution. Tap an article to
@@ -164,13 +165,16 @@ export default function ConstitutionScreen({
           const isExpanded = expandedArticle === index;
 
           return (
-            <TouchableOpacity
+            <View
               key={article.title}
               style={styles.articleCard}
-              onPress={() => toggleArticle(index)}
-              activeOpacity={0.8}
             >
-              <View style={styles.articleHeader}>
+              {/* Article Header - only this part expands/collapses */}
+              <TouchableOpacity
+                style={styles.articleHeader}
+                onPress={() => toggleArticle(index)}
+                activeOpacity={0.8}
+              >
                 <Text style={styles.articleTitle}>
                   {article.title}
                 </Text>
@@ -180,8 +184,9 @@ export default function ConstitutionScreen({
                     {isExpanded ? '−' : '+'}
                   </Text>
                 </View>
-              </View>
+              </TouchableOpacity>
 
+              {/* Article Body */}
               {isExpanded && (
                 <View style={styles.articleBody}>
                   {index === 0 ? (
@@ -190,6 +195,7 @@ export default function ConstitutionScreen({
                         {article.text}
                       </Text>
 
+                      {/* Group Name */}
                       <Text style={styles.inputLabel}>
                         Group Name
                       </Text>
@@ -201,8 +207,11 @@ export default function ConstitutionScreen({
                         placeholder="Enter group name"
                         placeholderTextColor="#9ca3af"
                         autoCorrect={false}
+                        autoCapitalize="words"
+                        editable={true}
                       />
 
+                      {/* District */}
                       <Text style={styles.inputLabel}>
                         District
                       </Text>
@@ -214,8 +223,11 @@ export default function ConstitutionScreen({
                         placeholder="Enter district"
                         placeholderTextColor="#9ca3af"
                         autoCorrect={false}
+                        autoCapitalize="words"
+                        editable={true}
                       />
 
+                      {/* Country */}
                       <Text style={styles.inputLabel}>
                         Country
                       </Text>
@@ -227,8 +239,11 @@ export default function ConstitutionScreen({
                         placeholder="Enter country"
                         placeholderTextColor="#9ca3af"
                         autoCorrect={false}
+                        autoCapitalize="words"
+                        editable={true}
                       />
 
+                      {/* Group Number */}
                       <View style={styles.numberBox}>
                         <Text style={styles.numberLabel}>
                           Group Number
@@ -240,8 +255,8 @@ export default function ConstitutionScreen({
                           </Text>
                         ) : (
                           <Text style={styles.numberWaiting}>
-                            Check agreement and enter a signature
-                            code of at least 4 characters
+                            Check "I have read and agreed" and enter
+                            a signature code of at least 4 characters.
                           </Text>
                         )}
                       </View>
@@ -257,7 +272,7 @@ export default function ConstitutionScreen({
                   )}
                 </View>
               )}
-            </TouchableOpacity>
+            </View>
           );
         })}
 
@@ -284,7 +299,9 @@ export default function ConstitutionScreen({
         </TouchableOpacity>
 
         {/* Signature Code */}
-        <Text style={styles.inputLabel}>Signature Code</Text>
+        <Text style={styles.inputLabel}>
+          Signature Code
+        </Text>
 
         <TextInput
           style={styles.input}
@@ -294,6 +311,7 @@ export default function ConstitutionScreen({
           placeholderTextColor="#9ca3af"
           autoCapitalize="characters"
           autoCorrect={false}
+          editable={true}
         />
       </ScrollView>
     </SafeAreaView>
