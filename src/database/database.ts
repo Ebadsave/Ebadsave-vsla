@@ -1,5 +1,3 @@
-// src/database/database.ts
-
 import * as SQLite from 'expo-sqlite';
 import * as Crypto from 'expo-crypto';
 
