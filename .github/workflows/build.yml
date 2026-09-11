@@ -28,6 +28,9 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Install Expo Crypto
+        run: npx expo install expo-crypto
+
       - name: TypeScript check
         run: npx tsc --noEmit
 
@@ -47,7 +50,7 @@ jobs:
 
           if [ "$BUILD_EXIT" -ne 0 ]; then
             grep -E \
-              "FAILURE|What went wrong|Execution failed|Caused by:|Exception|Error:|Could not|BUILD FAILED|KeytoolException" \
+              "FAILURE|What went wrong|Execution failed|Caused by:|Exception|Error:|Could not|BUILD FAILED|KeytoolException|TS[0-9]+" \
               ../gradle-build.log | tail -100 || true
 
             echo ""
