@@ -1,4 +1,9 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useState,
+} from 'react';
+
 import {
   Alert,
   SafeAreaView,
@@ -14,80 +19,104 @@ import {
   getAllGroups,
   getMembersByGroupId,
   registerMember,
-  type GroupRecord,
-  type MemberRecord,
+  GroupRecord,
+  MemberRecord,
 } from '../database/database';
 
-type Gender = 'male' | 'female';
+type MembersScreenProps = {
+  navigation: any;
+};
 
-export default function MembersScreen() {
+export default function MembersScreen({
+  navigation,
+}: MembersScreenProps) {
   const [groups, setGroups] = useState<GroupRecord[]>([]);
   const [selectedGroup, setSelectedGroup] =
     useState<GroupRecord | null>(null);
 
-  const [members, setMembers] = useState<MemberRecord[]>([]);
+  const [members, setMembers] =
+    useState<MemberRecord[]>([]);
 
-  const [fullName, setFullName] = useState('');
-  const [gender, setGender] = useState<Gender | null>(null);
-  const [age, setAge] = useState('');
-  const [phone, setPhone] = useState('');
-  const [cell, setCell] = useState('');
-  const [district, setDistrict] = useState('');
+  const [fullName, setFullName] =
+    useState('');
+  const [gender, setGender] =
+    useState('');
+  const [age, setAge] =
+    useState('');
+  const [phone, setPhone] =
+    useState('');
+  const [cell, setCell] =
+    useState('');
+  const [district, setDistrict] =
+    useState('');
 
-  const [kin1Name, setKin1Name] = useState('');
-  const [kin1Phone, setKin1Phone] = useState('');
-  const [kin1Gender, setKin1Gender] =
-    useState<Gender | null>(null);
+  const [registering, setRegistering] =
+    useState(false);
 
-  const [kin2Name, setKin2Name] = useState('');
-  const [kin2Phone, setKin2Phone] = useState('');
-  const [kin2Gender, setKin2Gender] =
-    useState<Gender | null>(null);
-
-  const [registering, setRegistering] = useState(false);
-
-  const loadGroups = useCallback(async () => {
-    try {
-      const allGroups = await getAllGroups();
-
-      const activeGroups = allGroups.filter(
-        (group) => group.status === 'active',
-      );
-
-      setGroups(activeGroups);
-
-      if (activeGroups.length > 0) {
-        setSelectedGroup(activeGroups[0]);
-        setDistrict(activeGroups[0].district);
-      } else {
-        setSelectedGroup(null);
-        setMembers([]);
-      }
-    } catch (error) {
-      console.error('Failed to load groups:', error);
-
-      Alert.alert(
-        'Error',
-        'Could not load the registered groups.',
-      );
-    }
-  }, []);
-
-  const loadMembers = useCallback(
-    async (groupId: number) => {
+  const loadGroups = useCallback(
+    async () => {
       try {
-        const result = await getMembersByGroupId(groupId);
-        setMembers(result);
+        const allGroups =
+          await getAllGroups();
+
+        setGroups(allGroups);
+
+        const activeGroups =
+          allGroups.filter(
+            (group) =>
+              group.status === 'active',
+          );
+
+        if (activeGroups.length > 0) {
+          setSelectedGroup(
+            activeGroups[0],
+          );
+        } else {
+          setSelectedGroup(null);
+          setMembers([]);
+        }
       } catch (error) {
-        console.error('Failed to load members:', error);
+        console.error(
+          'Failed to load groups:',
+          error,
+        );
 
         Alert.alert(
           'Error',
-          'Could not load group members.',
+          'Could not load groups.',
         );
       }
     },
     [],
+  );
+
+  const loadMembers = useCallback(
+    async () => {
+      if (!selectedGroup) {
+        setMembers([]);
+        return;
+      }
+
+      try {
+        const groupMembers =
+          await getMembersByGroupId(
+            selectedGroup.id,
+          );
+
+        setMembers(groupMembers);
+      } catch (error) {
+        console.error(
+          'Failed to load members:',
+          error,
+        );
+
+        Alert.alert(
+          'Error',
+          'Could not load members.',
+        );
+      }
+    },
+    [selectedGroup],
   );
 
   useEffect(() => {
@@ -95,530 +124,518 @@ export default function MembersScreen() {
   }, [loadGroups]);
 
   useEffect(() => {
-    if (selectedGroup) {
-      setDistrict(selectedGroup.district);
-      loadMembers(selectedGroup.id);
-    }
-  }, [selectedGroup, loadMembers]);
+    loadMembers();
+  }, [loadMembers]);
 
   const clearForm = () => {
     setFullName('');
-    setGender(null);
+    setGender('');
     setAge('');
     setPhone('');
     setCell('');
-    setKin1Name('');
-    setKin1Phone('');
-    setKin1Gender(null);
-    setKin2Name('');
-    setKin2Phone('');
-    setKin2Gender(null);
+    setDistrict('');
   };
 
-  const handleRegister = async () => {
-    if (!selectedGroup) {
-      Alert.alert(
-        'No Active Group',
-        'Please register a group first.',
-      );
-      return;
-    }
+  const handleRegisterMember =
+    async () => {
+      if (!selectedGroup) {
+        Alert.alert(
+          'No Active Group',
+          'Please register or select an active group first.',
+        );
+        return;
+      }
 
-    if (!fullName.trim()) {
-      Alert.alert(
-        'Required',
-        'Please enter the member full name.',
-      );
-      return;
-    }
+      if (!fullName.trim()) {
+        Alert.alert(
+          'Required',
+          'Full Names are required.',
+        );
+        return;
+      }
 
-    if (!gender) {
-      Alert.alert(
-        'Required',
-        'Please select the member gender.',
-      );
-      return;
-    }
+      if (!gender.trim()) {
+        Alert.alert(
+          'Required',
+          'Gender is required.',
+        );
+        return;
+      }
 
-    const numericAge = Number(age);
+      const numericAge =
+        Number(age.trim());
 
-    if (
-      !age.trim() ||
-      !Number.isInteger(numericAge) ||
-      numericAge <= 0
-    ) {
-      Alert.alert(
-        'Required',
-        'Please enter a valid age.',
-      );
-      return;
-    }
+      if (
+        !age.trim() ||
+        !Number.isFinite(numericAge) ||
+        numericAge <= 0
+      ) {
+        Alert.alert(
+          'Invalid Age',
+          'Please enter a valid age.',
+        );
+        return;
+      }
 
-    if (!cell.trim()) {
-      Alert.alert(
-        'Required',
-        'Please enter the member cell.',
-      );
-      return;
-    }
+      if (!cell.trim()) {
+        Alert.alert(
+          'Required',
+          'Cell is required.',
+        );
+        return;
+      }
 
-    if (!district.trim()) {
-      Alert.alert(
-        'Required',
-        'Please enter the member district.',
-      );
-      return;
-    }
+      if (!district.trim()) {
+        Alert.alert(
+          'Required',
+          'District is required.',
+        );
+        return;
+      }
 
-    if (kin1Name.trim() && !kin1Gender) {
-      Alert.alert(
-        'Next of Kin 1',
-        'Please select the gender for Next of Kin 1.',
-      );
-      return;
-    }
+      try {
+        setRegistering(true);
 
-    if (kin2Name.trim() && !kin2Gender) {
-      Alert.alert(
-        'Next of Kin 2',
-        'Please select the gender for Next of Kin 2.',
-      );
-      return;
-    }
+        /*
+         * IMPORTANT:
+         * registerMember() expects separate
+         * arguments in this exact order:
+         *
+         * groupId,
+         * fullName,
+         * gender,
+         * age,
+         * phone,
+         * cell,
+         * district,
+         * photoUri
+         */
+        const memberId =
+          await registerMember(
+            selectedGroup.id,
+            fullName.trim(),
+            gender.trim(),
+            numericAge,
+            phone.trim(),
+            cell.trim(),
+            district.trim(),
+            null,
+          );
 
-    try {
-      setRegistering(true);
+        await loadMembers();
 
-      await registerMember({
-        groupId: selectedGroup.id,
-        fullName: fullName.trim(),
-        gender,
-        age: numericAge,
-        phone: phone.trim() || null,
-        cell: cell.trim(),
-        district: district.trim(),
-        nextOfKin1Name: kin1Name.trim() || null,
-        nextOfKin1Phone: kin1Phone.trim() || null,
-        nextOfKin1Gender: kin1Gender,
-        nextOfKin2Name: kin2Name.trim() || null,
-        nextOfKin2Phone: kin2Phone.trim() || null,
-        nextOfKin2Gender: kin2Gender,
-      });
+        clearForm();
 
-      await loadMembers(selectedGroup.id);
+        Alert.alert(
+          'Member Registered',
+          `Member has been registered successfully.\n\nMember number will be assigned by the system.`,
+        );
 
-      Alert.alert(
-        'Member Registered',
-        `${fullName.trim()} has been registered successfully.`,
-      );
+        console.log(
+          'Registered member ID:',
+          memberId,
+        );
+      } catch (error) {
+        console.error(
+          'Failed to register member:',
+          error,
+        );
 
-      clearForm();
-    } catch (error) {
-      console.error(
-        'Failed to register member:',
-        error,
-      );
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'The member could not be registered.';
 
-      Alert.alert(
-        'Registration Error',
-        error instanceof Error
-          ? error.message
-          : 'The member could not be registered.',
-      );
-    } finally {
-      setRegistering(false);
-    }
-  };
-
-  const GenderButtons = ({
-    value,
-    onChange,
-  }: {
-    value: Gender | null;
-    onChange: (value: Gender) => void;
-  }) => {
-    return (
-      <View style={styles.genderRow}>
-        <TouchableOpacity
-          style={[
-            styles.genderButton,
-            value === 'male' && styles.genderSelected,
-          ]}
-          onPress={() => onChange('male')}
-        >
-          <Text
-            style={[
-              styles.genderText,
-              value === 'male' &&
-                styles.genderTextSelected,
-            ]}
-          >
-            Male
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[
-            styles.genderButton,
-            value === 'female' && styles.genderSelected,
-          ]}
-          onPress={() => onChange('female')}
-        >
-          <Text
-            style={[
-              styles.genderText,
-              value === 'female' &&
-                styles.genderTextSelected,
-            ]}
-          >
-            Female
-          </Text>
-        </TouchableOpacity>
-      </View>
-    );
-  };
+        Alert.alert(
+          'Registration Error',
+          message,
+        );
+      } finally {
+        setRegistering(false);
+      }
+    };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView
+      style={styles.container}
+    >
       <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() =>
+            navigation.goBack()
+          }
+          activeOpacity={0.8}
+        >
+          <Text
+            style={styles.backText}
+          >
+            ‹
+          </Text>
+        </TouchableOpacity>
+
+        <View style={styles.headerTitleBox}>
+          <Text
+            style={styles.headerTitle}
+          >
             Members
           </Text>
 
-          <Text style={styles.headerSubtitle}>
-            Register and manage members
-          </Text>
-        </View>
-
-        <View style={styles.countCircle}>
-          <Text style={styles.countText}>
-            {members.length}
+          <Text
+            style={styles.headerSubtitle}
+          >
+            Register and manage group members
           </Text>
         </View>
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
+        showsVerticalScrollIndicator={
+          false
+        }
+        contentContainerStyle={
+          styles.content
+        }
       >
-        <Text style={styles.sectionTitle}>
-          Active Group
-        </Text>
+        {/* Group */}
+        <View style={styles.section}>
+          <Text
+            style={styles.sectionTitle}
+          >
+            Active Group
+          </Text>
 
-        {selectedGroup ? (
-          <View style={styles.groupCard}>
-            <View style={styles.groupLogo}>
-              <Text style={styles.groupLogoText}>
-                E
-              </Text>
-            </View>
-
-            <View>
-              <Text style={styles.groupName}>
+          {selectedGroup ? (
+            <View style={styles.groupCard}>
+              <Text
+                style={styles.groupName}
+              >
                 {selectedGroup.group_name}
               </Text>
 
-              <Text style={styles.groupNumber}>
+              <Text
+                style={styles.groupNumber}
+              >
                 KYA {selectedGroup.group_number}
               </Text>
-            </View>
-          </View>
-        ) : (
-          <View style={styles.emptyBox}>
-            <Text style={styles.emptyText}>
-              No active group registered.
-            </Text>
-          </View>
-        )}
 
-        {groups.length > 1 && (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.groupOptions}
-          >
-            {groups.map((group) => (
+              <Text
+                style={styles.groupLocation}
+              >
+                {selectedGroup.district},{' '}
+                {selectedGroup.country}
+              </Text>
+            </View>
+          ) : (
+            <View
+              style={styles.emptyCard}
+            >
+              <Text
+                style={styles.emptyText}
+              >
+                No active group found.
+              </Text>
+
               <TouchableOpacity
-                key={group.id}
+                style={styles.constitutionButton}
+                onPress={() =>
+                  navigation.navigate(
+                    'Constitution',
+                  )
+                }
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={
+                    styles.constitutionButtonText
+                  }
+                >
+                  Open Constitution
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
+        {/* Registration Form */}
+        <View style={styles.section}>
+          <Text
+            style={styles.sectionTitle}
+          >
+            Register New Member
+          </Text>
+
+          <View style={styles.formCard}>
+            <Text
+              style={styles.label}
+            >
+              Full Names *
+            </Text>
+
+            <TextInput
+              style={styles.input}
+              value={fullName}
+              onChangeText={setFullName}
+              placeholder="Enter full names"
+              placeholderTextColor="#9ca3af"
+            />
+
+            <Text
+              style={styles.label}
+            >
+              Gender *
+            </Text>
+
+            <View style={styles.genderRow}>
+              <TouchableOpacity
                 style={[
-                  styles.groupOption,
-                  selectedGroup?.id === group.id &&
-                    styles.groupOptionSelected,
+                  styles.genderButton,
+                  gender === 'Male' &&
+                    styles.genderButtonActive,
                 ]}
                 onPress={() =>
-                  setSelectedGroup(group)
+                  setGender('Male')
                 }
+                activeOpacity={0.8}
               >
                 <Text
                   style={[
-                    styles.groupOptionText,
-                    selectedGroup?.id === group.id &&
-                      styles.groupOptionTextSelected,
+                    styles.genderText,
+                    gender === 'Male' &&
+                      styles.genderTextActive,
                   ]}
                 >
-                  KYA {group.group_number}
+                  Male
                 </Text>
               </TouchableOpacity>
-            ))}
-          </ScrollView>
-        )}
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>
-            Member Details
-          </Text>
+              <TouchableOpacity
+                style={[
+                  styles.genderButton,
+                  gender === 'Female' &&
+                    styles.genderButtonActive,
+                ]}
+                onPress={() =>
+                  setGender('Female')
+                }
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={[
+                    styles.genderText,
+                    gender === 'Female' &&
+                      styles.genderTextActive,
+                  ]}
+                >
+                  Female
+                </Text>
+              </TouchableOpacity>
+            </View>
 
-          <Text style={styles.label}>
-            Full Names *
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={fullName}
-            onChangeText={setFullName}
-            placeholder="Enter full names"
-            placeholderTextColor="#9ca3af"
-          />
-
-          <Text style={styles.label}>
-            Gender *
-          </Text>
-
-          <GenderButtons
-            value={gender}
-            onChange={setGender}
-          />
-
-          <Text style={styles.label}>
-            Age *
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={age}
-            onChangeText={setAge}
-            placeholder="Enter age"
-            placeholderTextColor="#9ca3af"
-            keyboardType="number-pad"
-          />
-
-          <Text style={styles.label}>
-            Phone
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={phone}
-            onChangeText={setPhone}
-            placeholder="Optional phone number"
-            placeholderTextColor="#9ca3af"
-            keyboardType="phone-pad"
-          />
-
-          <Text style={styles.label}>
-            Cell *
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={cell}
-            onChangeText={setCell}
-            placeholder="Enter cell"
-            placeholderTextColor="#9ca3af"
-          />
-
-          <Text style={styles.label}>
-            District *
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={district}
-            onChangeText={setDistrict}
-            placeholder="Enter district"
-            placeholderTextColor="#9ca3af"
-          />
-        </View>
-
-        <View style={styles.section}>
-          <View style={styles.titleRow}>
-            <Text style={styles.sectionTitle}>
-              Next of Kin 1
+            <Text
+              style={styles.label}
+            >
+              Age *
             </Text>
 
-            <Text style={styles.optional}>
-              Optional
+            <TextInput
+              style={styles.input}
+              value={age}
+              onChangeText={setAge}
+              placeholder="Enter age"
+              placeholderTextColor="#9ca3af"
+              keyboardType="numeric"
+            />
+
+            <Text
+              style={styles.label}
+            >
+              Phone
             </Text>
+
+            <TextInput
+              style={styles.input}
+              value={phone}
+              onChangeText={setPhone}
+              placeholder="Optional phone number"
+              placeholderTextColor="#9ca3af"
+              keyboardType="phone-pad"
+            />
+
+            <Text
+              style={styles.label}
+            >
+              Cell *
+            </Text>
+
+            <TextInput
+              style={styles.input}
+              value={cell}
+              onChangeText={setCell}
+              placeholder="Enter cell"
+              placeholderTextColor="#9ca3af"
+            />
+
+            <Text
+              style={styles.label}
+            >
+              District *
+            </Text>
+
+            <TextInput
+              style={styles.input}
+              value={district}
+              onChangeText={setDistrict}
+              placeholder="Enter district"
+              placeholderTextColor="#9ca3af"
+            />
+
+            <Text
+              style={styles.infoText}
+            >
+              * Required fields
+            </Text>
+
+            <Text
+              style={styles.numberInfo}
+            >
+              The system will permanently assign
+              the member number automatically.
+            </Text>
+
+            <TouchableOpacity
+              style={[
+                styles.registerButton,
+                registering &&
+                  styles.disabledButton,
+              ]}
+              onPress={
+                handleRegisterMember
+              }
+              disabled={registering}
+              activeOpacity={0.8}
+            >
+              <Text
+                style={
+                  styles.registerButtonText
+                }
+              >
+                {registering
+                  ? 'Registering...'
+                  : 'Register Member'}
+              </Text>
+            </TouchableOpacity>
           </View>
-
-          <Text style={styles.label}>
-            Name
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={kin1Name}
-            onChangeText={setKin1Name}
-            placeholder="Name"
-            placeholderTextColor="#9ca3af"
-          />
-
-          <Text style={styles.label}>
-            Phone
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={kin1Phone}
-            onChangeText={setKin1Phone}
-            placeholder="Phone"
-            placeholderTextColor="#9ca3af"
-            keyboardType="phone-pad"
-          />
-
-          <Text style={styles.label}>
-            Gender
-          </Text>
-
-          <GenderButtons
-            value={kin1Gender}
-            onChange={setKin1Gender}
-          />
         </View>
 
+        {/* Member List */}
         <View style={styles.section}>
-          <View style={styles.titleRow}>
-            <Text style={styles.sectionTitle}>
-              Next of Kin 2
-            </Text>
-
-            <Text style={styles.optional}>
-              Optional
-            </Text>
-          </View>
-
-          <Text style={styles.label}>
-            Name
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={kin2Name}
-            onChangeText={setKin2Name}
-            placeholder="Name"
-            placeholderTextColor="#9ca3af"
-          />
-
-          <Text style={styles.label}>
-            Phone
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={kin2Phone}
-            onChangeText={setKin2Phone}
-            placeholder="Phone"
-            placeholderTextColor="#9ca3af"
-            keyboardType="phone-pad"
-          />
-
-          <Text style={styles.label}>
-            Gender
-          </Text>
-
-          <GenderButtons
-            value={kin2Gender}
-            onChange={setKin2Gender}
-          />
-        </View>
-
-        <View style={styles.notice}>
-          <Text style={styles.noticeTitle}>
-            Automatic Member Number
-          </Text>
-
-          <Text style={styles.noticeText}>
-            The system automatically assigns a permanent
-            member number.
-          </Text>
-
-          <Text style={styles.example}>
-            Example: KYA2010001
-          </Text>
-        </View>
-
-        <TouchableOpacity
-          style={[
-            styles.registerButton,
-            registering &&
-              styles.registerButtonDisabled,
-          ]}
-          onPress={handleRegister}
-          disabled={registering}
-        >
-          <Text style={styles.registerButtonText}>
-            {registering
-              ? 'Registering...'
-              : 'Register Member'}
-          </Text>
-        </TouchableOpacity>
-
-        <View style={styles.membersSection}>
-          <Text style={styles.sectionTitle}>
+          <Text
+            style={styles.sectionTitle}
+          >
             Registered Members
           </Text>
 
           {members.length === 0 ? (
-            <View style={styles.emptyMembers}>
-              <Text style={styles.emptyMembersTitle}>
+            <View
+              style={styles.emptyMembers}
+            >
+              <Text
+                style={styles.emptyMembersTitle}
+              >
                 No members yet
               </Text>
 
-              <Text style={styles.emptyText}>
-                Registered members will appear here.
+              <Text
+                style={styles.emptyMembersText}
+              >
+                Registered members will appear
+                here.
               </Text>
             </View>
           ) : (
-            members.map((member) => (
-              <View
-                key={member.id}
-                style={styles.memberCard}
-              >
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>
-                    {member.full_name
-                      .trim()
-                      .charAt(0)
-                      .toUpperCase()}
-                  </Text>
-                </View>
-
-                <View style={styles.memberInfo}>
-                  <Text style={styles.memberName}>
-                    {member.full_name}
-                  </Text>
-
-                  <Text style={styles.memberNumber}>
-                    {member.member_number}
-                  </Text>
-
-                  <Text style={styles.memberDetails}>
-                    {member.gender} • Age {member.age}
-                  </Text>
-
-                  {member.phone ? (
-                    <Text style={styles.memberPhone}>
-                      {member.phone}
+            members.map(
+              (member) => (
+                <View
+                  key={member.id}
+                  style={styles.memberCard}
+                >
+                  <View
+                    style={
+                      styles.memberAvatar
+                    }
+                  >
+                    <Text
+                      style={
+                        styles.memberAvatarText
+                      }
+                    >
+                      {member.full_name
+                        .charAt(0)
+                        .toUpperCase()}
                     </Text>
-                  ) : (
-                    <Text style={styles.noPhone}>
-                      No phone number
+                  </View>
+
+                  <View
+                    style={
+                      styles.memberInfo
+                    }
+                  >
+                    <Text
+                      style={
+                        styles.memberName
+                      }
+                    >
+                      {member.full_name}
                     </Text>
-                  )}
+
+                    <Text
+                      style={
+                        styles.memberNumber
+                      }
+                    >
+                      {member.member_number}
+                    </Text>
+
+                    <Text
+                      style={
+                        styles.memberDetails
+                      }
+                    >
+                      {member.gender} • Age{' '}
+                      {member.age}
+                    </Text>
+
+                    <Text
+                      style={
+                        styles.memberDetails
+                      }
+                    >
+                      {member.cell},{' '}
+                      {member.district}
+                    </Text>
+
+                    {member.phone ? (
+                      <Text
+                        style={
+                          styles.memberPhone
+                        }
+                      >
+                        {member.phone}
+                      </Text>
+                    ) : (
+                      <Text
+                        style={
+                          styles.noPhone
+                        }
+                      >
+                        No phone number
+                      </Text>
+                    )}
+                  </View>
                 </View>
-              </View>
-            ))
+              ),
+            )
           )}
         </View>
       </ScrollView>
@@ -634,38 +651,44 @@ const styles = StyleSheet.create({
 
   header: {
     backgroundColor: '#16a34a',
-    paddingHorizontal: 16,
-    paddingVertical: 15,
+    paddingHorizontal: 15,
+    paddingVertical: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+  },
+
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+
+  backText: {
+    color: '#16a34a',
+    fontSize: 32,
+    lineHeight: 34,
+    fontWeight: '500',
+    marginTop: -3,
+  },
+
+  headerTitleBox: {
+    flex: 1,
   },
 
   headerTitle: {
     color: '#ffffff',
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '800',
   },
 
   headerSubtitle: {
     color: '#ffffff',
     fontSize: 12,
-    marginTop: 3,
-  },
-
-  countCircle: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  countText: {
-    color: '#16a34a',
-    fontSize: 17,
-    fontWeight: '900',
+    marginTop: 2,
   },
 
   content: {
@@ -674,89 +697,85 @@ const styles = StyleSheet.create({
   },
 
   section: {
-    marginTop: 22,
+    marginBottom: 20,
   },
 
   sectionTitle: {
     color: '#111827',
     fontSize: 18,
     fontWeight: '800',
-    marginBottom: 12,
+    marginBottom: 10,
   },
 
   groupCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
     backgroundColor: '#f0fdf4',
     borderWidth: 1,
     borderColor: '#bbf7d0',
     borderRadius: 12,
-    padding: 14,
-  },
-
-  groupLogo: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#16a34a',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-
-  groupLogoText: {
-    color: '#ffffff',
-    fontSize: 22,
-    fontWeight: '900',
+    padding: 15,
   },
 
   groupName: {
-    color: '#111827',
-    fontSize: 16,
+    color: '#166534',
+    fontSize: 17,
     fontWeight: '800',
   },
 
   groupNumber: {
     color: '#16a34a',
+    fontSize: 15,
+    fontWeight: '800',
+    marginTop: 4,
+  },
+
+  groupLocation: {
+    color: '#4b5563',
     fontSize: 13,
-    fontWeight: '700',
-    marginTop: 3,
+    marginTop: 4,
   },
 
-  groupOptions: {
-    marginTop: 10,
-  },
-
-  groupOption: {
+  emptyCard: {
     borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginRight: 8,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    backgroundColor: '#f9fafb',
+    padding: 16,
+    alignItems: 'center',
   },
 
-  groupOptionSelected: {
+  emptyText: {
+    color: '#6b7280',
+    fontSize: 14,
+    marginBottom: 12,
+  },
+
+  constitutionButton: {
     backgroundColor: '#16a34a',
-    borderColor: '#16a34a',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
   },
 
-  groupOptionText: {
-    color: '#374151',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-
-  groupOptionTextSelected: {
+  constitutionButtonText: {
     color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+
+  formCard: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    padding: 15,
   },
 
   label: {
     color: '#374151',
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
-    marginBottom: 6,
-    marginTop: 10,
+    marginBottom: 7,
+    marginTop: 8,
   },
 
   input: {
@@ -764,10 +783,10 @@ const styles = StyleSheet.create({
     borderColor: '#d1d5db',
     borderRadius: 9,
     backgroundColor: '#ffffff',
+    paddingHorizontal: 12,
+    paddingVertical: 11,
     color: '#111827',
     fontSize: 15,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
   },
 
   genderRow: {
@@ -782,159 +801,56 @@ const styles = StyleSheet.create({
     borderRadius: 9,
     paddingVertical: 12,
     alignItems: 'center',
+    backgroundColor: '#ffffff',
   },
 
-  genderSelected: {
-    backgroundColor: '#16a34a',
+  genderButtonActive: {
+    backgroundColor: '#dcfce7',
     borderColor: '#16a34a',
   },
 
   genderText: {
-    color: '#374151',
+    color: '#4b5563',
     fontSize: 14,
     fontWeight: '700',
   },
 
-  genderTextSelected: {
-    color: '#ffffff',
+  genderTextActive: {
+    color: '#15803d',
   },
 
-  titleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-
-  optional: {
+  infoText: {
     color: '#6b7280',
     fontSize: 12,
-    marginBottom: 12,
+    marginTop: 12,
   },
 
-  notice: {
-    backgroundColor: '#f0fdf4',
-    borderWidth: 1,
-    borderColor: '#bbf7d0',
-    borderRadius: 10,
-    padding: 13,
-    marginTop: 22,
-  },
-
-  noticeTitle: {
+  numberInfo: {
     color: '#166534',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-
-  noticeText: {
-    color: '#4b5563',
+    backgroundColor: '#f0fdf4',
+    borderRadius: 8,
+    padding: 10,
     fontSize: 12,
-    marginTop: 4,
     lineHeight: 18,
-  },
-
-  example: {
-    color: '#16a34a',
-    fontSize: 13,
-    fontWeight: '800',
-    marginTop: 6,
+    marginTop: 8,
   },
 
   registerButton: {
     backgroundColor: '#16a34a',
     borderRadius: 10,
-    paddingVertical: 15,
+    paddingVertical: 14,
     alignItems: 'center',
     marginTop: 16,
   },
 
-  registerButtonDisabled: {
+  disabledButton: {
     opacity: 0.6,
   },
 
   registerButtonText: {
     color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-
-  membersSection: {
-    marginTop: 28,
-  },
-
-  memberCard: {
-    flexDirection: 'row',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 12,
-    padding: 13,
-    marginBottom: 10,
-  },
-
-  avatar: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#dcfce7',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-
-  avatarText: {
-    color: '#16a34a',
-    fontSize: 18,
-    fontWeight: '900',
-  },
-
-  memberInfo: {
-    flex: 1,
-  },
-
-  memberName: {
-    color: '#111827',
     fontSize: 15,
     fontWeight: '800',
-  },
-
-  memberNumber: {
-    color: '#16a34a',
-    fontSize: 12,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-
-  memberDetails: {
-    color: '#4b5563',
-    fontSize: 12,
-    marginTop: 4,
-    textTransform: 'capitalize',
-  },
-
-  memberPhone: {
-    color: '#6b7280',
-    fontSize: 12,
-    marginTop: 2,
-  },
-
-  noPhone: {
-    color: '#9ca3af',
-    fontSize: 12,
-    marginTop: 2,
-    fontStyle: 'italic',
-  },
-
-  emptyBox: {
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 10,
-    backgroundColor: '#f9fafb',
-    padding: 15,
-  },
-
-  emptyText: {
-    color: '#6b7280',
-    fontSize: 13,
   },
 
   emptyMembers: {
@@ -949,7 +865,75 @@ const styles = StyleSheet.create({
   emptyMembersTitle: {
     color: '#374151',
     fontSize: 15,
-    fontWeight: '700',
-    marginBottom: 4,
+    fontWeight: '800',
+  },
+
+  emptyMembersText: {
+    color: '#6b7280',
+    fontSize: 13,
+    marginTop: 5,
+  },
+
+  memberCard: {
+    flexDirection: 'row',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    padding: 13,
+    marginBottom: 10,
+    elevation: 1,
+  },
+
+  memberAvatar: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#dcfce7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+
+  memberAvatarText: {
+    color: '#16a34a',
+    fontSize: 19,
+    fontWeight: '900',
+  },
+
+  memberInfo: {
+    flex: 1,
+  },
+
+  memberName: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+
+  memberNumber: {
+    color: '#16a34a',
+    fontSize: 13,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+
+  memberDetails: {
+    color: '#4b5563',
+    fontSize: 12,
+    marginTop: 3,
+  },
+
+  memberPhone: {
+    color: '#374151',
+    fontSize: 12,
+    marginTop: 3,
+  },
+
+  noPhone: {
+    color: '#9ca3af',
+    fontSize: 12,
+    fontStyle: 'italic',
+    marginTop: 3,
   },
 });
