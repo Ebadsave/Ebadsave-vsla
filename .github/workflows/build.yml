@@ -1,18 +1,13 @@
 name: Build Ebadsave VSLA APK
 
-on:
-workflow_dispatch:
-push:
-branches:
-- main
+on: [push, workflow_dispatch]
 
 jobs:
 build:
 runs-on: ubuntu-latest
-
 steps:
-  - name: Checkout repository
-    uses: actions/checkout@v4
+- name: Checkout repository
+uses: actions/checkout@v4
 
   - name: Setup Node.js
     uses: actions/setup-node@v4
@@ -34,86 +29,33 @@ steps:
       npx expo install expo-image-picker
 
   - name: TypeScript check
-    run: |
-      set +e
-
-      npx tsc --noEmit 2>&1 | tee typescript.log
-      TS_EXIT=${PIPESTATUS[0]}
-
-      set -e
-
-      if [ "$TS_EXIT" -ne 0 ]; then
-        echo ""
-        echo "========== TYPESCRIPT ERROR SUMMARY =========="
-
-        grep -E \
-          "error TS[0-9]+|ERROR|Error|error" \
-          typescript.log | tail -100 || true
-
-        echo ""
-        echo "========== LAST 100 LOG LINES =========="
-        tail -100 typescript.log
-
-        exit "$TS_EXIT"
-      fi
-
-      echo "TYPESCRIPT CHECK PASSED"
+    run: npx tsc --noEmit
 
   - name: Generate Android project
-    run: |
-      set +e
-
-      npx expo prebuild --platform android --non-interactive 2>&1 | tee prebuild.log
-      PREBUILD_EXIT=${PIPESTATUS[0]}
-
-      set -e
-
-      if [ "$PREBUILD_EXIT" -ne 0 ]; then
-        echo ""
-        echo "========== PREBUILD ERROR SUMMARY =========="
-
-        grep -E \
-          "ERROR|Error|error|ERR|failed|Failed|Could not" \
-          prebuild.log | tail -100 || true
-
-        echo ""
-        echo "========== LAST 100 LOG LINES =========="
-        tail -100 prebuild.log
-
-        exit "$PREBUILD_EXIT"
-      fi
-
-      echo "ANDROID PREBUILD SUCCESSFUL"
+    run: npx expo prebuild --platform android --non-interactive
 
   - name: Build debug APK
     run: |
       set +e
-
       cd android
-
       ./gradlew assembleDebug --no-daemon 2>&1 | tee ../gradle-build.log
       BUILD_EXIT=${PIPESTATUS[0]}
-
       set -e
 
       echo ""
       echo "========== BUILD ERROR SUMMARY =========="
 
       if [ "$BUILD_EXIT" -ne 0 ]; then
-        grep -E \
-          "FAILURE|What went wrong|Execution failed|Caused by:|Exception|Error:|Could not|BUILD FAILED|KeytoolException|TS[0-9]+" \
-          ../gradle-build.log | tail -100 || true
-
+        grep -E "FAILURE|What went wrong|Execution failed|Caused by:|Exception|Error:|Could not|BUILD FAILED|KeytoolException|TS[0-9]+" ../gradle-build.log | tail -100 || true
         echo ""
         echo "========== LAST 100 LOG LINES =========="
         tail -100 ../gradle-build.log
-
         exit "$BUILD_EXIT"
       fi
 
       echo "BUILD SUCCESSFUL"
 
-  - name: Verify and inspect APK
+  - name: Verify APK
     run: |
       APK="android/app/build/outputs/apk/debug/app-debug.apk"
 
@@ -122,26 +64,27 @@ steps:
         exit 1
       fi
 
-      echo ""
-      echo "========== APK FILE =========="
+      echo "APK successfully created:"
       ls -lh "$APK"
+
+  - name: Inspect APK
+    run: |
+      APK="android/app/build/outputs/apk/debug/app-debug.apk"
 
       echo ""
       echo "========== APK PACKAGE INFORMATION =========="
-      $ANDROID_HOME/build-tools/35.0.0/aapt dump badging "$APK" | grep -E \
-        "package:|sdkVersion:|targetSdkVersion:|native-code:|application-label:"
+
+      $ANDROID_HOME/build-tools/35.0.0/aapt dump badging "$APK" | grep -E "package:|sdkVersion:|targetSdkVersion:|native-code:|application-label:" || true
 
       echo ""
       echo "========== APK SIGNATURE =========="
-      apksigner verify --verbose "$APK" || true
+
+      $ANDROID_HOME/build-tools/35.0.0/apksigner verify --verbose "$APK" || true
 
       echo ""
-      echo "========== APK ZIP ABI CHECK =========="
-      unzip -l "$APK" | grep -E \
-        "lib/(armeabi-v7a|arm64-v8a|x86|x86_64)/" | head -50 || true
+      echo "========== APK ABI =========="
 
-      echo ""
-      echo "========== APK INSPECTION COMPLETE =========="
+      unzip -l "$APK" | grep -E "lib/(armeabi-v7a|arm64-v8a|x86|x86_64)/" | head -50 || true
 
   - name: Upload APK artifact
     uses: actions/upload-artifact@v4
