@@ -26,18 +26,117 @@ steps:
       java-version: '17'
 
   - name: Install dependencies
-    run: npm install
+    run: |
+      set +e
+      npm install 2>&1 | tee npm-install.log
+      INSTALL_EXIT=${PIPESTATUS[0]}
+      set -e
+
+      if [ "$INSTALL_EXIT" -ne 0 ]; then
+        echo ""
+        echo "========== NPM INSTALL ERROR =========="
+        grep -E \
+          "npm ERR|error|Error|ERR!|failed|Failed|npm error" \
+          npm-install.log | tail -100 || true
+
+        echo ""
+        echo "========== LAST 50 LOG LINES =========="
+        tail -50 npm-install.log
+
+        exit "$INSTALL_EXIT"
+      fi
+
+      echo "NPM INSTALL SUCCESSFUL"
 
   - name: Install Expo packages
     run: |
-      npx expo install expo-crypto
-      npx expo install expo-image-picker
+      set +e
+
+      npx expo install expo-crypto 2>&1 | tee expo-crypto.log
+      CRYPTO_EXIT=${PIPESTATUS[0]}
+
+      if [ "$CRYPTO_EXIT" -ne 0 ]; then
+        echo ""
+        echo "========== EXPO-CRYPTO ERROR =========="
+        grep -E \
+          "ERROR|Error|error|ERR|failed|Failed|Could not|npm ERR" \
+          expo-crypto.log | tail -100 || true
+
+        echo ""
+        echo "========== LAST 50 LOG LINES =========="
+        tail -50 expo-crypto.log
+
+        exit "$CRYPTO_EXIT"
+      fi
+
+      echo "expo-crypto installed successfully."
+
+      npx expo install expo-image-picker 2>&1 | tee expo-image-picker.log
+      IMAGE_PICKER_EXIT=${PIPESTATUS[0]}
+
+      if [ "$IMAGE_PICKER_EXIT" -ne 0 ]; then
+        echo ""
+        echo "========== EXPO-IMAGE-PICKER ERROR =========="
+        grep -E \
+          "ERROR|Error|error|ERR|failed|Failed|Could not|npm ERR" \
+          expo-image-picker.log | tail -100 || true
+
+        echo ""
+        echo "========== LAST 100 LOG LINES =========="
+        tail -100 expo-image-picker.log
+
+        exit "$IMAGE_PICKER_EXIT"
+      fi
+
+      echo "expo-image-picker installed successfully."
+
+      set -e
 
   - name: TypeScript check
-    run: npx tsc --noEmit
+    run: |
+      set +e
+      npx tsc --noEmit 2>&1 | tee typescript.log
+      TS_EXIT=${PIPESTATUS[0]}
+      set -e
+
+      if [ "$TS_EXIT" -ne 0 ]; then
+        echo ""
+        echo "========== TYPESCRIPT ERROR SUMMARY =========="
+        grep -E \
+          "error TS[0-9]+|ERROR|Error|error" \
+          typescript.log | tail -100 || true
+
+        echo ""
+        echo "========== LAST 100 LOG LINES =========="
+        tail -100 typescript.log
+
+        exit "$TS_EXIT"
+      fi
+
+      echo "TYPESCRIPT CHECK PASSED"
 
   - name: Generate Android project
-    run: npx expo prebuild --platform android --non-interactive
+    run: |
+      set +e
+      npx expo prebuild --platform android --non-interactive 2>&1 | tee prebuild.log
+      PREBUILD_EXIT=${PIPESTATUS[0]}
+      set -e
+
+      if [ "$PREBUILD_EXIT" -ne 0 ]; then
+        echo ""
+        echo "========== PREBUILD ERROR SUMMARY =========="
+        grep -E \
+          "ERROR|Error|error|ERR|failed|Failed|Could not" \
+          prebuild.log | tail -100 || true
+
+        echo ""
+        echo "========== LAST 100 LOG LINES =========="
+        tail -100 prebuild.log
+
+        exit "$PREBUILD_EXIT"
+      fi
+
+      echo "ANDROID PREBUILD SUCCESSFUL"
 
   - name: Build debug APK
     run: |
