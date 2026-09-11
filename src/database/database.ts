@@ -1506,4 +1506,848 @@ async function applyDueNextOfKinChanges(
           UPDATE member_next_of_kin
           SET
             name = ?,
-            phone =
+            phone = ?,
+            gender = ?,
+            updated_at = ?
+          WHERE member_id = ?
+          AND slot = ?
+        `,
+        change.new_name,
+        change.new_phone,
+        change.new_gender,
+        now(),
+        change.member_id,
+        change.slot,
+      );
+    }
+
+    await db.runAsync(
+      `
+        UPDATE next_of_kin_change_history
+        SET applied = 1
+        WHERE id = ?
+      `,
+      change.id,
+    );
+  }
+}
+
+export async function recordNextOfKinBenefit(
+  memberId: number,
+  slot: number,
+  amount: number,
+  reason: string,
+  effectiveDays = 30,
+): Promise<number> {
+  const db = await getDatabase();
+
+  validateKinSlot(slot);
+
+  if (
+    !Number.isFinite(amount) ||
+    amount < 0
+  ) {
+    throw new Error(
+      'Benefit amount is invalid.',
+    );
+  }
+
+  if (!normalizeText(reason)) {
+    throw new Error(
+      'A reason is required for a benefit.',
+    );
+  }
+
+  await applyDueNextOfKinChanges(db);
+  await applyDueNextOfKinBenefits(db);
+
+  const kin =
+    await getKin(
+      db,
+      memberId,
+      slot,
+    );
+
+  if (!kin) {
+    throw new Error(
+      'Next-of-kin slot not found.',
+    );
+  }
+
+  if (
+    kin.locked === 1 ||
+    kin.benefit_received === 1
+  ) {
+    throw new Error(
+      'This next-of-kin slot has already received benefits and is locked.',
+    );
+  }
+
+  await assertNoPendingKinBenefit(
+    db,
+    memberId,
+    slot,
+  );
+
+  const effectiveDate = new Date();
+
+  effectiveDate.setDate(
+    effectiveDate.getDate() +
+      Math.max(0, effectiveDays),
+  );
+
+  const result = await db.runAsync(
+    `
+      INSERT INTO next_of_kin_benefits (
+        member_id,
+        slot,
+        benefit_amount,
+        reason,
+        benefit_date,
+        effective_at,
+        status
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 'pending')
+    `,
+    memberId,
+    slot,
+    amount,
+    normalizeText(reason),
+    now(),
+    effectiveDate.toISOString(),
+  );
+
+  return result.lastInsertRowId;
+}
+
+async function applyDueNextOfKinBenefits(
+  db: SQLite.SQLiteDatabase,
+): Promise<void> {
+  const pending =
+    await db.getAllAsync<{
+      id: number;
+      member_id: number;
+      slot: number;
+    }>(
+      `
+        SELECT id, member_id, slot
+        FROM next_of_kin_benefits
+        WHERE status = 'pending'
+        AND effective_at <= ?
+        ORDER BY id ASC
+      `,
+      now(),
+    );
+
+  for (const benefit of pending) {
+    await db.runAsync(
+      `
+        UPDATE next_of_kin_benefits
+        SET status = 'received'
+        WHERE id = ?
+      `,
+      benefit.id,
+    );
+
+    await db.runAsync(
+      `
+        UPDATE member_next_of_kin
+        SET
+          benefit_received = 1,
+          locked = 1,
+          updated_at = ?
+        WHERE member_id = ?
+        AND slot = ?
+      `,
+      now(),
+      benefit.member_id,
+      benefit.slot,
+    );
+  }
+}
+
+export async function setMemberPasscode(
+  memberId: number,
+  passcode: string,
+): Promise<void> {
+  const db = await getDatabase();
+
+  if (!isValidPasscode(passcode)) {
+    throw new Error(
+      'Passcode must contain exactly 4 letters or numbers.',
+    );
+  }
+
+  const member =
+    await db.getFirstAsync<{
+      phone: string | null;
+    }>(
+      `
+        SELECT phone
+        FROM members
+        WHERE id = ?
+        LIMIT 1
+      `,
+      memberId,
+    );
+
+  if (!member) {
+    throw new Error('Member not found.');
+  }
+
+  if (!normalizeText(member.phone)) {
+    throw new Error(
+      'Only members with a phone number can have a passcode.',
+    );
+  }
+
+  const credential =
+    await db.getFirstAsync<{
+      salt: string;
+    }>(
+      `
+        SELECT salt
+        FROM member_credentials
+        WHERE member_id = ?
+        LIMIT 1
+      `,
+      memberId,
+    );
+
+  const salt =
+    credential?.salt ??
+    Crypto.randomUUID();
+
+  const passcodeHash =
+    await hashPasscode(
+      passcode,
+      salt,
+    );
+
+  const timestamp = now();
+
+  await db.runAsync(
+    `
+      INSERT INTO member_credentials (
+        member_id,
+        salt,
+        passcode_hash,
+        phone_eligible,
+        failed_attempts,
+        locked_until,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, 1, 0, NULL, ?, ?)
+      ON CONFLICT(member_id)
+      DO UPDATE SET
+        salt = excluded.salt,
+        passcode_hash = excluded.passcode_hash,
+        phone_eligible = 1,
+        failed_attempts = 0,
+        locked_until = NULL,
+        updated_at = excluded.updated_at
+    `,
+    memberId,
+    salt,
+    passcodeHash,
+    timestamp,
+    timestamp,
+  );
+}
+
+export async function hasMemberPasscode(
+  memberId: number,
+): Promise<boolean> {
+  const db = await getDatabase();
+
+  const result =
+    await db.getFirstAsync<{
+      passcode_hash: string | null;
+    }>(
+      `
+        SELECT passcode_hash
+        FROM member_credentials
+        WHERE member_id = ?
+        LIMIT 1
+      `,
+      memberId,
+    );
+
+  return Boolean(
+    result?.passcode_hash,
+  );
+}
+
+export async function verifyMemberPasscode(
+  memberId: number,
+  passcode: string,
+): Promise<boolean> {
+  const db = await getDatabase();
+
+  if (!isValidPasscode(passcode)) {
+    return false;
+  }
+
+  const credential =
+    await db.getFirstAsync<{
+      salt: string;
+      passcode_hash: string | null;
+      failed_attempts: number;
+      locked_until: string | null;
+    }>(
+      `
+        SELECT
+          salt,
+          passcode_hash,
+          failed_attempts,
+          locked_until
+        FROM member_credentials
+        WHERE member_id = ?
+        LIMIT 1
+      `,
+      memberId,
+    );
+
+  if (!credential?.passcode_hash) {
+    return false;
+  }
+
+  if (
+    credential.locked_until &&
+    new Date(
+      credential.locked_until,
+    ).getTime() > Date.now()
+  ) {
+    return false;
+  }
+
+  const suppliedHash =
+    await hashPasscode(
+      passcode,
+      credential.salt,
+    );
+
+  const success =
+    suppliedHash ===
+    credential.passcode_hash;
+
+  await db.runAsync(
+    `
+      INSERT INTO member_auth_attempts (
+        member_id,
+        success,
+        attempted_at
+      )
+      VALUES (?, ?, ?)
+    `,
+    memberId,
+    success ? 1 : 0,
+    now(),
+  );
+
+  if (success) {
+    await db.runAsync(
+      `
+        UPDATE member_credentials
+        SET
+          failed_attempts = 0,
+          locked_until = NULL,
+          updated_at = ?
+        WHERE member_id = ?
+      `,
+      now(),
+      memberId,
+    );
+
+    return true;
+  }
+
+  const attempts =
+    credential.failed_attempts + 1;
+
+  if (attempts >= 5) {
+    const lockedUntil =
+      new Date();
+
+    lockedUntil.setMinutes(
+      lockedUntil.getMinutes() + 15,
+    );
+
+    await db.runAsync(
+      `
+        UPDATE member_credentials
+        SET
+          failed_attempts = 0,
+          locked_until = ?,
+          updated_at = ?
+        WHERE member_id = ?
+      `,
+      lockedUntil.toISOString(),
+      now(),
+      memberId,
+    );
+  } else {
+    await db.runAsync(
+      `
+        UPDATE member_credentials
+        SET
+          failed_attempts = ?,
+          updated_at = ?
+        WHERE member_id = ?
+      `,
+      attempts,
+      now(),
+      memberId,
+    );
+  }
+
+  return false;
+}
+
+export async function resetMemberPasscode(
+  memberId: number,
+  newPasscode: string,
+): Promise<void> {
+  await setMemberPasscode(
+    memberId,
+    newPasscode,
+  );
+}
+
+export async function signMemberTransaction(
+  memberId: number,
+  passcode: string,
+  transactionType: string,
+  transactionId: number | null = null,
+): Promise<boolean> {
+  const verified =
+    await verifyMemberPasscode(
+      memberId,
+      passcode,
+    );
+
+  if (!verified) {
+    return false;
+  }
+
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `
+      INSERT INTO member_transaction_signatures (
+        member_id,
+        transaction_type,
+        transaction_id,
+        signed_at
+      )
+      VALUES (?, ?, ?, ?)
+    `,
+    memberId,
+    normalizeText(transactionType),
+    transactionId,
+    now(),
+  );
+
+  return true;
+}
+
+export async function createMeeting(
+  groupId: number,
+  meetingDate: string,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const timestamp = now();
+
+  const result = await db.runAsync(
+    `
+      INSERT INTO group_meetings (
+        group_id,
+        meeting_date,
+        opened_at,
+        status,
+        created_at
+      )
+      VALUES (?, ?, ?, 'open', ?)
+    `,
+    groupId,
+    meetingDate,
+    timestamp,
+    timestamp,
+  );
+
+  await recordGroupActivity(
+    groupId,
+  );
+
+  return result.lastInsertRowId;
+}
+
+export async function openAppAccess(
+  groupId: number,
+  meetingId: number | null,
+  authorizers: Array<{
+    memberId: number;
+    passcode: string;
+    role: 'executive' | 'member';
+  }>,
+): Promise<number> {
+  const db = await getDatabase();
+
+  if (authorizers.length !== 3) {
+    throw new Error(
+      'Exactly three members are required to open access.',
+    );
+  }
+
+  const uniqueMembers =
+    new Set(
+      authorizers.map(
+        (item) => item.memberId,
+      ),
+    );
+
+  if (uniqueMembers.size !== 3) {
+    throw new Error(
+      'The three authorizers must be different members.',
+    );
+  }
+
+  const executives =
+    authorizers.filter(
+      (item) =>
+        item.role === 'executive',
+    );
+
+  const ordinaryMembers =
+    authorizers.filter(
+      (item) =>
+        item.role === 'member',
+    );
+
+  if (
+    executives.length !== 2 ||
+    ordinaryMembers.length !== 1
+  ) {
+    throw new Error(
+      'Access requires exactly 2 executive members and 1 ordinary member.',
+    );
+  }
+
+  for (const authorizer of authorizers) {
+    const member =
+      await db.getFirstAsync<{
+        id: number;
+        group_id: number;
+        role: string;
+        phone: string | null;
+      }>(
+        `
+          SELECT
+            id,
+            group_id,
+            role,
+            phone
+          FROM members
+          WHERE id = ?
+          AND status = 'active'
+          LIMIT 1
+        `,
+        authorizer.memberId,
+      );
+
+    if (
+      !member ||
+      member.group_id !== groupId
+    ) {
+      throw new Error(
+        'Every authorizer must be an active member of this group.',
+      );
+    }
+
+    const actualExecutive =
+      member.role !== 'member';
+
+    if (
+      authorizer.role ===
+        'executive' &&
+      !actualExecutive
+    ) {
+      throw new Error(
+        'An executive authorizer must have an executive role.',
+      );
+    }
+
+    if (
+      authorizer.role ===
+        'member' &&
+      actualExecutive
+    ) {
+      throw new Error(
+        'The ordinary authorizer must not be an executive.',
+      );
+    }
+
+    const verified =
+      await verifyMemberPasscode(
+        authorizer.memberId,
+        authorizer.passcode,
+      );
+
+    if (!verified) {
+      throw new Error(
+        `Passcode verification failed for member ${member.id}.`,
+      );
+    }
+  }
+
+  const sessionResult =
+    await db.runAsync(
+      `
+        INSERT INTO app_access_sessions (
+          group_id,
+          meeting_id,
+          opened_at,
+          status
+        )
+        VALUES (?, ?, ?, 'open')
+      `,
+      groupId,
+      meetingId,
+      now(),
+    );
+
+  const sessionId =
+    sessionResult.lastInsertRowId;
+
+  for (const authorizer of authorizers) {
+    await db.runAsync(
+      `
+        INSERT INTO app_access_authorizers (
+          session_id,
+          member_id,
+          authorizer_role,
+          authorized_at
+        )
+        VALUES (?, ?, ?, ?)
+      `,
+      sessionId,
+      authorizer.memberId,
+      authorizer.role,
+      now(),
+    );
+  }
+
+  await recordGroupActivity(
+    groupId,
+  );
+
+  return sessionId;
+}
+
+export async function closeAppAccess(
+  sessionId: number,
+): Promise<void> {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `
+      UPDATE app_access_sessions
+      SET
+        closed_at = ?,
+        status = 'closed'
+      WHERE id = ?
+    `,
+    now(),
+    sessionId,
+  );
+}
+
+export async function closeMeeting(
+  meetingId: number,
+  totalSavings: number,
+  loanFund: number,
+  groupFund: number,
+): Promise<void> {
+  const db = await getDatabase();
+
+  const timestamp = now();
+
+  await db.runAsync(
+    `
+      UPDATE group_meetings
+      SET
+        closed_at = ?,
+        status = 'closed'
+      WHERE id = ?
+    `,
+    timestamp,
+    meetingId,
+  );
+
+  await db.runAsync(
+    `
+      INSERT INTO meeting_closures (
+        meeting_id,
+        closed_at,
+        total_savings,
+        loan_fund,
+        group_fund
+      )
+      VALUES (?, ?, ?, ?, ?)
+    `,
+    meetingId,
+    timestamp,
+    totalSavings,
+    loanFund,
+    groupFund,
+  );
+
+  const meeting =
+    await db.getFirstAsync<{
+      group_id: number;
+    }>(
+      `
+        SELECT group_id
+        FROM group_meetings
+        WHERE id = ?
+        LIMIT 1
+      `,
+      meetingId,
+    );
+
+  if (meeting) {
+    await recordGroupActivity(
+      meeting.group_id,
+    );
+  }
+}
+
+export async function saveMemberStatement(
+  meetingId: number,
+  memberId: number,
+  individualTotalSavings: number,
+  individualLoanBalance: number,
+  individualLoanDueDate: string | null,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const result =
+    await db.runAsync(
+      `
+        INSERT INTO member_statement_records (
+          meeting_id,
+          member_id,
+          individual_total_savings,
+          individual_loan_balance,
+          individual_loan_due_date,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+      `,
+      meetingId,
+      memberId,
+      individualTotalSavings,
+      individualLoanBalance,
+      individualLoanDueDate,
+      now(),
+    );
+
+  return result.lastInsertRowId;
+}
+
+export async function queueImportantGroupNotification(
+  groupId: number,
+  title: string,
+  message: string,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const result =
+    await db.runAsync(
+      `
+        INSERT INTO notification_queue (
+          group_id,
+          member_id,
+          notification_type,
+          priority,
+          title,
+          message,
+          created_at,
+          status
+        )
+        VALUES (?, NULL, 'group_summary', 'important', ?, ?, ?, 'pending')
+      `,
+      groupId,
+      title,
+      message,
+      now(),
+    );
+
+  return result.lastInsertRowId;
+}
+
+export async function queueImportantMemberNotification(
+  groupId: number,
+  memberId: number,
+  title: string,
+  message: string,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const result =
+    await db.runAsync(
+      `
+        INSERT INTO notification_queue (
+          group_id,
+          member_id,
+          notification_type,
+          priority,
+          title,
+          message,
+          created_at,
+          status
+        )
+        VALUES (?, ?, 'member_statement', 'important', ?, ?, ?, 'pending')
+      `,
+      groupId,
+      memberId,
+      title,
+      message,
+      now(),
+    );
+
+  return result.lastInsertRowId;
+}
+
+export async function getPendingNotifications(): Promise<
+  Array<{
+    id: number;
+    group_id: number;
+    member_id: number | null;
+    notification_type: string;
+    priority: string;
+    title: string;
+    message: string;
+    created_at: string;
+    status: string;
+  }>
+> {
+  const db = await getDatabase();
+
+  return db.getAllAsync(
+    `
+      SELECT *
+      FROM notification_queue
+      WHERE status = 'pending'
+      ORDER BY
+        CASE
+          WHEN priority = 'important'
+          THEN 0
+          ELSE 1
+        END,
+        created_at ASC
+    `,
+  );
+  }
