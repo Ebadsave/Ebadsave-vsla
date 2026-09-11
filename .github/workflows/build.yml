@@ -5,9 +5,10 @@ on: [push, workflow_dispatch]
 jobs:
 build:
 runs-on: ubuntu-latest
+
 steps:
-- name: Checkout repository
-uses: actions/checkout@v4
+  - name: Checkout repository
+    uses: actions/checkout@v4
 
   - name: Setup Node.js
     uses: actions/setup-node@v4
@@ -25,31 +26,51 @@ uses: actions/checkout@v4
 
   - name: Install Expo packages
     run: |
+      echo "Installing expo-crypto..."
       npx expo install expo-crypto
+
+      echo ""
+      echo "Installing expo-image-picker..."
       npx expo install expo-image-picker
 
+      echo ""
+      echo "Expo package installation completed."
+
   - name: TypeScript check
-    run: npx tsc --noEmit
+    run: |
+      echo "Running TypeScript check..."
+      npx tsc --noEmit
+      echo "TypeScript check completed."
 
   - name: Generate Android project
-    run: npx expo prebuild --platform android --non-interactive
+    run: |
+      echo "Generating Android project..."
+      npx expo prebuild --platform android --non-interactive
+      echo "Android project generated."
 
   - name: Build debug APK
     run: |
+      echo "Starting Gradle build..."
+
       set +e
+
       cd android
       ./gradlew assembleDebug --no-daemon 2>&1 | tee ../gradle-build.log
+
       BUILD_EXIT=${PIPESTATUS[0]}
-      set -e
 
       echo ""
-      echo "========== BUILD ERROR SUMMARY =========="
+      echo "Gradle exit code: $BUILD_EXIT"
 
       if [ "$BUILD_EXIT" -ne 0 ]; then
-        grep -E "FAILURE|What went wrong|Execution failed|Caused by:|Exception|Error:|Could not|BUILD FAILED|KeytoolException|TS[0-9]+" ../gradle-build.log | tail -100 || true
         echo ""
-        echo "========== LAST 100 LOG LINES =========="
+        echo "========== GRADLE FAILURE =========="
+        grep -E "FAILURE|What went wrong|Execution failed|Caused by:|Exception|Error:|Could not|BUILD FAILED" ../gradle-build.log | tail -100 || true
+
+        echo ""
+        echo "========== LAST 100 GRADLE LINES =========="
         tail -100 ../gradle-build.log
+
         exit "$BUILD_EXIT"
       fi
 
@@ -57,34 +78,19 @@ uses: actions/checkout@v4
 
   - name: Verify APK
     run: |
+      echo "Checking APK..."
+
       APK="android/app/build/outputs/apk/debug/app-debug.apk"
 
       if [ ! -f "$APK" ]; then
         echo "ERROR: APK was not created."
+        find android -name "*.apk" -type f -print || true
         exit 1
       fi
 
-      echo "APK successfully created:"
+      echo ""
+      echo "========== APK CREATED =========="
       ls -lh "$APK"
-
-  - name: Inspect APK
-    run: |
-      APK="android/app/build/outputs/apk/debug/app-debug.apk"
-
-      echo ""
-      echo "========== APK PACKAGE INFORMATION =========="
-
-      $ANDROID_HOME/build-tools/35.0.0/aapt dump badging "$APK" | grep -E "package:|sdkVersion:|targetSdkVersion:|native-code:|application-label:" || true
-
-      echo ""
-      echo "========== APK SIGNATURE =========="
-
-      $ANDROID_HOME/build-tools/35.0.0/apksigner verify --verbose "$APK" || true
-
-      echo ""
-      echo "========== APK ABI =========="
-
-      unzip -l "$APK" | grep -E "lib/(armeabi-v7a|arm64-v8a|x86|x86_64)/" | head -50 || true
 
   - name: Upload APK artifact
     uses: actions/upload-artifact@v4
