@@ -1,186 +1,86 @@
 name: Build Ebadsave VSLA APK
 
 on:
-workflow_dispatch:
-push:
-branches:
-- main
+  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
-build:
-runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-latest
 
-steps:
-  - name: Checkout repository
-    uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  - name: Setup Node.js
-    uses: actions/setup-node@v4
-    with:
-      node-version: 20
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-  - name: Setup Java 17
-    uses: actions/setup-java@v4
-    with:
-      distribution: temurin
-      java-version: '17'
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-  - name: Install dependencies
-    run: |
-      set +e
-      npm install 2>&1 | tee npm-install.log
-      INSTALL_EXIT=${PIPESTATUS[0]}
-      set -e
+      - name: Install dependencies
+        run: npm install
 
-      if [ "$INSTALL_EXIT" -ne 0 ]; then
-        echo ""
-        echo "========== NPM INSTALL ERROR =========="
-        grep -E \
-          "npm ERR|error|Error|ERR!|failed|Failed|npm error" \
-          npm-install.log | tail -100 || true
+      - name: Install Expo packages
+        run: |
+          npx expo install expo-crypto
+          npx expo install expo-image-picker
 
-        echo ""
-        echo "========== LAST 50 LOG LINES =========="
-        tail -50 npm-install.log
+      - name: TypeScript check
+        run: npx tsc --noEmit
 
-        exit "$INSTALL_EXIT"
-      fi
+      - name: Generate Android project
+        run: npx expo prebuild --platform android --non-interactive
 
-      echo "NPM INSTALL SUCCESSFUL"
+      - name: Build debug APK
+        run: |
+          set +e
+          cd android
 
-  - name: Install Expo packages
-    run: |
-      set +e
+          ./gradlew assembleDebug --no-daemon 2>&1 | tee ../gradle-build.log
+          BUILD_EXIT=${PIPESTATUS[0]}
 
-      npx expo install expo-crypto 2>&1 | tee expo-crypto.log
-      CRYPTO_EXIT=${PIPESTATUS[0]}
+          set -e
 
-      if [ "$CRYPTO_EXIT" -ne 0 ]; then
-        echo ""
-        echo "========== EXPO-CRYPTO ERROR =========="
-        grep -E \
-          "ERROR|Error|error|ERR|failed|Failed|Could not|npm ERR" \
-          expo-crypto.log | tail -100 || true
+          echo ""
+          echo "========== BUILD ERROR SUMMARY =========="
 
-        echo ""
-        echo "========== LAST 50 LOG LINES =========="
-        tail -50 expo-crypto.log
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+            grep -E \
+              "FAILURE|What went wrong|Execution failed|Caused by:|Exception|Error:|Could not|BUILD FAILED|KeytoolException|TS[0-9]+" \
+              ../gradle-build.log | tail -100 || true
 
-        exit "$CRYPTO_EXIT"
-      fi
+            echo ""
+            echo "========== LAST 100 LOG LINES =========="
+            tail -100 ../gradle-build.log
 
-      echo "expo-crypto installed successfully."
+            exit "$BUILD_EXIT"
+          fi
 
-      npx expo install expo-image-picker 2>&1 | tee expo-image-picker.log
-      IMAGE_PICKER_EXIT=${PIPESTATUS[0]}
+          echo "BUILD SUCCESSFUL"
 
-      if [ "$IMAGE_PICKER_EXIT" -ne 0 ]; then
-        echo ""
-        echo "========== EXPO-IMAGE-PICKER ERROR =========="
-        grep -E \
-          "ERROR|Error|error|ERR|failed|Failed|Could not|npm ERR" \
-          expo-image-picker.log | tail -100 || true
+      - name: Verify APK
+        run: |
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
 
-        echo ""
-        echo "========== LAST 100 LOG LINES =========="
-        tail -100 expo-image-picker.log
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not created."
+            exit 1
+          fi
 
-        exit "$IMAGE_PICKER_EXIT"
-      fi
+          echo "APK successfully created:"
+          ls -lh "$APK"
 
-      echo "expo-image-picker installed successfully."
-
-      set -e
-
-  - name: TypeScript check
-    run: |
-      set +e
-      npx tsc --noEmit 2>&1 | tee typescript.log
-      TS_EXIT=${PIPESTATUS[0]}
-      set -e
-
-      if [ "$TS_EXIT" -ne 0 ]; then
-        echo ""
-        echo "========== TYPESCRIPT ERROR SUMMARY =========="
-        grep -E \
-          "error TS[0-9]+|ERROR|Error|error" \
-          typescript.log | tail -100 || true
-
-        echo ""
-        echo "========== LAST 100 LOG LINES =========="
-        tail -100 typescript.log
-
-        exit "$TS_EXIT"
-      fi
-
-      echo "TYPESCRIPT CHECK PASSED"
-
-  - name: Generate Android project
-    run: |
-      set +e
-      npx expo prebuild --platform android --non-interactive 2>&1 | tee prebuild.log
-      PREBUILD_EXIT=${PIPESTATUS[0]}
-      set -e
-
-      if [ "$PREBUILD_EXIT" -ne 0 ]; then
-        echo ""
-        echo "========== PREBUILD ERROR SUMMARY =========="
-        grep -E \
-          "ERROR|Error|error|ERR|failed|Failed|Could not" \
-          prebuild.log | tail -100 || true
-
-        echo ""
-        echo "========== LAST 100 LOG LINES =========="
-        tail -100 prebuild.log
-
-        exit "$PREBUILD_EXIT"
-      fi
-
-      echo "ANDROID PREBUILD SUCCESSFUL"
-
-  - name: Build debug APK
-    run: |
-      set +e
-
-      cd android
-
-      ./gradlew assembleDebug --no-daemon 2>&1 | tee ../gradle-build.log
-      BUILD_EXIT=${PIPESTATUS[0]}
-
-      set -e
-
-      echo ""
-      echo "========== BUILD ERROR SUMMARY =========="
-
-      if [ "$BUILD_EXIT" -ne 0 ]; then
-        grep -E \
-          "FAILURE|What went wrong|Execution failed|Caused by:|Exception|Error:|Could not|BUILD FAILED|KeytoolException|TS[0-9]+" \
-          ../gradle-build.log | tail -100 || true
-
-        echo ""
-        echo "========== LAST 100 LOG LINES =========="
-        tail -100 ../gradle-build.log
-
-        exit "$BUILD_EXIT"
-      fi
-
-      echo "BUILD SUCCESSFUL"
-
-  - name: Verify APK
-    run: |
-      APK="android/app/build/outputs/apk/debug/app-debug.apk"
-
-      if [ ! -f "$APK" ]; then
-        echo "ERROR: APK was not created."
-        exit 1
-      fi
-
-      echo "APK successfully created:"
-      ls -lh "$APK"
-
-  - name: Upload APK artifact
-    uses: actions/upload-artifact@v4
-    with:
-      name: ebadsave-vsla-apk
-      path: android/app/build/outputs/apk/debug/app-debug.apk
-      if-no-files-found: error
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ebadsave-vsla-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
