@@ -3,7 +3,7 @@ import * as Crypto from 'expo-crypto';
 
 export type GroupRecord = {
   id: number;
-  group_number: string;
+  group_number: number;
   group_name: string;
   district: string;
   country: string;
@@ -52,9 +52,14 @@ export type GroupRuleRecord = {
 
 const dbPromise = SQLite.openDatabaseAsync('ebadsave_vsla.db');
 
+const GROUP_START = 2010;
+const GROUP_END = 9090;
+
 const now = (): string => new Date().toISOString();
 
-const normalizeText = (value: string | null | undefined): string => {
+const normalizeText = (
+  value: string | null | undefined,
+): string => {
   return (value ?? '').trim();
 };
 
@@ -71,6 +76,62 @@ async function hashPasscode(
     `${salt}:${passcode}`,
   );
 }
+
+/**
+ * Converts either:
+ *   2010
+ *   "2010"
+ *   "KYA2010"
+ * into the numeric group number 2010.
+ */
+function parseGroupNumber(
+  value: number | string | null | undefined,
+): number {
+  if (typeof value === 'number') {
+    return value;
+  }
+
+  const text = normalizeText(value);
+
+  const match = text.match(/KYA(\d{4})/i);
+
+  if (match) {
+    return Number(match[1]);
+  }
+
+  const numeric = Number(text);
+
+  if (Number.isFinite(numeric)) {
+    return numeric;
+  }
+
+  return 0;
+}
+
+/**
+ * SQLite may contain old records where group_number was stored
+ * as "KYA2010". This SELECT converts those records to the
+ * numeric value expected by the TypeScript interface.
+ */
+const GROUP_SELECT = `
+  SELECT
+    id,
+    CAST(
+      CASE
+        WHEN CAST(group_number AS TEXT) LIKE 'KYA%'
+        THEN substr(CAST(group_number AS TEXT), 4)
+        ELSE CAST(group_number AS TEXT)
+      END
+      AS INTEGER
+    ) AS group_number,
+    group_name,
+    district,
+    country,
+    status,
+    created_at,
+    last_activity_at
+  FROM groups
+`;
 
 async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   const db = await dbPromise;
@@ -301,16 +362,41 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       ON notification_queue(status);
   `);
 
-  await addColumnIfMissing(db, 'members', 'gender', "TEXT NOT NULL DEFAULT ''");
-  await addColumnIfMissing(db, 'members', 'age', 'INTEGER NOT NULL DEFAULT 0');
-  await addColumnIfMissing(db, 'members', 'cell', "TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing(
+    db,
+    'members',
+    'gender',
+    "TEXT NOT NULL DEFAULT ''",
+  );
+
+  await addColumnIfMissing(
+    db,
+    'members',
+    'age',
+    'INTEGER NOT NULL DEFAULT 0',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'members',
+    'cell',
+    "TEXT NOT NULL DEFAULT ''",
+  );
+
   await addColumnIfMissing(
     db,
     'members',
     'district',
     "TEXT NOT NULL DEFAULT ''",
   );
-  await addColumnIfMissing(db, 'members', 'photo_uri', 'TEXT');
+
+  await addColumnIfMissing(
+    db,
+    'members',
+    'photo_uri',
+    'TEXT',
+  );
+
   await addColumnIfMissing(
     db,
     'members',
@@ -335,7 +421,9 @@ async function addColumnIfMissing(
     `PRAGMA table_info(${table})`,
   );
 
-  const exists = columns.some((item) => item.name === column);
+  const exists = columns.some(
+    (item) => item.name === column,
+  );
 
   if (!exists) {
     await db.execAsync(
@@ -344,21 +432,18 @@ async function addColumnIfMissing(
   }
 }
 
-const GROUP_START = 2010;
-const GROUP_END = 9090;
-
-function groupNumberValue(groupNumber: string): number {
-  const match = groupNumber.match(/KYA(\d{4})/);
-
-  if (!match) {
-    return Number.MAX_SAFE_INTEGER;
-  }
-
-  return Number(match[1]);
+/**
+ * Compatibility function required by ConstitutionScreen.
+ */
+export async function initializeDatabase(): Promise<void> {
+  await getDatabase();
 }
 
-function makeGroupNumber(number: number): string {
-  return `KYA${number}`;
+/**
+ * Keep the older initDatabase name available too.
+ */
+export async function initDatabase(): Promise<void> {
+  await initializeDatabase();
 }
 
 async function refreshGroupDormancy(
@@ -379,20 +464,16 @@ async function refreshGroupDormancy(
   );
 }
 
-export async function initDatabase(): Promise<void> {
-  await getDatabase();
-}
-
 export async function getAllGroups(): Promise<GroupRecord[]> {
   const db = await getDatabase();
 
   return db.getAllAsync<GroupRecord>(
     `
-      SELECT *
-      FROM groups
+      ${GROUP_SELECT}
       ORDER BY
         CASE WHEN status = 'active' THEN 0 ELSE 1 END,
-        group_number
+        group_number ASC,
+        id ASC
     `,
   );
 }
@@ -402,8 +483,7 @@ export async function getActiveGroup(): Promise<GroupRecord | null> {
 
   return db.getFirstAsync<GroupRecord>(
     `
-      SELECT *
-      FROM groups
+      ${GROUP_SELECT}
       WHERE status = 'active'
       ORDER BY id ASC
       LIMIT 1
@@ -413,11 +493,11 @@ export async function getActiveGroup(): Promise<GroupRecord | null> {
 
 async function findNextAvailableGroupNumber(
   db: SQLite.SQLiteDatabase,
-): Promise<string> {
+): Promise<number> {
   await refreshGroupDormancy(db);
 
   const groups = await db.getAllAsync<{
-    group_number: string;
+    group_number: string | number;
     status: string;
   }>(
     `
@@ -427,19 +507,45 @@ async function findNextAvailableGroupNumber(
     `,
   );
 
-  const activeNumbers = new Set(
-    groups.map((group) => groupNumberValue(group.group_number)),
-  );
+  const activeNumbers = new Set<number>();
 
-  for (let number = GROUP_START; number <= GROUP_END; number += 1) {
-    if (!activeNumbers.has(number)) {
-      return makeGroupNumber(number);
+  for (const group of groups) {
+    const number = parseGroupNumber(
+      group.group_number,
+    );
+
+    if (
+      number >= GROUP_START &&
+      number <= GROUP_END
+    ) {
+      activeNumbers.add(number);
     }
   }
 
-  throw new Error('No group number is currently available.');
+  for (
+    let number = GROUP_START;
+    number <= GROUP_END;
+    number += 1
+  ) {
+    if (!activeNumbers.has(number)) {
+      return number;
+    }
+  }
+
+  throw new Error(
+    'No group number is currently available.',
+  );
 }
 
+/**
+ * Creates a group and returns its database ID.
+ *
+ * The public group number remains numeric:
+ * 2010, 2011, 2012...
+ *
+ * The ConstitutionScreen displays it as:
+ * KYA 2010
+ */
 export async function createGroup(
   groupName: string,
   district: string,
@@ -463,7 +569,9 @@ export async function createGroup(
     throw new Error('Country is required.');
   }
 
-  const groupNumber = await findNextAvailableGroupNumber(db);
+  const groupNumber =
+    await findNextAvailableGroupNumber(db);
+
   const timestamp = now();
 
   const result = await db.runAsync(
@@ -489,9 +597,39 @@ export async function createGroup(
 
   const groupId = result.lastInsertRowId;
 
-  await insertDefaultConstitution(db, groupId);
+  await insertDefaultConstitution(
+    db,
+    groupId,
+  );
 
   return groupId;
+}
+
+/**
+ * Compatibility function required by ConstitutionScreen.
+ *
+ * Unlike createGroup(), this returns the complete GroupRecord.
+ */
+export async function registerGroup(input: {
+  groupName: string;
+  district: string;
+  country: string;
+}): Promise<GroupRecord> {
+  const groupId = await createGroup(
+    input.groupName,
+    input.district,
+    input.country,
+  );
+
+  const group = await getGroupById(groupId);
+
+  if (!group) {
+    throw new Error(
+      'Group was created but could not be loaded.',
+    );
+  }
+
+  return group;
 }
 
 export async function recordGroupActivity(
@@ -519,8 +657,7 @@ export async function getGroupById(
 
   return db.getFirstAsync<GroupRecord>(
     `
-      SELECT *
-      FROM groups
+      ${GROUP_SELECT}
       WHERE id = ?
       LIMIT 1
     `,
@@ -532,7 +669,9 @@ async function insertDefaultConstitution(
   db: SQLite.SQLiteDatabase,
   groupId: number,
 ): Promise<void> {
-  const articles: Array<[number, string, string]> = [
+  const articles: Array<
+    [number, string, string]
+  > = [
     [
       1,
       'Name and Purpose',
@@ -657,6 +796,7 @@ export async function getMembersByGroupId(
         created_at
       FROM members
       WHERE group_id = ?
+      AND status = 'active'
       ORDER BY member_number ASC
     `,
     groupId,
@@ -691,8 +831,12 @@ async function getNextMemberSequence(
 
   const used = new Set<number>();
 
-  for (const item of [...members, ...deleted]) {
-    const match = item.member_number.match(/(\d{3})$/);
+  for (const item of [
+    ...members,
+    ...deleted,
+  ]) {
+    const match =
+      item.member_number.match(/(\d{3})$/);
 
     if (match) {
       used.add(Number(match[1]));
@@ -705,16 +849,19 @@ async function getNextMemberSequence(
     }
   }
 
-  throw new Error('This group has reached the 999-member limit.');
+  throw new Error(
+    'This group has reached the 999-member limit.',
+  );
 }
 
 function createMemberNumber(
-  groupNumber: string,
+  groupNumber: number,
   sequence: number,
 ): string {
-  const numericGroup = groupNumber.replace(/^KYA/i, '');
-
-  return `KYA${numericGroup}${String(sequence).padStart(3, '0')}`;
+  return `KYA${String(groupNumber).padStart(
+    4,
+    '0',
+  )}${String(sequence).padStart(3, '0')}`;
 }
 
 export async function registerMember(
@@ -757,11 +904,17 @@ export async function registerMember(
     throw new Error('Group not found.');
   }
 
-  const sequence = await getNextMemberSequence(db, groupId);
-  const memberNumber = createMemberNumber(
-    group.group_number,
-    sequence,
-  );
+  const sequence =
+    await getNextMemberSequence(
+      db,
+      groupId,
+    );
+
+  const memberNumber =
+    createMemberNumber(
+      group.group_number,
+      sequence,
+    );
 
   const timestamp = now();
 
@@ -795,7 +948,8 @@ export async function registerMember(
     timestamp,
   );
 
-  const memberId = result.lastInsertRowId;
+  const memberId =
+    result.lastInsertRowId;
 
   await db.runAsync(
     `
@@ -862,26 +1016,39 @@ export async function updateMember(
 ): Promise<void> {
   const db = await getDatabase();
 
-  const current = await db.getFirstAsync<MemberRecord>(
-    `
-      SELECT *
-      FROM members
-      WHERE id = ?
-      LIMIT 1
-    `,
-    memberId,
-  );
+  const current =
+    await db.getFirstAsync<MemberRecord>(
+      `
+        SELECT *
+        FROM members
+        WHERE id = ?
+        LIMIT 1
+      `,
+      memberId,
+    );
 
   if (!current) {
     throw new Error('Member not found.');
   }
 
-  const fullName = data.fullName ?? current.full_name;
-  const gender = data.gender ?? current.gender;
-  const age = data.age ?? current.age;
-  const phone = data.phone ?? current.phone ?? '';
-  const cell = data.cell ?? current.cell;
-  const district = data.district ?? current.district;
+  const fullName =
+    data.fullName ?? current.full_name;
+
+  const gender =
+    data.gender ?? current.gender;
+
+  const age =
+    data.age ?? current.age;
+
+  const phone =
+    data.phone ?? current.phone ?? '';
+
+  const cell =
+    data.cell ?? current.cell;
+
+  const district =
+    data.district ?? current.district;
+
   const photoUri =
     data.photoUri === undefined
       ? current.photo_uri
@@ -952,22 +1119,25 @@ export async function deleteMember(
 ): Promise<void> {
   const db = await getDatabase();
 
-  const member = await db.getFirstAsync<MemberRecord>(
-    `
-      SELECT *
-      FROM members
-      WHERE id = ?
-      LIMIT 1
-    `,
-    memberId,
-  );
+  const member =
+    await db.getFirstAsync<MemberRecord>(
+      `
+        SELECT *
+        FROM members
+        WHERE id = ?
+        LIMIT 1
+      `,
+      memberId,
+    );
 
   if (!member) {
     throw new Error('Member not found.');
   }
 
   if (!normalizeText(reason)) {
-    throw new Error('A reason is required when deleting a member.');
+    throw new Error(
+      'A reason is required when deleting a member.',
+    );
   }
 
   const timestamp = now();
@@ -995,7 +1165,9 @@ export async function deleteMember(
     timestamp,
   );
 
-  await recordGroupActivity(member.group_id);
+  await recordGroupActivity(
+    member.group_id,
+  );
 }
 
 export async function getNextOfKin(
@@ -1035,9 +1207,13 @@ async function getKin(
   );
 }
 
-function validateKinSlot(slot: number): void {
+function validateKinSlot(
+  slot: number,
+): void {
   if (slot !== 1 && slot !== 2) {
-    throw new Error('Next-of-kin slot must be 1 or 2.');
+    throw new Error(
+      'Next-of-kin slot must be 1 or 2.',
+    );
   }
 }
 
@@ -1046,18 +1222,19 @@ async function assertNoPendingKinChange(
   memberId: number,
   slot: number,
 ): Promise<void> {
-  const pending = await db.getFirstAsync<{ id: number }>(
-    `
-      SELECT id
-      FROM next_of_kin_change_history
-      WHERE member_id = ?
-      AND slot = ?
-      AND applied = 0
-      LIMIT 1
-    `,
-    memberId,
-    slot,
-  );
+  const pending =
+    await db.getFirstAsync<{ id: number }>(
+      `
+        SELECT id
+        FROM next_of_kin_change_history
+        WHERE member_id = ?
+        AND slot = ?
+        AND applied = 0
+        LIMIT 1
+      `,
+      memberId,
+      slot,
+    );
 
   if (pending) {
     throw new Error(
@@ -1071,18 +1248,19 @@ async function assertNoPendingKinBenefit(
   memberId: number,
   slot: number,
 ): Promise<void> {
-  const pending = await db.getFirstAsync<{ id: number }>(
-    `
-      SELECT id
-      FROM next_of_kin_benefits
-      WHERE member_id = ?
-      AND slot = ?
-      AND status = 'pending'
-      LIMIT 1
-    `,
-    memberId,
-    slot,
-  );
+  const pending =
+    await db.getFirstAsync<{ id: number }>(
+      `
+        SELECT id
+        FROM next_of_kin_benefits
+        WHERE member_id = ?
+        AND slot = ?
+        AND status = 'pending'
+        LIMIT 1
+      `,
+      memberId,
+      slot,
+    );
 
   if (pending) {
     throw new Error(
@@ -1113,25 +1291,45 @@ export async function requestNextOfKinChange(
   await applyDueNextOfKinChanges(db);
   await applyDueNextOfKinBenefits(db);
 
-  const kin = await getKin(db, memberId, slot);
+  const kin =
+    await getKin(
+      db,
+      memberId,
+      slot,
+    );
 
   if (!kin) {
-    throw new Error('Next-of-kin slot not found.');
+    throw new Error(
+      'Next-of-kin slot not found.',
+    );
   }
 
-  if (kin.locked === 1 || kin.benefit_received === 1) {
+  if (
+    kin.locked === 1 ||
+    kin.benefit_received === 1
+  ) {
     throw new Error(
       'This next-of-kin slot is locked because benefits have been received.',
     );
   }
 
-  await assertNoPendingKinChange(db, memberId, slot);
-  await assertNoPendingKinBenefit(db, memberId, slot);
+  await assertNoPendingKinChange(
+    db,
+    memberId,
+    slot,
+  );
+
+  await assertNoPendingKinBenefit(
+    db,
+    memberId,
+    slot,
+  );
 
   const effectiveDate = new Date();
 
   effectiveDate.setDate(
-    effectiveDate.getDate() + Math.max(0, effectiveDays),
+    effectiveDate.getDate() +
+      Math.max(0, effectiveDays),
   );
 
   const result = await db.runAsync(
@@ -1188,25 +1386,45 @@ export async function requestNextOfKinDeletion(
   await applyDueNextOfKinChanges(db);
   await applyDueNextOfKinBenefits(db);
 
-  const kin = await getKin(db, memberId, slot);
+  const kin =
+    await getKin(
+      db,
+      memberId,
+      slot,
+    );
 
   if (!kin) {
-    throw new Error('Next-of-kin slot not found.');
+    throw new Error(
+      'Next-of-kin slot not found.',
+    );
   }
 
-  if (kin.locked === 1 || kin.benefit_received === 1) {
+  if (
+    kin.locked === 1 ||
+    kin.benefit_received === 1
+  ) {
     throw new Error(
       'This next-of-kin slot is locked because benefits have been received.',
     );
   }
 
-  await assertNoPendingKinChange(db, memberId, slot);
-  await assertNoPendingKinBenefit(db, memberId, slot);
+  await assertNoPendingKinChange(
+    db,
+    memberId,
+    slot,
+  );
+
+  await assertNoPendingKinBenefit(
+    db,
+    memberId,
+    slot,
+  );
 
   const effectiveDate = new Date();
 
   effectiveDate.setDate(
-    effectiveDate.getDate() + Math.max(0, effectiveDays),
+    effectiveDate.getDate() +
+      Math.max(0, effectiveDays),
   );
 
   const result = await db.runAsync(
@@ -1244,25 +1462,26 @@ export async function requestNextOfKinDeletion(
 async function applyDueNextOfKinChanges(
   db: SQLite.SQLiteDatabase,
 ): Promise<void> {
-  const pending = await db.getAllAsync<{
-    id: number;
-    member_id: number;
-    slot: number;
-    action: string;
-    new_name: string | null;
-    new_phone: string | null;
-    new_gender: string | null;
-    effective_at: string;
-  }>(
-    `
-      SELECT *
-      FROM next_of_kin_change_history
-      WHERE applied = 0
-      AND effective_at <= ?
-      ORDER BY id ASC
-    `,
-    now(),
-  );
+  const pending =
+    await db.getAllAsync<{
+      id: number;
+      member_id: number;
+      slot: number;
+      action: string;
+      new_name: string | null;
+      new_phone: string | null;
+      new_gender: string | null;
+      effective_at: string;
+    }>(
+      `
+        SELECT *
+        FROM next_of_kin_change_history
+        WHERE applied = 0
+        AND effective_at <= ?
+        ORDER BY id ASC
+      `,
+      now(),
+    );
 
   for (const change of pending) {
     if (change.action === 'delete') {
@@ -1287,758 +1506,4 @@ async function applyDueNextOfKinChanges(
           UPDATE member_next_of_kin
           SET
             name = ?,
-            phone = ?,
-            gender = ?,
-            updated_at = ?
-          WHERE member_id = ?
-          AND slot = ?
-        `,
-        change.new_name,
-        change.new_phone,
-        change.new_gender,
-        now(),
-        change.member_id,
-        change.slot,
-      );
-    }
-
-    await db.runAsync(
-      `
-        UPDATE next_of_kin_change_history
-        SET applied = 1
-        WHERE id = ?
-      `,
-      change.id,
-    );
-  }
-}
-
-export async function recordNextOfKinBenefit(
-  memberId: number,
-  slot: number,
-  amount: number,
-  reason: string,
-  effectiveDays = 30,
-): Promise<number> {
-  const db = await getDatabase();
-
-  validateKinSlot(slot);
-
-  if (!Number.isFinite(amount) || amount < 0) {
-    throw new Error('Benefit amount is invalid.');
-  }
-
-  if (!normalizeText(reason)) {
-    throw new Error('A reason is required for a benefit.');
-  }
-
-  await applyDueNextOfKinChanges(db);
-  await applyDueNextOfKinBenefits(db);
-
-  const kin = await getKin(db, memberId, slot);
-
-  if (!kin) {
-    throw new Error('Next-of-kin slot not found.');
-  }
-
-  if (kin.locked === 1 || kin.benefit_received === 1) {
-    throw new Error(
-      'This next-of-kin slot has already received benefits and is locked.',
-    );
-  }
-
-  await assertNoPendingKinBenefit(db, memberId, slot);
-
-  const effectiveDate = new Date();
-
-  effectiveDate.setDate(
-    effectiveDate.getDate() + Math.max(0, effectiveDays),
-  );
-
-  const result = await db.runAsync(
-    `
-      INSERT INTO next_of_kin_benefits (
-        member_id,
-        slot,
-        benefit_amount,
-        reason,
-        benefit_date,
-        effective_at,
-        status
-      )
-      VALUES (?, ?, ?, ?, ?, ?, 'pending')
-    `,
-    memberId,
-    slot,
-    amount,
-    normalizeText(reason),
-    now(),
-    effectiveDate.toISOString(),
-  );
-
-  return result.lastInsertRowId;
-}
-
-async function applyDueNextOfKinBenefits(
-  db: SQLite.SQLiteDatabase,
-): Promise<void> {
-  const pending = await db.getAllAsync<{
-    id: number;
-    member_id: number;
-    slot: number;
-  }>(
-    `
-      SELECT id, member_id, slot
-      FROM next_of_kin_benefits
-      WHERE status = 'pending'
-      AND effective_at <= ?
-      ORDER BY id ASC
-    `,
-    now(),
-  );
-
-  for (const benefit of pending) {
-    await db.runAsync(
-      `
-        UPDATE next_of_kin_benefits
-        SET status = 'received'
-        WHERE id = ?
-      `,
-      benefit.id,
-    );
-
-    await db.runAsync(
-      `
-        UPDATE member_next_of_kin
-        SET
-          benefit_received = 1,
-          locked = 1,
-          updated_at = ?
-        WHERE member_id = ?
-        AND slot = ?
-      `,
-      now(),
-      benefit.member_id,
-      benefit.slot,
-    );
-  }
-}
-
-export async function setMemberPasscode(
-  memberId: number,
-  passcode: string,
-): Promise<void> {
-  const db = await getDatabase();
-
-  if (!isValidPasscode(passcode)) {
-    throw new Error(
-      'Passcode must contain exactly 4 letters or numbers.',
-    );
-  }
-
-  const member = await db.getFirstAsync<{
-    phone: string | null;
-  }>(
-    `
-      SELECT phone
-      FROM members
-      WHERE id = ?
-      LIMIT 1
-    `,
-    memberId,
-  );
-
-  if (!member) {
-    throw new Error('Member not found.');
-  }
-
-  if (!normalizeText(member.phone)) {
-    throw new Error(
-      'Only members with a phone number can have a passcode.',
-    );
-  }
-
-  const credential = await db.getFirstAsync<{
-    salt: string;
-  }>(
-    `
-      SELECT salt
-      FROM member_credentials
-      WHERE member_id = ?
-      LIMIT 1
-    `,
-    memberId,
-  );
-
-  const salt = credential?.salt ?? Crypto.randomUUID();
-  const passcodeHash = await hashPasscode(passcode, salt);
-
-  await db.runAsync(
-    `
-      INSERT INTO member_credentials (
-        member_id,
-        salt,
-        passcode_hash,
-        phone_eligible,
-        failed_attempts,
-        locked_until,
-        created_at,
-        updated_at
-      )
-      VALUES (?, ?, ?, 1, 0, NULL, ?, ?)
-      ON CONFLICT(member_id)
-      DO UPDATE SET
-        salt = excluded.salt,
-        passcode_hash = excluded.passcode_hash,
-        phone_eligible = 1,
-        failed_attempts = 0,
-        locked_until = NULL,
-        updated_at = excluded.updated_at
-    `,
-    memberId,
-    salt,
-    passcodeHash,
-    now(),
-    now(),
-  );
-}
-
-export async function hasMemberPasscode(
-  memberId: number,
-): Promise<boolean> {
-  const db = await getDatabase();
-
-  const result = await db.getFirstAsync<{
-    passcode_hash: string | null;
-  }>(
-    `
-      SELECT passcode_hash
-      FROM member_credentials
-      WHERE member_id = ?
-      LIMIT 1
-    `,
-    memberId,
-  );
-
-  return Boolean(result?.passcode_hash);
-}
-
-export async function verifyMemberPasscode(
-  memberId: number,
-  passcode: string,
-): Promise<boolean> {
-  const db = await getDatabase();
-
-  if (!isValidPasscode(passcode)) {
-    return false;
-  }
-
-  const credential = await db.getFirstAsync<{
-    salt: string;
-    passcode_hash: string | null;
-    failed_attempts: number;
-    locked_until: string | null;
-  }>(
-    `
-      SELECT
-        salt,
-        passcode_hash,
-        failed_attempts,
-        locked_until
-      FROM member_credentials
-      WHERE member_id = ?
-      LIMIT 1
-    `,
-    memberId,
-  );
-
-  if (!credential?.passcode_hash) {
-    return false;
-  }
-
-  if (
-    credential.locked_until &&
-    new Date(credential.locked_until).getTime() > Date.now()
-  ) {
-    return false;
-  }
-
-  const suppliedHash = await hashPasscode(
-    passcode,
-    credential.salt,
-  );
-
-  const success = suppliedHash === credential.passcode_hash;
-
-  await db.runAsync(
-    `
-      INSERT INTO member_auth_attempts (
-        member_id,
-        success,
-        attempted_at
-      )
-      VALUES (?, ?, ?)
-    `,
-    memberId,
-    success ? 1 : 0,
-    now(),
-  );
-
-  if (success) {
-    await db.runAsync(
-      `
-        UPDATE member_credentials
-        SET
-          failed_attempts = 0,
-          locked_until = NULL,
-          updated_at = ?
-        WHERE member_id = ?
-      `,
-      now(),
-      memberId,
-    );
-
-    return true;
-  }
-
-  const attempts = credential.failed_attempts + 1;
-
-  if (attempts >= 5) {
-    const lockedUntil = new Date();
-
-    lockedUntil.setMinutes(
-      lockedUntil.getMinutes() + 15,
-    );
-
-    await db.runAsync(
-      `
-        UPDATE member_credentials
-        SET
-          failed_attempts = 0,
-          locked_until = ?,
-          updated_at = ?
-        WHERE member_id = ?
-      `,
-      lockedUntil.toISOString(),
-      now(),
-      memberId,
-    );
-  } else {
-    await db.runAsync(
-      `
-        UPDATE member_credentials
-        SET
-          failed_attempts = ?,
-          updated_at = ?
-        WHERE member_id = ?
-      `,
-      attempts,
-      now(),
-      memberId,
-    );
-  }
-
-  return false;
-}
-
-export async function resetMemberPasscode(
-  memberId: number,
-  newPasscode: string,
-): Promise<void> {
-  await setMemberPasscode(memberId, newPasscode);
-}
-
-export async function signMemberTransaction(
-  memberId: number,
-  passcode: string,
-  transactionType: string,
-  transactionId: number | null = null,
-): Promise<boolean> {
-  const verified = await verifyMemberPasscode(
-    memberId,
-    passcode,
-  );
-
-  if (!verified) {
-    return false;
-  }
-
-  const db = await getDatabase();
-
-  await db.runAsync(
-    `
-      INSERT INTO member_transaction_signatures (
-        member_id,
-        transaction_type,
-        transaction_id,
-        signed_at
-      )
-      VALUES (?, ?, ?, ?)
-    `,
-    memberId,
-    normalizeText(transactionType),
-    transactionId,
-    now(),
-  );
-
-  return true;
-}
-
-export async function createMeeting(
-  groupId: number,
-  meetingDate: string,
-): Promise<number> {
-  const db = await getDatabase();
-
-  const result = await db.runAsync(
-    `
-      INSERT INTO group_meetings (
-        group_id,
-        meeting_date,
-        opened_at,
-        status,
-        created_at
-      )
-      VALUES (?, ?, ?, 'open', ?)
-    `,
-    groupId,
-    meetingDate,
-    now(),
-    now(),
-  );
-
-  await recordGroupActivity(groupId);
-
-  return result.lastInsertRowId;
-}
-
-export async function openAppAccess(
-  groupId: number,
-  meetingId: number | null,
-  authorizers: Array<{
-    memberId: number;
-    passcode: string;
-    role: 'executive' | 'member';
-  }>,
-): Promise<number> {
-  const db = await getDatabase();
-
-  if (authorizers.length !== 3) {
-    throw new Error(
-      'Exactly three members are required to open access.',
-    );
-  }
-
-  const uniqueMembers = new Set(
-    authorizers.map((item) => item.memberId),
-  );
-
-  if (uniqueMembers.size !== 3) {
-    throw new Error(
-      'The three authorizers must be different members.',
-    );
-  }
-
-  const executives = authorizers.filter(
-    (item) => item.role === 'executive',
-  );
-
-  const ordinaryMembers = authorizers.filter(
-    (item) => item.role === 'member',
-  );
-
-  if (executives.length !== 2 || ordinaryMembers.length !== 1) {
-    throw new Error(
-      'Access requires exactly 2 executive members and 1 ordinary member.',
-    );
-  }
-
-  for (const authorizer of authorizers) {
-    const member = await db.getFirstAsync<{
-      id: number;
-      group_id: number;
-      role: string;
-      phone: string | null;
-    }>(
-      `
-        SELECT id, group_id, role, phone
-        FROM members
-        WHERE id = ?
-        AND status = 'active'
-        LIMIT 1
-      `,
-      authorizer.memberId,
-    );
-
-    if (!member || member.group_id !== groupId) {
-      throw new Error(
-        'Every authorizer must be an active member of this group.',
-      );
-    }
-
-    const actualExecutive =
-      member.role !== 'member';
-
-    if (
-      authorizer.role === 'executive' &&
-      !actualExecutive
-    ) {
-      throw new Error(
-        'An executive authorizer must have an executive role.',
-      );
-    }
-
-    if (
-      authorizer.role === 'member' &&
-      actualExecutive
-    ) {
-      throw new Error(
-        'The ordinary authorizer must not be an executive.',
-      );
-    }
-
-    const verified = await verifyMemberPasscode(
-      authorizer.memberId,
-      authorizer.passcode,
-    );
-
-    if (!verified) {
-      throw new Error(
-        `Passcode verification failed for member ${member.id}.`,
-      );
-    }
-  }
-
-  const sessionResult = await db.runAsync(
-    `
-      INSERT INTO app_access_sessions (
-        group_id,
-        meeting_id,
-        opened_at,
-        status
-      )
-      VALUES (?, ?, ?, 'open')
-    `,
-    groupId,
-    meetingId,
-    now(),
-  );
-
-  const sessionId = sessionResult.lastInsertRowId;
-
-  for (const authorizer of authorizers) {
-    await db.runAsync(
-      `
-        INSERT INTO app_access_authorizers (
-          session_id,
-          member_id,
-          authorizer_role,
-          authorized_at
-        )
-        VALUES (?, ?, ?, ?)
-      `,
-      sessionId,
-      authorizer.memberId,
-      authorizer.role,
-      now(),
-    );
-  }
-
-  await recordGroupActivity(groupId);
-
-  return sessionId;
-}
-
-export async function closeAppAccess(
-  sessionId: number,
-): Promise<void> {
-  const db = await getDatabase();
-
-  await db.runAsync(
-    `
-      UPDATE app_access_sessions
-      SET
-        closed_at = ?,
-        status = 'closed'
-      WHERE id = ?
-    `,
-    now(),
-    sessionId,
-  );
-}
-
-export async function closeMeeting(
-  meetingId: number,
-  totalSavings: number,
-  loanFund: number,
-  groupFund: number,
-): Promise<void> {
-  const db = await getDatabase();
-
-  await db.runAsync(
-    `
-      UPDATE group_meetings
-      SET
-        closed_at = ?,
-        status = 'closed'
-      WHERE id = ?
-    `,
-    now(),
-    meetingId,
-  );
-
-  await db.runAsync(
-    `
-      INSERT INTO meeting_closures (
-        meeting_id,
-        closed_at,
-        total_savings,
-        loan_fund,
-        group_fund
-      )
-      VALUES (?, ?, ?, ?, ?)
-    `,
-    meetingId,
-    now(),
-    totalSavings,
-    loanFund,
-    groupFund,
-  );
-
-  const meeting = await db.getFirstAsync<{
-    group_id: number;
-  }>(
-    `
-      SELECT group_id
-      FROM group_meetings
-      WHERE id = ?
-      LIMIT 1
-    `,
-    meetingId,
-  );
-
-  if (meeting) {
-    await recordGroupActivity(meeting.group_id);
-  }
-}
-
-export async function saveMemberStatement(
-  meetingId: number,
-  memberId: number,
-  individualTotalSavings: number,
-  individualLoanBalance: number,
-  individualLoanDueDate: string | null,
-): Promise<number> {
-  const db = await getDatabase();
-
-  const result = await db.runAsync(
-    `
-      INSERT INTO member_statement_records (
-        meeting_id,
-        member_id,
-        individual_total_savings,
-        individual_loan_balance,
-        individual_loan_due_date,
-        created_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?)
-    `,
-    meetingId,
-    memberId,
-    individualTotalSavings,
-    individualLoanBalance,
-    individualLoanDueDate,
-    now(),
-  );
-
-  return result.lastInsertRowId;
-}
-
-export async function queueImportantGroupNotification(
-  groupId: number,
-  title: string,
-  message: string,
-): Promise<number> {
-  const db = await getDatabase();
-
-  const result = await db.runAsync(
-    `
-      INSERT INTO notification_queue (
-        group_id,
-        member_id,
-        notification_type,
-        priority,
-        title,
-        message,
-        created_at,
-        status
-      )
-      VALUES (?, NULL, 'group_summary', 'important', ?, ?, ?, 'pending')
-    `,
-    groupId,
-    title,
-    message,
-    now(),
-  );
-
-  return result.lastInsertRowId;
-}
-
-export async function queueImportantMemberNotification(
-  groupId: number,
-  memberId: number,
-  title: string,
-  message: string,
-): Promise<number> {
-  const db = await getDatabase();
-
-  const result = await db.runAsync(
-    `
-      INSERT INTO notification_queue (
-        group_id,
-        member_id,
-        notification_type,
-        priority,
-        title,
-        message,
-        created_at,
-        status
-      )
-      VALUES (?, ?, 'member_statement', 'important', ?, ?, ?, 'pending')
-    `,
-    groupId,
-    memberId,
-    title,
-    message,
-    now(),
-  );
-
-  return result.lastInsertRowId;
-}
-
-export async function getPendingNotifications(): Promise<
-  Array<{
-    id: number;
-    group_id: number;
-    member_id: number | null;
-    notification_type: string;
-    priority: string;
-    title: string;
-    message: string;
-    created_at: string;
-    status: string;
-  }>
-> {
-  const db = await getDatabase();
-
-  return db.getAllAsync(
-    `
-      SELECT *
-      FROM notification_queue
-      WHERE status = 'pending'
-      ORDER BY
-        CASE WHEN priority = 'important' THEN 0 ELSE 1 END,
-        created_at ASC
-    `,
-  );
-  }
+            phone =
