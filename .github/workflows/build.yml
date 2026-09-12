@@ -1,64 +1,99 @@
-name: Build Ebadsave VSLA APK
+name: Ebadsave VSLA Build Test
 
-on: [push, workflow_dispatch]
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
-build:
-runs-on: ubuntu-latest
-steps:
-- uses: actions/checkout@v4
+  build:
+    runs-on: ubuntu-latest
 
-  - uses: actions/setup-node@v4
-    with:
-      node-version: 20
+    steps:
+      - name: 1. Checkout
+        uses: actions/checkout@v4
 
-  - uses: actions/setup-java@v4
-    with:
-      distribution: temurin
-      java-version: '17'
+      - name: 2. Show project files
+        run: |
+          echo "========== PROJECT =========="
+          pwd
+          echo ""
+          echo "========== FILES =========="
+          ls -la
+          echo ""
+          echo "========== PACKAGE.JSON =========="
+          if [ -f package.json ]; then
+            echo "package.json FOUND"
+            cat package.json
+          else
+            echo "ERROR: package.json NOT FOUND"
+            exit 1
+          fi
 
-  - run: npm install
+      - name: 3. Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-  - run: npx expo install expo-crypto
+      - name: 4. Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-  - run: npx expo install expo-image-picker
+      - name: 5. Install dependencies
+        run: |
+          echo "========== NPM INSTALL =========="
+          npm install
 
-  - run: npx tsc --noEmit
+      - name: 6. Install Expo packages
+        run: |
+          echo "========== EXPO PACKAGES =========="
+          npx expo install expo-crypto
+          npx expo install expo-image-picker
 
-  - run: npx expo prebuild --platform android --non-interactive
+      - name: 7. TypeScript check
+        run: |
+          echo "========== TYPESCRIPT CHECK =========="
+          npx tsc --noEmit
 
-  - name: Build debug APK
-    run: |
-      set +e
-      cd android
-      ./gradlew assembleDebug --no-daemon 2>&1 | tee ../gradle-build.log
-      BUILD_EXIT=${PIPESTATUS[0]}
-      set -e
+      - name: 8. Expo prebuild
+        run: |
+          echo "========== EXPO PREBUILD =========="
+          npx expo prebuild --platform android --non-interactive
 
-      if [ "$BUILD_EXIT" -ne 0 ]; then
-        echo "========== GRADLE ERROR =========="
-        grep -E "FAILURE|What went wrong|Execution failed|Caused by:|Exception|Error:|Could not|BUILD FAILED" ../gradle-build.log | tail -100 || true
-        echo "========== LAST 100 LINES =========="
-        tail -100 ../gradle-build.log
-        exit "$BUILD_EXIT"
-      fi
+      - name: 9. Check Android project
+        run: |
+          echo "========== ANDROID PROJECT =========="
+          ls -la android
+          echo ""
+          echo "Gradle wrapper:"
+          ls -la android/gradlew
 
-      echo "BUILD SUCCESSFUL"
+      - name: 10. Build debug APK
+        run: |
+          echo "========== GRADLE BUILD =========="
+          cd android
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
-  - name: Verify APK
-    run: |
-      APK="android/app/build/outputs/apk/debug/app-debug.apk"
+      - name: 11. Verify APK
+        run: |
+          echo "========== APK CHECK =========="
 
-      if [ ! -f "$APK" ]; then
-        echo "ERROR: APK was not created."
-        exit 1
-      fi
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
 
-      echo "APK successfully created:"
-      ls -lh "$APK"
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not created."
+            exit 1
+          fi
 
-  - uses: actions/upload-artifact@v4
-    with:
-      name: ebadsave-vsla-apk
-      path: android/app/build/outputs/apk/debug/app-debug.apk
-      if-no-files-found: error
+          echo "APK FOUND:"
+          ls -lh "$APK"
+
+      - name: 12. Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ebadsave-vsla-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
