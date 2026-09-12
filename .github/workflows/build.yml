@@ -1,8 +1,8 @@
 name: Ebadsave VSLA Test
 
 jobs:
-test:
-runs-on: ubuntu-latest
-steps:
-- name: Test workflow
-run: echo "Ebadsave VSLA workflow is working"
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test workflow
+        run: echo "Ebadsave VSLA workflow is working"
