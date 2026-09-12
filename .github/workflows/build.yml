@@ -1,6 +1,10 @@
 name: Build Ebadsave VSLA APK
 
-on: [push, workflow_dispatch]
+"on":
+workflow_dispatch: {}
+push:
+branches:
+- main
 
 jobs:
 build:
@@ -26,49 +30,29 @@ steps:
 
   - name: Install Expo packages
     run: |
-      echo "Installing expo-crypto..."
       npx expo install expo-crypto
-
-      echo ""
-      echo "Installing expo-image-picker..."
       npx expo install expo-image-picker
 
-      echo ""
-      echo "Expo package installation completed."
-
   - name: TypeScript check
-    run: |
-      echo "Running TypeScript check..."
-      npx tsc --noEmit
-      echo "TypeScript check completed."
+    run: npx tsc --noEmit
 
   - name: Generate Android project
-    run: |
-      echo "Generating Android project..."
-      npx expo prebuild --platform android --non-interactive
-      echo "Android project generated."
+    run: npx expo prebuild --platform android --non-interactive
 
   - name: Build debug APK
     run: |
-      echo "Starting Gradle build..."
-
       set +e
-
       cd android
       ./gradlew assembleDebug --no-daemon 2>&1 | tee ../gradle-build.log
-
       BUILD_EXIT=${PIPESTATUS[0]}
+      set -e
 
-      echo ""
-      echo "Gradle exit code: $BUILD_EXIT"
+      echo "========== BUILD ERROR SUMMARY =========="
 
       if [ "$BUILD_EXIT" -ne 0 ]; then
-        echo ""
-        echo "========== GRADLE FAILURE =========="
         grep -E "FAILURE|What went wrong|Execution failed|Caused by:|Exception|Error:|Could not|BUILD FAILED" ../gradle-build.log | tail -100 || true
 
-        echo ""
-        echo "========== LAST 100 GRADLE LINES =========="
+        echo "========== LAST 100 LOG LINES =========="
         tail -100 ../gradle-build.log
 
         exit "$BUILD_EXIT"
@@ -78,18 +62,14 @@ steps:
 
   - name: Verify APK
     run: |
-      echo "Checking APK..."
-
       APK="android/app/build/outputs/apk/debug/app-debug.apk"
 
       if [ ! -f "$APK" ]; then
         echo "ERROR: APK was not created."
-        find android -name "*.apk" -type f -print || true
         exit 1
       fi
 
-      echo ""
-      echo "========== APK CREATED =========="
+      echo "APK successfully created:"
       ls -lh "$APK"
 
   - name: Upload APK artifact
