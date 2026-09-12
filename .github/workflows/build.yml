@@ -1,4 +1,4 @@
-name: Ebadsave VSLA Build Test
+name: Build Ebadsave VSLA Release APK
 
 on:
   push:
@@ -14,86 +14,84 @@ jobs:
       - name: 1. Checkout
         uses: actions/checkout@v4
 
-      - name: 2. Show project files
-        run: |
-          echo "========== PROJECT =========="
-          pwd
-          echo ""
-          echo "========== FILES =========="
-          ls -la
-          echo ""
-          echo "========== PACKAGE.JSON =========="
-          if [ -f package.json ]; then
-            echo "package.json FOUND"
-            cat package.json
-          else
-            echo "ERROR: package.json NOT FOUND"
-            exit 1
-          fi
-
-      - name: 3. Setup Node.js
+      - name: 2. Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: 4. Setup Java 17
+      - name: 3. Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: 5. Install dependencies
+      - name: 4. Install dependencies
         run: |
           echo "========== NPM INSTALL =========="
           npm install
 
-      - name: 6. Install Expo packages
+      - name: 5. Install Expo packages
         run: |
           echo "========== EXPO PACKAGES =========="
           npx expo install expo-crypto
           npx expo install expo-image-picker
 
-      - name: 7. TypeScript check
+      - name: 6. TypeScript check
         run: |
-          echo "========== TYPESCRIPT CHECK =========="
+          echo "========== TYPESCRIPT =========="
           npx tsc --noEmit
 
-      - name: 8. Expo prebuild
+      - name: 7. Check Expo configuration
+        run: |
+          echo "========== EXPO CONFIG =========="
+          npx expo config --type public
+
+      - name: 8. Generate Android project
         run: |
           echo "========== EXPO PREBUILD =========="
           npx expo prebuild --platform android --non-interactive
 
-      - name: 9. Check Android project
+      - name: 9. Check application icon
         run: |
-          echo "========== ANDROID PROJECT =========="
-          ls -la android
-          echo ""
-          echo "Gradle wrapper:"
-          ls -la android/gradlew
-
-      - name: 10. Build debug APK
-        run: |
-          echo "========== GRADLE BUILD =========="
-          cd android
-          ./gradlew assembleDebug --no-daemon --stacktrace
-
-      - name: 11. Verify APK
-        run: |
-          echo "========== APK CHECK =========="
-
-          APK="android/app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK was not created."
+          echo "========== ICON CHECK =========="
+          if [ ! -f "assets/icon/app_icon.png" ]; then
+            echo "ERROR: Ebadsave icon was not found."
             exit 1
           fi
 
-          echo "APK FOUND:"
+          file assets/icon/app_icon.png
+          ls -lh assets/icon/app_icon.png
+
+      - name: 10. Build RELEASE APK
+        run: |
+          echo "========== RELEASE BUILD =========="
+          cd android
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: 11. Find RELEASE APK
+        run: |
+          echo "========== APK FILES =========="
+          find android/app/build/outputs -type f -name "*.apk" -exec ls -lh {} \;
+
+      - name: 12. Verify RELEASE APK
+        run: |
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: Release APK was not created."
+            echo ""
+            echo "Available APK files:"
+            find android/app/build/outputs -type f -name "*.apk" || true
+            exit 1
+          fi
+
+          echo ""
+          echo "========== RELEASE APK CREATED =========="
           ls -lh "$APK"
 
-      - name: 12. Upload APK
+      - name: 13. Upload RELEASE APK
         uses: actions/upload-artifact@v4
         with:
-          name: Ebadsave-vsla-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: Ebadsave-vsla-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
