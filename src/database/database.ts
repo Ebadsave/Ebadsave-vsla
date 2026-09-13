@@ -2351,3 +2351,25 @@ export async function getPendingNotifications(): Promise<
     `,
   );
   }
+export async function checkGroupIdRange(): Promise<
+  Array<{
+    id: number;
+    group_number: string | number;
+    group_name: string;
+    status: string;
+  }>
+> {
+  const db = await getDatabase();
+
+  return db.getAllAsync(
+    `
+      SELECT
+        id,
+        group_number,
+        group_name,
+        status
+      FROM groups
+      WHERE id BETWEEN 2000 AND 2009
+    `,
+  );
+  }
