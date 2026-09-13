@@ -15,6 +15,8 @@ import {
   GroupRecord,
 } from '../database/database';
 
+import { useFocusEffect } from '@react-navigation/native';
+
 type HomeScreenProps = {
   navigation: any;
 };
@@ -75,7 +77,7 @@ export default function HomeScreen({
       const groups = await getAllGroups();
 
       const activeGroups = groups.filter(
-        (group) => group.status === 'active',
+        (group) => group.status.toLowerCase() === 'active',
       );
 
       if (activeGroups.length > 0) {
@@ -88,16 +90,39 @@ export default function HomeScreen({
         'Failed to load active group:',
         error,
       );
+
+      setActiveGroup(null);
     }
   }, []);
 
-  React.useEffect(() => {
-    loadActiveGroup();
-  }, [loadActiveGroup]);
+  /*
+   * Reload the group every time Home becomes visible.
+   *
+   * This fixes the situation where a group is created
+   * in ConstitutionScreen while HomeScreen is still mounted.
+   */
+  useFocusEffect(
+    useCallback(() => {
+      loadActiveGroup();
+    }, [loadActiveGroup]),
+  );
 
   const handleNewMeeting = async () => {
     try {
-      if (!activeGroup) {
+      /*
+       * Always refresh the database immediately before
+       * starting a meeting. This prevents HomeScreen from
+       * using an old/null group value.
+       */
+      await loadActiveGroup();
+
+      const groups = await getAllGroups();
+
+      const activeGroups = groups.filter(
+        (group) => group.status.toLowerCase() === 'active',
+      );
+
+      if (activeGroups.length === 0) {
         Alert.alert(
           'No Active Group',
           'Please register a group before starting a meeting.',
@@ -105,21 +130,25 @@ export default function HomeScreen({
         return;
       }
 
-      await recordGroupActivity(activeGroup.id);
+      const groupToUse = activeGroups[0];
+
+      await recordGroupActivity(groupToUse.id);
 
       const updatedGroups = await getAllGroups();
 
       const updatedGroup = updatedGroups.find(
-        (group) => group.id === activeGroup.id,
+        (group) => group.id === groupToUse.id,
       );
 
       if (updatedGroup) {
         setActiveGroup(updatedGroup);
+      } else {
+        setActiveGroup(groupToUse);
       }
 
       Alert.alert(
         'Meeting Started',
-        `${activeGroup.group_name} (${activeGroup.group_number}) activity has been recorded.`,
+        `${groupToUse.group_name} (KYA ${groupToUse.group_number}) activity has been recorded.`,
       );
     } catch (error) {
       console.error(
