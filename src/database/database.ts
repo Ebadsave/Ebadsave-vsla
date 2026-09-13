@@ -665,6 +665,92 @@ export async function getGroupById(
   );
 }
 
+export async function updateGroup(
+  groupId: number,
+  groupName: string,
+  district: string,
+  country: string,
+): Promise<GroupRecord> {
+  const db = await getDatabase();
+
+  const cleanName = normalizeText(groupName);
+  const cleanDistrict = normalizeText(district);
+  const cleanCountry = normalizeText(country);
+
+  if (!cleanName) {
+    throw new Error('Group name is required.');
+  }
+
+  if (!cleanDistrict) {
+    throw new Error('District is required.');
+  }
+
+  if (!cleanCountry) {
+    throw new Error('Country is required.');
+  }
+
+  const existingGroup =
+    await getGroupById(groupId);
+
+  if (!existingGroup) {
+    throw new Error('Group not found.');
+  }
+
+  const timestamp = now();
+
+  /*
+   * IMPORTANT:
+   * group_number is deliberately NOT changed.
+   *
+   * This protects existing KYA 2010-KYA 9090
+   * production group numbers.
+   */
+  await db.runAsync(
+    `
+      UPDATE groups
+      SET
+        group_name = ?,
+        district = ?,
+        country = ?,
+        last_activity_at = ?
+      WHERE id = ?
+    `,
+    cleanName,
+    cleanDistrict,
+    cleanCountry,
+    timestamp,
+    groupId,
+  );
+
+  /*
+   * Only Article 1 is updated.
+   * Articles 2-12 remain untouched.
+   */
+  await db.runAsync(
+    `
+      UPDATE group_rules
+      SET
+        content = ?,
+        updated_at = ?
+      WHERE group_id = ?
+      AND article_number = 1
+    `,
+    `This group shall operate as ${cleanName}. Its purpose is to encourage members to save together, grow together, access appropriate financial services, support one another, and improve the financial wellbeing of members.`,
+    timestamp,
+    groupId,
+  );
+
+  const updatedGroup =
+    await getGroupById(groupId);
+
+  if (!updatedGroup) {
+    throw new Error(
+      'Group was updated but could not be loaded.',
+    );
+  }
+
+  return updatedGroup;
+}
 async function insertDefaultConstitution(
   db: SQLite.SQLiteDatabase,
   groupId: number,
