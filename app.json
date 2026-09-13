@@ -13,6 +13,18 @@
         "foregroundImage": "./assets/icon/app_icon.png",
         "backgroundColor": "#FFFFFF"
       }
-    }
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "buildArchs": [
+              "armeabi-v7a"
+            ]
+          }
+        }
+      ]
+    ]
   }
 }
