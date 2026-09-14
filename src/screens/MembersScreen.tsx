@@ -1011,4 +1011,80 @@ const styles = StyleSheet.create({
   },
 
   emptyMembersText: {
-    color: '#
+    color: '#6b7280',
+    fontSize: 13,
+    marginTop: 4,
+  },
+
+  memberCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+    elevation: 1,
+  },
+
+  memberAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#dcfce7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 11,
+  },
+
+  memberAvatarText: {
+    color: '#15803d',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+
+  memberInfo: {
+    flex: 1,
+  },
+
+  memberName: {
+    color: '#111827',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+
+  memberNumber: {
+    color: '#16a34a',
+    fontSize: 12,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+
+  memberDetails: {
+    color: '#6b7280',
+    fontSize: 12,
+    marginTop: 3,
+  },
+
+  memberPhone: {
+    color: '#6b7280',
+    fontSize: 12,
+    marginTop: 2,
+  },
+
+  statusBadge: {
+    backgroundColor: '#dcfce7',
+    borderRadius: 20,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    marginLeft: 6,
+  },
+
+  statusText: {
+    color: '#15803d',
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+});
