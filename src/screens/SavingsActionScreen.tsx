@@ -16,7 +16,7 @@ import {
 import {
   getAllGroups,
   getMembersByGroupId,
-  recordMemberSaving,
+  recordSavings,
   type GroupRecord,
   type MemberRecord,
 } from '../database/database';
@@ -93,7 +93,10 @@ export default function SavingsActionScreen() {
     const cleanedAmount = amount.trim().replace(/,/g, '');
 
     if (!cleanedAmount) {
-      Alert.alert('Amount required', 'Please enter the savings amount.');
+      Alert.alert(
+        'Amount required',
+        'Please enter the savings amount.',
+      );
       return null;
     }
 
@@ -144,12 +147,14 @@ export default function SavingsActionScreen() {
     try {
       setSaving(true);
 
-      await recordMemberSaving(
+      /*
+       * Uses the existing database function:
+       * recordSavings(groupId, memberId, amount)
+       */
+      await recordSavings(
         selectedGroup.id,
         selectedMember.id,
         numericAmount,
-        undefined,
-        description.trim() || undefined,
       );
 
       Alert.alert(
@@ -173,7 +178,10 @@ export default function SavingsActionScreen() {
           ? error.message
           : 'Unable to record the savings transaction.';
 
-      Alert.alert('Savings failed', message);
+      Alert.alert(
+        'Savings failed',
+        message,
+      );
     } finally {
       setSaving(false);
     }
@@ -183,7 +191,11 @@ export default function SavingsActionScreen() {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#16a34a" />
+          <ActivityIndicator
+            size="large"
+            color="#16a34a"
+          />
+
           <Text style={styles.loadingText}>
             Loading savings...
           </Text>
@@ -196,14 +208,21 @@ export default function SavingsActionScreen() {
     <SafeAreaView style={styles.safeArea}>
       <KeyboardAvoidingView
         style={styles.keyboardContainer}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={
+          Platform.OS === 'ios'
+            ? 'padding'
+            : undefined
+        }
       >
         <ScrollView
           contentContainerStyle={styles.container}
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.header}>
-            <Text style={styles.title}>Savings Action</Text>
+            <Text style={styles.title}>
+              Savings Action
+            </Text>
+
             <Text style={styles.subtitle}>
               Record a member savings contribution
             </Text>
@@ -211,7 +230,9 @@ export default function SavingsActionScreen() {
 
           {/* GROUP */}
           <View style={styles.section}>
-            <Text style={styles.label}>Select Group</Text>
+            <Text style={styles.label}>
+              Select Group
+            </Text>
 
             {groups.length === 0 ? (
               <View style={styles.emptyBox}>
@@ -223,7 +244,9 @@ export default function SavingsActionScreen() {
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.horizontalList}
+                contentContainerStyle={
+                  styles.horizontalList
+                }
               >
                 {groups.map((group) => {
                   const isSelected =
@@ -234,9 +257,12 @@ export default function SavingsActionScreen() {
                       key={group.id}
                       style={[
                         styles.groupButton,
-                        isSelected && styles.selectedButton,
+                        isSelected &&
+                          styles.selectedButton,
                       ]}
-                      onPress={() => selectGroup(group)}
+                      onPress={() =>
+                        selectGroup(group)
+                      }
                       disabled={saving}
                     >
                       <Text
@@ -285,7 +311,9 @@ export default function SavingsActionScreen() {
 
           {/* MEMBER */}
           <View style={styles.section}>
-            <Text style={styles.label}>Select Member</Text>
+            <Text style={styles.label}>
+              Select Member
+            </Text>
 
             {!selectedGroup ? (
               <View style={styles.emptyBox}>
@@ -313,10 +341,14 @@ export default function SavingsActionScreen() {
                         isSelected &&
                           styles.selectedMemberButton,
                       ]}
-                      onPress={() => setSelectedMember(member)}
+                      onPress={() =>
+                        setSelectedMember(member)
+                      }
                       disabled={saving}
                     >
-                      <View style={styles.memberNumberBox}>
+                      <View
+                        style={styles.memberNumberBox}
+                      >
                         <Text
                           style={[
                             styles.memberNumber,
@@ -328,7 +360,9 @@ export default function SavingsActionScreen() {
                         </Text>
                       </View>
 
-                      <View style={styles.memberDetails}>
+                      <View
+                        style={styles.memberDetails}
+                      >
                         <Text
                           style={[
                             styles.memberName,
@@ -346,7 +380,8 @@ export default function SavingsActionScreen() {
                               styles.selectedMemberText,
                           ]}
                         >
-                          {member.phone || 'No phone number'}
+                          {member.phone ||
+                            'No phone number'}
                         </Text>
                       </View>
 
@@ -397,43 +432,44 @@ export default function SavingsActionScreen() {
           </View>
 
           {/* SUMMARY */}
-          {selectedMember && amount.trim() !== '' && (
-            <View style={styles.summaryBox}>
-              <Text style={styles.summaryTitle}>
-                Savings Summary
-              </Text>
-
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>
-                  Member
+          {selectedMember &&
+            amount.trim() !== '' && (
+              <View style={styles.summaryBox}>
+                <Text style={styles.summaryTitle}>
+                  Savings Summary
                 </Text>
 
-                <Text style={styles.summaryValue}>
-                  {selectedMember.full_name}
-                </Text>
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>
+                    Member
+                  </Text>
+
+                  <Text style={styles.summaryValue}>
+                    {selectedMember.full_name}
+                  </Text>
+                </View>
+
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>
+                    Member Number
+                  </Text>
+
+                  <Text style={styles.summaryValue}>
+                    {selectedMember.member_number}
+                  </Text>
+                </View>
+
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryLabel}>
+                    Amount
+                  </Text>
+
+                  <Text style={styles.summaryAmount}>
+                    UGX {amount.replace(/,/g, '')}
+                  </Text>
+                </View>
               </View>
-
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>
-                  Member Number
-                </Text>
-
-                <Text style={styles.summaryValue}>
-                  {selectedMember.member_number}
-                </Text>
-              </View>
-
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>
-                  Amount
-                </Text>
-
-                <Text style={styles.summaryAmount}>
-                  UGX {amount.replace(/,/g, '')}
-                </Text>
-              </View>
-            </View>
-          )}
+            )}
 
           {/* SAVE */}
           <TouchableOpacity
