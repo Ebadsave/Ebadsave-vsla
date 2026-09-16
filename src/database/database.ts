@@ -3105,59 +3105,112 @@ groupId: number,
 memberId: number,
 title: string,
 message: string,
+): return result.lastInsertRowId;
+}
+
+export async function queueImportantGroupNotification(
+  groupId: number,
+  title: string,
+  message: string,
 ): Promise<number> {
-const db = await getDatabase();
+  const db = await getDatabase();
 
-const result =
-await db.runAsync(
-  INSERT INTO notification_queue (   group_id,   member_id,   notification_type,   priority,   title,   message,   created_at,   status   )   VALUES (?, ?, 'member_statement', 'important', ?, ?, ?, 'pending')  ,
-groupId,
-memberId,
-title,
-message,
-now(),
-);
+  const result = await db.runAsync(
+    `INSERT INTO notification_queue (
+      group_id,
+      member_id,
+      notification_type,
+      priority,
+      title,
+      message,
+      created_at,
+      status
+    )
+    VALUES (?, NULL, 'group_summary', 'important', ?, ?, ?, 'pending')`,
+    groupId,
+    title,
+    message,
+    now(),
+  );
 
-return result.lastInsertRowId;
+  return result.lastInsertRowId;
+}
+
+export async function queueImportantMemberNotification(
+  groupId: number,
+  memberId: number,
+  title: string,
+  message: string,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const result = await db.runAsync(
+    `INSERT INTO notification_queue (
+      group_id,
+      member_id,
+      notification_type,
+      priority,
+      title,
+      message,
+      created_at,
+      status
+    )
+    VALUES (?, ?, 'member_statement', 'important', ?, ?, ?, 'pending')`,
+    groupId,
+    memberId,
+    title,
+    message,
+    now(),
+  );
+
+  return result.lastInsertRowId;
 }
 
 export async function getPendingNotifications(): Promise<
-Array<{
-id: number;
-group_id: number;
-member_id: number | null;
-notification_type: string;
-priority: string;
-title: string;
-message: string;
-created_at: string;
-status: string;
-}>
-
+  Array<{
+    id: number;
+    group_id: number;
+    member_id: number | null;
+    notification_type: string;
+    priority: string;
+    title: string;
+    message: string;
+    created_at: string;
+    status: string;
+  }>
 > {
-const db = await getDatabase();
+  const db = await getDatabase();
 
-
-
-return db.getAllAsync(
-  SELECT *   FROM notification_queue   WHERE status = 'pending'   ORDER BY   CASE   WHEN priority = 'important' THEN 0   ELSE 1   END,   created_at ASC  ,
-);
+  return db.getAllAsync(
+    `SELECT *
+     FROM notification_queue
+     WHERE status = 'pending'
+     ORDER BY
+       CASE
+         WHEN priority = 'important' THEN 0
+         ELSE 1
+       END,
+       created_at ASC`,
+  );
 }
 
 export async function checkGroupIdRange(): Promise<
-Array<{
-id: number;
-group_number: string | number;
-group_name: string;
-status: string;
-}>
-
+  Array<{
+    id: number;
+    group_number: string | number;
+    group_name: string;
+    status: string;
+  }>
 > {
-const db = await getDatabase();
+  const db = await getDatabase();
 
-
-
-return db.getAllAsync(
-  SELECT   id,   group_number,   group_name,   status   FROM groups   WHERE id BETWEEN 2000 AND 2009  ,
-);
+  return db.getAllAsync(
+    `SELECT
+       id,
+       group_number,
+       group_name,
+       status
+     FROM groups
+     WHERE id BETWEEN 2000 AND 2009`,
+  );
 }
