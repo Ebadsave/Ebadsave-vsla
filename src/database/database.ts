@@ -3160,4 +3160,4 @@ const db = await getDatabase();
 return db.getAllAsync(
   SELECT   id,   group_number,   group_name,   status   FROM groups   WHERE id BETWEEN 2000 AND 2009  ,
 );
-  }
+}
