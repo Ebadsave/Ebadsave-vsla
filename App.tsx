@@ -6,13 +6,19 @@ import {
 
 import HomeScreen from './src/screens/HomeScreen';
 import ConstitutionScreen from './src/screens/ConstitutionScreen';
+import SetupRulesScreen from './src/screens/SetupRulesScreen';
 
 export type RootStackParamList = {
   Home: undefined;
   Constitution: undefined;
+  SetupRules: {
+    groupId: number;
+    executiveMemberId: number;
+  };
 };
 
-const Stack = createNativeStackNavigator<RootStackParamList>();
+const Stack =
+  createNativeStackNavigator<RootStackParamList>();
 
 export default function App() {
   return (
@@ -32,7 +38,12 @@ export default function App() {
           name="Constitution"
           component={ConstitutionScreen}
         />
+
+        <Stack.Screen
+          name="SetupRules"
+          component={SetupRulesScreen}
+        />
       </Stack.Navigator>
     </NavigationContainer>
   );
-        }
+    }
