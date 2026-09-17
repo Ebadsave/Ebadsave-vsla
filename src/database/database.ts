@@ -50,6 +50,20 @@ export type GroupRuleRecord = {
   updated_at: string;
 };
 
+/**
+ * Financial accounts used by each VSLA group.
+ *
+ * Fund Balance includes:
+ * Savings
+ * Loan Fund
+ * Loan Repayment
+ * Social Fund
+ * Fines
+ * External Fund
+ * Expenditure Fund
+ *
+ * Insurance is deliberately separate.
+ */
 export type FinancialAccountType =
   | 'savings'
   | 'loan_fund'
@@ -93,33 +107,41 @@ export type FinancialSummary = {
   fundBalance: number;
 };
 
-const dbPromise = SQLite.openDatabaseAsync('ebadsave_vsla.db');
+const dbPromise = SQLite.openDatabaseAsync(
+  'ebadsave_vsla.db',
+);
 
 const GROUP_START = 2010;
 const GROUP_END = 9090;
-const GROUP_DORMANCY_DAYS = 90;
 
-const now = (): string => new Date().toISOString();
+const now = (): string =>
+  new Date().toISOString();
 
 const normalizeText = (
   value: string | null | undefined,
-): string => (value ?? '').trim();
+): string => {
+  return (value ?? '').trim();
+};
 
-/*
- * Member passcode:
- * exactly 4 characters
- * A-Z, a-z, 0-9 only
+/**
+ * Passcode must be exactly 4 characters.
+ *
+ * Allowed:
+ * A-Z
+ * a-z
+ * 1-9
+ * .
+ * /
+ * $
+ * -
+ *
+ * 0 is intentionally NOT allowed.
  */
-const isValidPasscode = (code: string): boolean =>
-  /^[A-Za-z0-9]{4}$/.test(code);
-
-/*
- * Group registration signature:
- * exactly 4 characters
- * A-Z, a-z, 0-9 only
- */
-const isValidRegistrationSignature = (code: string): boolean =>
-  /^[A-Za-z0-9]{4}$/.test(code);
+const isValidPasscode = (
+  code: string,
+): boolean => {
+  return /^[A-Za-z1-9./$-]{4}$/.test(code);
+};
 
 async function hashPasscode(
   passcode: string,
@@ -131,6 +153,16 @@ async function hashPasscode(
   );
 }
 
+/**
+ * Converts:
+ *
+ * 2010
+ * "2010"
+ * "KYA2010"
+ * "KYA 2010"
+ *
+ * into numeric group number 2010.
+ */
 function parseGroupNumber(
   value: number | string | null | undefined,
 ): number {
@@ -140,7 +172,9 @@ function parseGroupNumber(
 
   const text = normalizeText(value);
 
-  const match = text.match(/KYA\s*(\d{4})/i);
+  const match = text.match(
+    /KYA\s*(\d{4})/i,
+  );
 
   if (match) {
     return Number(match[1]);
@@ -167,7 +201,8 @@ const GROUP_SELECT = `
           ''
         )
         ELSE CAST(group_number AS TEXT)
-      END AS INTEGER
+      END
+      AS INTEGER
     ) AS group_number,
     group_name,
     district,
@@ -197,8 +232,33 @@ function isFinancialAccountType(
   );
 }
 
-/*
- * Insurance is intentionally NOT included in fundBalance.
+/**
+ * Accounts included in Fund Balance.
+ *
+ * Insurance is intentionally excluded.
+ */
+const FUND_BALANCE_ACCOUNTS: FinancialAccountType[] = [
+  'savings',
+  'loan_fund',
+  'loan_repayment',
+  'social_fund',
+  'fines',
+  'external_fund',
+  'expenditure_fund',
+];
+
+/**
+ * Fund Balance =
+ *
+ * Savings
+ * + Loan Fund
+ * + Loan Repayment
+ * + Social Fund
+ * + Fines
+ * + External Fund
+ * + Expenditure Fund
+ *
+ * Insurance is NOT included.
  */
 function calculateFundBalance(
   summary: Omit<FinancialSummary, 'fundBalance'>,
@@ -214,22 +274,239 @@ function calculateFundBalance(
   );
 }
 
+/**
+ * Add a database column only when it does not already exist.
+ */
+async function addColumnIfMissing(
+  db: SQLite.SQLiteDatabase,
+  table: string,
+  column: string,
+  definition: string,
+): Promise<void> {
+  const columns =
+    await db.getAllAsync<{ name: string }>(
+      `PRAGMA table_info(${table});`,
+    );
+
+  const exists = columns.some(
+    (item) => item.name === column,
+  );
+
+  if (!exists) {
+    await db.execAsync(
+      `ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`,
+    );
+  }
+}
+
+/**
+ * Creates all eight financial accounts for one group.
+ */
+async function ensureFinancialAccountsForGroup(
+  db: SQLite.SQLiteDatabase,
+  groupId: number,
+): Promise<void> {
+  const timestamp = now();
+
+  for (
+    const accountType of FINANCIAL_ACCOUNT_TYPES
+  ) {
+    await db.runAsync(
+      `INSERT OR IGNORE INTO financial_accounts (
+        group_id,
+        account_type,
+        balance,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, 0, ?, ?)`,
+      groupId,
+      accountType,
+      timestamp,
+      timestamp,
+    );
+  }
+}
+
+/**
+ * Makes sure every existing group has all eight accounts.
+ */
+async function ensureFinancialAccountsForAllGroups(
+  db: SQLite.SQLiteDatabase,
+): Promise<void> {
+  const groups =
+    await db.getAllAsync<{ id: number }>(
+      `SELECT id FROM groups`,
+    );
+
+  for (const group of groups) {
+    await ensureFinancialAccountsForGroup(
+      db,
+      group.id,
+    );
+  }
+}
+
+/**
+ * Refresh groups that have had no activity for 90 days.
+ */
+async function refreshGroupDormancy(
+  db: SQLite.SQLiteDatabase,
+): Promise<void> {
+  const cutoff = new Date();
+
+  cutoff.setDate(
+    cutoff.getDate() - 90,
+  );
+
+  await db.runAsync(
+    `UPDATE groups
+     SET status = 'dormant'
+     WHERE status = 'active'
+     AND last_activity_at < ?`,
+    cutoff.toISOString(),
+  );
+}
+
+/**
+ * Applies pending next-of-kin changes that are now due.
+ */
+async function applyDueNextOfKinChanges(
+  db: SQLite.SQLiteDatabase,
+): Promise<void> {
+  const pending =
+    await db.getAllAsync<{
+      id: number;
+      member_id: number;
+      slot: number;
+      action: string;
+      new_name: string | null;
+      new_phone: string | null;
+      new_gender: string | null;
+      effective_at: string;
+    }>(
+      `SELECT
+        id,
+        member_id,
+        slot,
+        action,
+        new_name,
+        new_phone,
+        new_gender,
+        effective_at
+       FROM next_of_kin_change_history
+       WHERE applied = 0
+       AND effective_at <= ?
+       ORDER BY id ASC`,
+      now(),
+    );
+
+  for (const change of pending) {
+    if (change.action === 'delete') {
+      await db.runAsync(
+        `UPDATE member_next_of_kin
+         SET
+           name = NULL,
+           phone = NULL,
+           gender = NULL,
+           updated_at = ?
+         WHERE member_id = ?
+         AND slot = ?`,
+        now(),
+        change.member_id,
+        change.slot,
+      );
+    } else {
+      await db.runAsync(
+        `UPDATE member_next_of_kin
+         SET
+           name = ?,
+           phone = ?,
+           gender = ?,
+           updated_at = ?
+         WHERE member_id = ?
+         AND slot = ?`,
+        change.new_name,
+        change.new_phone,
+        change.new_gender,
+        now(),
+        change.member_id,
+        change.slot,
+      );
+    }
+
+    await db.runAsync(
+      `UPDATE next_of_kin_change_history
+       SET applied = 1
+       WHERE id = ?`,
+      change.id,
+    );
+  }
+}
+
+/**
+ * Applies pending next-of-kin benefits that are now due.
+ */
+async function applyDueNextOfKinBenefits(
+  db: SQLite.SQLiteDatabase,
+): Promise<void> {
+  const pending =
+    await db.getAllAsync<{
+      id: number;
+      member_id: number;
+      slot: number;
+    }>(
+      `SELECT
+        id,
+        member_id,
+        slot
+       FROM next_of_kin_benefits
+       WHERE status = 'pending'
+       AND effective_at <= ?
+       ORDER BY id ASC`,
+      now(),
+    );
+
+  for (const benefit of pending) {
+    await db.runAsync(
+      `UPDATE next_of_kin_benefits
+       SET status = 'received'
+       WHERE id = ?`,
+      benefit.id,
+    );
+
+    await db.runAsync(
+      `UPDATE member_next_of_kin
+       SET
+         benefit_received = 1,
+         locked = 1,
+         updated_at = ?
+       WHERE member_id = ?
+       AND slot = ?`,
+      now(),
+      benefit.member_id,
+      benefit.slot,
+    );
+  }
+}
+
+/**
+ * Opens/initializes the database and creates required tables.
+ */
 async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   const db = await dbPromise;
 
   await db.execAsync(`
     PRAGMA foreign_keys = ON;
+    PRAGMA journal_mode = WAL;
 
     CREATE TABLE IF NOT EXISTS groups (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      group_number TEXT NOT NULL UNIQUE,
+      group_number TEXT NOT NULL,
       group_name TEXT NOT NULL,
       district TEXT NOT NULL DEFAULT '',
       country TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'active',
-      registration_agreed INTEGER NOT NULL DEFAULT 0,
-      registration_signature_hash TEXT,
-      registration_signature_salt TEXT,
       created_at TEXT NOT NULL,
       last_activity_at TEXT NOT NULL
     );
@@ -381,7 +658,7 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
 
     CREATE TABLE IF NOT EXISTS meeting_closures (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      meeting_id INTEGER NOT NULL UNIQUE,
+      meeting_id INTEGER NOT NULL,
       closed_at TEXT NOT NULL,
       total_savings REAL NOT NULL DEFAULT 0,
       loan_fund REAL NOT NULL DEFAULT 0,
@@ -415,6 +692,15 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       FOREIGN KEY (meeting_id) REFERENCES group_meetings(id)
     );
 
+    CREATE INDEX IF NOT EXISTS idx_financial_accounts_group
+      ON financial_accounts(group_id);
+
+    CREATE INDEX IF NOT EXISTS idx_financial_transactions_group
+      ON financial_transactions(group_id);
+
+    CREATE INDEX IF NOT EXISTS idx_financial_transactions_account
+      ON financial_transactions(group_id, account_type);
+
     CREATE TABLE IF NOT EXISTS member_statement_records (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       meeting_id INTEGER NOT NULL,
@@ -423,7 +709,6 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       individual_loan_balance REAL NOT NULL DEFAULT 0,
       individual_loan_due_date TEXT,
       created_at TEXT NOT NULL,
-      UNIQUE(meeting_id, member_id),
       FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
       FOREIGN KEY (member_id) REFERENCES members(id)
     );
@@ -451,22 +736,28 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       FOREIGN KEY (notification_id) REFERENCES notification_queue(id)
     );
 
-    CREATE INDEX IF NOT EXISTS idx_financial_accounts_group
-      ON financial_accounts(group_id);
-
-    CREATE INDEX IF NOT EXISTS idx_financial_transactions_group
-      ON financial_transactions(group_id);
-
     CREATE INDEX IF NOT EXISTS idx_members_group
       ON members(group_id);
 
+    CREATE INDEX IF NOT EXISTS idx_members_status
+      ON members(status);
+
+    CREATE INDEX IF NOT EXISTS idx_groups_status
+      ON groups(status);
+
     CREATE INDEX IF NOT EXISTS idx_kin_member
       ON member_next_of_kin(member_id);
+
+    CREATE INDEX IF NOT EXISTS idx_kin_history_member
+      ON next_of_kin_change_history(member_id);
+
+    CREATE INDEX IF NOT EXISTS idx_auth_attempt_member
+      ON member_auth_attempts(member_id);
+
+    CREATE INDEX IF NOT EXISTS idx_notifications_status
+      ON notification_queue(status);
   `);
 
-  /*
-   * Compatibility migrations for databases created by older versions.
-   */
   await addColumnIfMissing(
     db,
     'members',
@@ -509,143 +800,42 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
     "TEXT NOT NULL DEFAULT 'member'",
   );
 
-  await addColumnIfMissing(
-    db,
-    'groups',
-    'registration_agreed',
-    'INTEGER NOT NULL DEFAULT 0',
-  );
-
-  await addColumnIfMissing(
-    db,
-    'groups',
-    'registration_signature_hash',
-    'TEXT',
-  );
-
-  await addColumnIfMissing(
-    db,
-    'groups',
-    'registration_signature_salt',
-    'TEXT',
-  );
-
   await ensureFinancialAccountsForAllGroups(db);
 
   await refreshGroupDormancy(db);
-
   await applyDueNextOfKinChanges(db);
-
   await applyDueNextOfKinBenefits(db);
 
   return db;
 }
 
-async function addColumnIfMissing(
-  db: SQLite.SQLiteDatabase,
-  table: string,
-  column: string,
-  definition: string,
-): Promise<void> {
-  const columns = await db.getAllAsync<{ name: string }>(
-    `PRAGMA table_info(${table});`,
-  );
-
-  const exists = columns.some(
-    (item) => item.name === column,
-  );
-
-  if (!exists) {
-    await db.execAsync(
-      `ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`,
-    );
-  }
-}
-
-async function ensureFinancialAccountsForGroup(
-  db: SQLite.SQLiteDatabase,
-  groupId: number,
-): Promise<void> {
-  const timestamp = now();
-
-  for (const accountType of FINANCIAL_ACCOUNT_TYPES) {
-    await db.runAsync(
-      `
-      INSERT OR IGNORE INTO financial_accounts
-      (
-        group_id,
-        account_type,
-        balance,
-        created_at,
-        updated_at
-      )
-      VALUES (?, ?, 0, ?, ?)
-      `,
-      groupId,
-      accountType,
-      timestamp,
-      timestamp,
-    );
-  }
-}
-
-async function ensureFinancialAccountsForAllGroups(
-  db: SQLite.SQLiteDatabase,
-): Promise<void> {
-  const groups = await db.getAllAsync<{ id: number }>(
-    `SELECT id FROM groups`,
-  );
-
-  for (const group of groups) {
-    await ensureFinancialAccountsForGroup(
-      db,
-      group.id,
-    );
-  }
-}
-
+/**
+ * Compatibility function required by ConstitutionScreen.
+ */
 export async function initializeDatabase(): Promise<void> {
   await getDatabase();
 }
 
+/**
+ * Keep older initDatabase name available.
+ */
 export async function initDatabase(): Promise<void> {
   await initializeDatabase();
 }
 
-async function refreshGroupDormancy(
-  db: SQLite.SQLiteDatabase,
-): Promise<void> {
-  const cutoff = new Date();
-
-  cutoff.setDate(
-    cutoff.getDate() - GROUP_DORMANCY_DAYS,
-  );
-
-  await db.runAsync(
-    `
-    UPDATE groups
-    SET status = 'dormant'
-    WHERE status = 'active'
-      AND last_activity_at < ?
-    `,
-    cutoff.toISOString(),
-  );
-}
+/* ============================================================
+   GROUP FUNCTIONS
+   ============================================================ */
 
 export async function getAllGroups(): Promise<GroupRecord[]> {
   const db = await getDatabase();
 
   return db.getAllAsync<GroupRecord>(
-    `
-    ${GROUP_SELECT}
-    ORDER BY
-      CASE
-        WHEN status = 'active' THEN 0
-        ELSE 1
-      END,
-      group_number ASC,
-      id ASC
-    `,
+    `${GROUP_SELECT}
+     ORDER BY
+       CASE WHEN status = 'active' THEN 0 ELSE 1 END,
+       group_number ASC,
+       id ASC`,
   );
 }
 
@@ -653,152 +843,53 @@ export async function getActiveGroup(): Promise<GroupRecord | null> {
   const db = await getDatabase();
 
   return db.getFirstAsync<GroupRecord>(
-    `
-    ${GROUP_SELECT}
-    WHERE status = 'active'
-    ORDER BY id ASC
-    LIMIT 1
-    `,
+    `${GROUP_SELECT}
+     WHERE status = 'active'
+     ORDER BY id ASC
+     LIMIT 1`,
   );
 }
 
-/*
- * Group numbering rules:
- *
- * 1. Numbers are allocated sequentially upward.
- * 2. Active group numbers cannot be reused.
- * 3. Dormant groups become eligible for reuse only after 90 days.
- * 4. If a new unused number is available, it is preferred.
- * 5. Only when the full range has been used does the system
- *    recycle the oldest eligible dormant number.
- */
 async function findNextAvailableGroupNumber(
   db: SQLite.SQLiteDatabase,
 ): Promise<number> {
   await refreshGroupDormancy(db);
 
-  const groups = await db.getAllAsync<{
-    group_number: string | number;
-    status: string;
-  }>(
-    `
-    SELECT group_number, status
-    FROM groups
-    `,
-  );
-
-  const usedNumbers = new Set<number>();
-
-  const activeNumbers = new Set<number>();
-
-  const dormantNumbers: Array<{
-    number: number;
-    lastActivity: string;
-  }> = [];
-
-  for (const group of groups) {
-    const number = parseGroupNumber(
-      group.group_number,
+  const groups =
+    await db.getAllAsync<{
+      group_number: string | number;
+      status: string;
+    }>(
+      `SELECT group_number, status
+       FROM groups
+       WHERE status = 'active'`,
     );
 
+  const activeNumbers =
+    new Set<number>();
+
+  for (const group of groups) {
+    const number =
+      parseGroupNumber(
+        group.group_number,
+      );
+
     if (
-      number < GROUP_START ||
-      number > GROUP_END
+      number >= GROUP_START &&
+      number <= GROUP_END
     ) {
-      continue;
-    }
-
-    usedNumbers.add(number);
-
-    if (group.status === 'active') {
       activeNumbers.add(number);
     }
   }
 
-  /*
-   * Continue sequentially from the highest number already assigned.
-   * This avoids jumping backward while unused numbers remain.
-   */
-  let highestUsed = GROUP_START - 1;
-
-  for (const number of usedNumbers) {
-    if (number > highestUsed) {
-      highestUsed = number;
+  for (
+    let number = GROUP_START;
+    number <= GROUP_END;
+    number += 1
+  ) {
+    if (!activeNumbers.has(number)) {
+      return number;
     }
-  }
-
-  if (highestUsed < GROUP_END) {
-    const nextNumber = highestUsed + 1;
-
-    if (!activeNumbers.has(nextNumber)) {
-      return nextNumber;
-    }
-  }
-
-  /*
-   * If the full sequence has reached GROUP_END,
-   * recycle only a dormant number that has been dormant
-   * for at least 90 days.
-   */
-  const cutoff = new Date();
-
-  cutoff.setDate(
-    cutoff.getDate() - GROUP_DORMANCY_DAYS,
-  );
-
-  for (const group of groups) {
-    const number = parseGroupNumber(
-      group.group_number,
-    );
-
-    if (
-      number < GROUP_START ||
-      number > GROUP_END
-    ) {
-      continue;
-    }
-
-    if (group.status !== 'dormant') {
-      continue;
-    }
-
-    /*
-     * Read last activity through a second query below.
-     */
-    const dormantGroup =
-      await db.getFirstAsync<{
-        last_activity_at: string;
-      }>(
-        `
-        SELECT last_activity_at
-        FROM groups
-        WHERE group_number = ?
-        LIMIT 1
-        `,
-        String(number),
-      );
-
-    if (
-      dormantGroup &&
-      new Date(dormantGroup.last_activity_at).getTime()
-        <= cutoff.getTime()
-    ) {
-      dormantNumbers.push({
-        number,
-        lastActivity:
-          dormantGroup.last_activity_at,
-      });
-    }
-  }
-
-  if (dormantNumbers.length > 0) {
-    dormantNumbers.sort(
-      (a, b) =>
-        new Date(a.lastActivity).getTime() -
-        new Date(b.lastActivity).getTime(),
-    );
-
-    return dormantNumbers[0].number;
   }
 
   throw new Error(
@@ -810,42 +901,33 @@ export async function createGroup(
   groupName: string,
   district: string,
   country: string,
-  registrationAgreed = false,
-  registrationSignature = '',
 ): Promise<number> {
   const db = await getDatabase();
 
-  const cleanName = normalizeText(groupName);
-  const cleanDistrict = normalizeText(district);
-  const cleanCountry = normalizeText(country);
-  const cleanSignature =
-    normalizeText(registrationSignature);
+  const cleanName =
+    normalizeText(groupName);
+
+  const cleanDistrict =
+    normalizeText(district);
+
+  const cleanCountry =
+    normalizeText(country);
 
   if (!cleanName) {
-    throw new Error('Group name is required.');
-  }
-
-  if (!cleanDistrict) {
-    throw new Error('District is required.');
-  }
-
-  if (!cleanCountry) {
-    throw new Error('Country is required.');
-  }
-
-  if (!registrationAgreed) {
     throw new Error(
-      'You must agree to the constitution before registering the group.',
+      'Group name is required.',
     );
   }
 
-  if (
-    !isValidRegistrationSignature(
-      cleanSignature,
-    )
-  ) {
+  if (!cleanDistrict) {
     throw new Error(
-      'Registration signature must contain exactly 4 letters or numbers.',
+      'District is required.',
+    );
+  }
+
+  if (!cleanCountry) {
+    throw new Error(
+      'Country is required.',
     );
   }
 
@@ -854,76 +936,53 @@ export async function createGroup(
 
   const timestamp = now();
 
-  const salt = Crypto.randomUUID();
-
-  const signatureHash =
-    await hashPasscode(
-      cleanSignature,
-      salt,
-    );
-
-  let groupId = 0;
-
-  await db.withTransactionAsync(async () => {
-    const result = await db.runAsync(
-      `
-      INSERT INTO groups
-      (
+  const result =
+    await db.runAsync(
+      `INSERT INTO groups (
         group_number,
         group_name,
         district,
         country,
         status,
-        registration_agreed,
-        registration_signature_hash,
-        registration_signature_salt,
         created_at,
         last_activity_at
       )
-      VALUES (?, ?, ?, ?, 'active', 1, ?, ?, ?, ?)
-      `,
+      VALUES (?, ?, ?, ?, 'active', ?, ?)`,
       groupNumber,
       cleanName,
       cleanDistrict,
       cleanCountry,
-      signatureHash,
-      salt,
       timestamp,
       timestamp,
     );
 
-    groupId = result.lastInsertRowId;
+  const groupId =
+    result.lastInsertRowId;
 
-    await ensureFinancialAccountsForGroup(
-      db,
-      groupId,
-    );
+  await ensureFinancialAccountsForGroup(
+    db,
+    groupId,
+  );
 
-    await insertDefaultConstitution(
-      db,
-      groupId,
-    );
-  });
+  await insertDefaultConstitution(
+    db,
+    groupId,
+  );
 
   return groupId;
 }
 
-export async function registerGroup(
-  input: {
-    groupName: string;
-    district: string;
-    country: string;
-    registrationAgreed: boolean;
-    registrationSignature: string;
-  },
-): Promise<GroupRecord> {
-  const groupId = await createGroup(
-    input.groupName,
-    input.district,
-    input.country,
-    input.registrationAgreed,
-    input.registrationSignature,
-  );
+export async function registerGroup(input: {
+  groupName: string;
+  district: string;
+  country: string;
+}): Promise<GroupRecord> {
+  const groupId =
+    await createGroup(
+      input.groupName,
+      input.district,
+      input.country,
+    );
 
   const group =
     await getGroupById(groupId);
@@ -943,12 +1002,11 @@ export async function recordGroupActivity(
   const db = await getDatabase();
 
   await db.runAsync(
-    `
-    UPDATE groups
-    SET status = 'active',
-        last_activity_at = ?
-    WHERE id = ?
-    `,
+    `UPDATE groups
+     SET
+       status = 'active',
+       last_activity_at = ?
+     WHERE id = ?`,
     now(),
     groupId,
   );
@@ -960,11 +1018,9 @@ export async function getGroupById(
   const db = await getDatabase();
 
   return db.getFirstAsync<GroupRecord>(
-    `
-    ${GROUP_SELECT}
-    WHERE id = ?
-    LIMIT 1
-    `,
+    `${GROUP_SELECT}
+     WHERE id = ?
+     LIMIT 1`,
     groupId,
   );
 }
@@ -977,70 +1033,78 @@ export async function updateGroup(
 ): Promise<GroupRecord> {
   const db = await getDatabase();
 
-  const cleanName = normalizeText(groupName);
+  const cleanName =
+    normalizeText(groupName);
+
   const cleanDistrict =
     normalizeText(district);
+
   const cleanCountry =
     normalizeText(country);
 
   if (!cleanName) {
-    throw new Error('Group name is required.');
+    throw new Error(
+      'Group name is required.',
+    );
   }
 
   if (!cleanDistrict) {
-    throw new Error('District is required.');
+    throw new Error(
+      'District is required.',
+    );
   }
 
   if (!cleanCountry) {
-    throw new Error('Country is required.');
+    throw new Error(
+      'Country is required.',
+    );
   }
 
   const existingGroup =
     await getGroupById(groupId);
 
   if (!existingGroup) {
-    throw new Error('Group not found.');
+    throw new Error(
+      'Group not found.',
+    );
   }
 
   const timestamp = now();
 
-  await db.withTransactionAsync(async () => {
-    /*
-     * group_number is deliberately NOT changed.
-     */
-    await db.runAsync(
-      `
-      UPDATE groups
-      SET group_name = ?,
-          district = ?,
-          country = ?,
-          last_activity_at = ?
-      WHERE id = ?
-      `,
-      cleanName,
-      cleanDistrict,
-      cleanCountry,
-      timestamp,
-      groupId,
-    );
+  /**
+   * IMPORTANT:
+   * group_number is NEVER changed here.
+   */
+  await db.runAsync(
+    `UPDATE groups
+     SET
+       group_name = ?,
+       district = ?,
+       country = ?,
+       last_activity_at = ?
+     WHERE id = ?`,
+    cleanName,
+    cleanDistrict,
+    cleanCountry,
+    timestamp,
+    groupId,
+  );
 
-    /*
-     * Only Article 1 is changed.
-     * Articles 2–12 remain untouched.
-     */
-    await db.runAsync(
-      `
-      UPDATE group_rules
-      SET content = ?,
-          updated_at = ?
-      WHERE group_id = ?
-        AND article_number = 1
-      `,
-      `This group shall operate as ${cleanName}.`,
-      timestamp,
-      groupId,
-    );
-  });
+  /**
+   * Only Article 1 changes.
+   * Articles 2-12 remain untouched.
+   */
+  await db.runAsync(
+    `UPDATE group_rules
+     SET
+       content = ?,
+       updated_at = ?
+     WHERE group_id = ?
+     AND article_number = 1`,
+    `This group shall operate as ${cleanName}. Its purpose is to encourage members to save together, grow together, access appropriate financial services, support one another, and improve the financial wellbeing of members.`,
+    timestamp,
+    groupId,
+  );
 
   const updatedGroup =
     await getGroupById(groupId);
@@ -1054,6 +1118,10 @@ export async function updateGroup(
   return updatedGroup;
 }
 
+/* ============================================================
+   CONSTITUTION
+   ============================================================ */
+
 async function insertDefaultConstitution(
   db: SQLite.SQLiteDatabase,
   groupId: number,
@@ -1064,62 +1132,62 @@ async function insertDefaultConstitution(
     [
       1,
       'Name and Purpose',
-      'This group shall operate as Ebadsave VSLA.',
+      'This group shall operate as Ebadsave VSLA. Its purpose is to encourage members to save together, grow together, access appropriate financial services, support one another, and improve the financial wellbeing of members.',
     ],
     [
       2,
       'Membership',
-      'Membership shall be open to eligible persons.',
+      'Membership shall be open to eligible persons who accept this constitution, follow group rules, contribute regularly, attend meetings, and participate in group activities.',
     ],
     [
       3,
       'Contributions',
-      'Members shall make regular savings.',
+      'Members shall make regular savings contributions according to the amount and schedule approved by the group. All contributions shall be properly recorded.',
     ],
     [
       4,
       'Loans',
-      'Members may apply for loans.',
+      'Members may apply for loans subject to group approval and the availability of funds. The default maximum loan amount shall be three times the member savings, unless the group approves another limit through an amendment.',
     ],
     [
       5,
       'Meetings and Attendance',
-      'Members shall attend meetings.',
+      'Members shall attend scheduled meetings on time and participate in group activities. Members who are absent or late without an acceptable reason may be subject to penalties approved by the group.',
     ],
     [
       6,
       'Leadership',
-      'The group shall have leadership.',
+      'The group shall have a Chair, Vice Chair, Secretary, Treasurer, two Money Counters, three Key Keepers, and a Supervisor. Leaders shall perform their duties honestly and in the interests of the group.',
     ],
     [
       7,
       'Welfare, and Insurance Fund',
-      'The group may maintain welfare and insurance funds.',
+      'The group may maintain welfare and insurance funds to support members during qualifying emergencies, approved welfare needs, and other circumstances agreed upon by members.',
     ],
     [
       8,
       'Penalties and Fines',
-      'Members who fail to follow rules may be fined.',
+      'Members who fail to follow approved group rules may be required to pay penalties or fines. All fines shall be recorded and allocated to the group fines fund.',
     ],
     [
       9,
       'Sharing and Dissolution',
-      'Savings and profits shall be shared.',
+      'Savings, profits, and other group funds shall be shared according to approved group rules. If the group is dissolved, all outstanding obligations shall first be settled before the remaining funds are distributed.',
     ],
     [
       10,
       'Amendments',
-      'Constitution may be amended.',
+      'This constitution may be amended when members approve proposed changes according to the agreed voting procedure. Approved amendments shall be recorded as part of the group constitution.',
     ],
     [
       11,
       'Executive expire period',
-      'Executive shall serve for agreed period.',
+      'The executive committee shall serve for the period agreed by the members. At the end of the approved period, elections or approved replacements shall take place according to group rules.',
     ],
     [
       12,
       'Interest percentage and period of loan',
-      'Group shall determine loan interest.',
+      'The group shall determine the applicable loan interest percentage and repayment period. These terms shall be approved by members and recorded in the group rules before loans are issued.',
     ],
   ];
 
@@ -1127,9 +1195,7 @@ async function insertDefaultConstitution(
 
   for (const article of articles) {
     await db.runAsync(
-      `
-      INSERT OR IGNORE INTO group_rules
-      (
+      `INSERT OR IGNORE INTO group_rules (
         group_id,
         article_number,
         title,
@@ -1137,8 +1203,7 @@ async function insertDefaultConstitution(
         effective_days,
         updated_at
       )
-      VALUES (?, ?, ?, ?, 30, ?)
-      `,
+      VALUES (?, ?, ?, ?, 30, ?)`,
       groupId,
       article[0],
       article[1],
@@ -1154,15 +1219,17 @@ export async function getGroupRules(
   const db = await getDatabase();
 
   return db.getAllAsync<GroupRuleRecord>(
-    `
-    SELECT *
-    FROM group_rules
-    WHERE group_id = ?
-    ORDER BY article_number ASC
-    `,
+    `SELECT *
+     FROM group_rules
+     WHERE group_id = ?
+     ORDER BY article_number ASC`,
     groupId,
   );
 }
+
+/* ============================================================
+   MEMBERS
+   ============================================================ */
 
 export async function getMembersByGroupId(
   groupId: number,
@@ -1170,8 +1237,7 @@ export async function getMembersByGroupId(
   const db = await getDatabase();
 
   return db.getAllAsync<MemberRecord>(
-    `
-    SELECT
+    `SELECT
       id,
       group_id,
       member_number,
@@ -1184,11 +1250,10 @@ export async function getMembersByGroupId(
       photo_uri,
       status,
       created_at
-    FROM members
-    WHERE group_id = ?
-      AND status = 'active'
-    ORDER BY member_number ASC
-    `,
+     FROM members
+     WHERE group_id = ?
+     AND status = 'active'
+     ORDER BY member_number ASC`,
     groupId,
   );
 }
@@ -1201,11 +1266,9 @@ async function getNextMemberSequence(
     await db.getAllAsync<{
       member_number: string;
     }>(
-      `
-      SELECT member_number
-      FROM members
-      WHERE group_id = ?
-      `,
+      `SELECT member_number
+       FROM members
+       WHERE group_id = ?`,
       groupId,
     );
 
@@ -1213,25 +1276,28 @@ async function getNextMemberSequence(
     await db.getAllAsync<{
       member_number: string;
     }>(
-      `
-      SELECT member_number
-      FROM deleted_member_numbers
-      WHERE group_id = ?
-      `,
+      `SELECT member_number
+       FROM deleted_member_numbers
+       WHERE group_id = ?`,
       groupId,
     );
 
-  const used = new Set<number>();
+  const used =
+    new Set<number>();
 
   for (const item of [
     ...members,
     ...deleted,
   ]) {
     const match =
-      item.member_number.match(/(\d{3})$/);
+      item.member_number.match(
+        /(\d{3})$/,
+      );
 
     if (match) {
-      used.add(Number(match[1]));
+      used.add(
+        Number(match[1]),
+      );
     }
   }
 
@@ -1254,10 +1320,7 @@ function createMemberNumber(
   groupNumber: number,
   sequence: number,
 ): string {
-  return `KYA${String(groupNumber).padStart(
-    4,
-    '0',
-  )}${String(sequence).padStart(3, '0')}`;
+  return `KYA${String(groupNumber).padStart(4, '0')}${String(sequence).padStart(3, '0')}`;
 }
 
 export async function registerMember(
@@ -1272,33 +1335,49 @@ export async function registerMember(
 ): Promise<number> {
   const db = await getDatabase();
 
-  const name = normalizeText(fullName);
+  const name =
+    normalizeText(fullName);
 
   if (!name) {
-    throw new Error('Full name is required.');
+    throw new Error(
+      'Full name is required.',
+    );
   }
 
   if (!normalizeText(gender)) {
-    throw new Error('Gender is required.');
+    throw new Error(
+      'Gender is required.',
+    );
   }
 
-  if (!Number.isFinite(age) || age <= 0) {
-    throw new Error('A valid age is required.');
+  if (
+    !Number.isFinite(age) ||
+    age <= 0
+  ) {
+    throw new Error(
+      'A valid age is required.',
+    );
   }
 
   if (!normalizeText(cell)) {
-    throw new Error('Cell is required.');
+    throw new Error(
+      'Cell is required.',
+    );
   }
 
   if (!normalizeText(district)) {
-    throw new Error('District is required.');
+    throw new Error(
+      'District is required.',
+    );
   }
 
   const group =
     await getGroupById(groupId);
 
   if (!group) {
-    throw new Error('Group not found.');
+    throw new Error(
+      'Group not found.',
+    );
   }
 
   const sequence =
@@ -1315,13 +1394,9 @@ export async function registerMember(
 
   const timestamp = now();
 
-  let memberId = 0;
-
-  await db.withTransactionAsync(async () => {
-    const result = await db.runAsync(
-      `
-      INSERT INTO members
-      (
+  const result =
+    await db.runAsync(
+      `INSERT INTO members (
         group_id,
         member_number,
         full_name,
@@ -1335,8 +1410,7 @@ export async function registerMember(
         status,
         created_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'member', 'active', ?)
-      `,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'member', 'active', ?)`,
       groupId,
       memberNumber,
       name,
@@ -1349,70 +1423,246 @@ export async function registerMember(
       timestamp,
     );
 
-    memberId = result.lastInsertRowId;
+  const memberId =
+    result.lastInsertRowId;
 
-    await db.runAsync(
-      `
-      INSERT INTO member_next_of_kin
-      (
-        member_id,
-        slot,
-        name,
-        phone,
-        gender,
-        benefit_received,
-        locked,
-        created_at,
-        updated_at
-      )
-      VALUES
+  await db.runAsync(
+    `INSERT INTO member_next_of_kin (
+      member_id,
+      slot,
+      name,
+      phone,
+      gender,
+      benefit_received,
+      locked,
+      created_at,
+      updated_at
+    )
+    VALUES
       (?, 1, NULL, NULL, NULL, 0, 0, ?, ?),
-      (?, 2, NULL, NULL, NULL, 0, 0, ?, ?)
-      `,
-      memberId,
-      timestamp,
-      timestamp,
-      memberId,
-      timestamp,
-      timestamp,
-    );
+      (?, 2, NULL, NULL, NULL, 0, 0, ?, ?)`,
+    memberId,
+    timestamp,
+    timestamp,
+    memberId,
+    timestamp,
+    timestamp,
+  );
 
-    const salt = Crypto.randomUUID();
+  const salt =
+    Crypto.randomUUID();
 
-    await db.runAsync(
-      `
-      INSERT INTO member_credentials
-      (
-        member_id,
-        salt,
-        passcode_hash,
-        phone_eligible,
-        created_at,
-        updated_at
-      )
-      VALUES (?, ?, NULL, ?, ?, ?)
-      `,
-      memberId,
+  await db.runAsync(
+    `INSERT INTO member_credentials (
+      member_id,
       salt,
-      normalizeText(phone) ? 1 : 0,
-      timestamp,
-      timestamp,
-    );
+      passcode_hash,
+      phone_eligible,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, NULL, ?, ?, ?)`,
+    memberId,
+    salt,
+    normalizeText(phone)
+      ? 1
+      : 0,
+    timestamp,
+    timestamp,
+  );
 
-    await db.runAsync(
-      `
-      UPDATE groups
-      SET status = 'active',
-          last_activity_at = ?
-      WHERE id = ?
-      `,
-      timestamp,
-      groupId,
-    );
-  });
+  await recordGroupActivity(
+    groupId,
+  );
 
   return memberId;
 }
+
+export async function updateMember(
+  memberId: number,
+  data: {
+    fullName?: string;
+    gender?: string;
+    age?: number;
+    phone?: string;
+    cell?: string;
+    district?: string;
+    photoUri?: string | null;
+  },
+): Promise<void> {
+  const db = await getDatabase();
+
+  const current =
+    await db.getFirstAsync<MemberRecord>(
+      `SELECT *
+       FROM members
+       WHERE id = ?
+       LIMIT 1`,
+      memberId,
+    );
+
+  if (!current) {
+    throw new Error(
+      'Member not found.',
+    );
+  }
+
+  const fullName =
+    data.fullName ??
+    current.full_name;
+
+  const gender =
+    data.gender ??
+    current.gender;
+
+  const age =
+    data.age ??
+    current.age;
+
+  const phone =
+    data.phone ??
+    current.phone ??
+    '';
+
+  const cell =
+    data.cell ??
+    current.cell;
+
+  const district =
+    data.district ??
+    current.district;
+
+  const photoUri =
+    data.photoUri === undefined
+      ? current.photo_uri
+      : data.photoUri;
+
+  if (!normalizeText(fullName)) {
+    throw new Error(
+      'Full name is required.',
+    );
+  }
+
+  if (!normalizeText(gender)) {
+    throw new Error(
+      'Gender is required.',
+    );
+  }
+
+  if (
+    !Number.isFinite(age) ||
+    age <= 0
+  ) {
+    throw new Error(
+      'A valid age is required.',
+    );
+  }
+
+  if (!normalizeText(cell)) {
+    throw new Error(
+      'Cell is required.',
+    );
+  }
+
+  if (!normalizeText(district)) {
+    throw new Error(
+      'District is required.',
+    );
+  }
+
+  await db.runAsync(
+    `UPDATE members
+     SET
+       full_name = ?,
+       gender = ?,
+       age = ?,
+       phone = ?,
+       cell = ?,
+       district = ?,
+       photo_uri = ?
+     WHERE id = ?`,
+    normalizeText(fullName),
+    normalizeText(gender),
+    age,
+    normalizeText(phone) || null,
+    normalizeText(cell),
+    normalizeText(district),
+    photoUri,
+    memberId,
+  );
+
+  const timestamp = now();
+
+  await db.runAsync(
+    `UPDATE member_credentials
+     SET
+       phone_eligible = ?,
+       updated_at = ?
+     WHERE member_id = ?`,
+    normalizeText(phone)
+      ? 1
+      : 0,
+    timestamp,
+    memberId,
+  );
+}
+
+export async function deleteMember(
+  memberId: number,
+  reason: string,
+): Promise<void> {
+  const db = await getDatabase();
+
+  const member =
+    await db.getFirstAsync<MemberRecord>(
+      `SELECT *
+       FROM members
+       WHERE id = ?
+       LIMIT 1`,
+      memberId,
+    );
+
+  if (!member) {
+    throw new Error(
+      'Member not found.',
+    );
+  }
+
+  if (!normalizeText(reason)) {
+    throw new Error(
+      'A reason is required when deleting a member.',
+    );
+  }
+
+  const timestamp = now();
+
+  await db.runAsync(
+    `UPDATE members
+     SET status = 'deleted'
+     WHERE id = ?`,
+    memberId,
+  );
+
+  await db.runAsync(
+    `INSERT INTO deleted_member_numbers (
+      group_id,
+      member_number,
+      deleted_at
+    )
+    VALUES (?, ?, ?)`,
+    member.group_id,
+    member.member_number,
+    timestamp,
+  );
+
+  await recordGroupActivity(
+    member.group_id,
+  );
+}
+
+/* ============================================================
+   NEXT OF KIN
+   ============================================================ */
 
 export async function getNextOfKin(
   memberId: number,
@@ -1420,16 +1670,13 @@ export async function getNextOfKin(
   const db = await getDatabase();
 
   await applyDueNextOfKinChanges(db);
-
   await applyDueNextOfKinBenefits(db);
 
   return db.getAllAsync<NextOfKinRecord>(
-    `
-    SELECT *
-    FROM member_next_of_kin
-    WHERE member_id = ?
-    ORDER BY slot ASC
-    `,
+    `SELECT *
+     FROM member_next_of_kin
+     WHERE member_id = ?
+     ORDER BY slot ASC`,
     memberId,
   );
 }
@@ -1440,20 +1687,23 @@ async function getKin(
   slot: number,
 ): Promise<NextOfKinRecord | null> {
   return db.getFirstAsync<NextOfKinRecord>(
-    `
-    SELECT *
-    FROM member_next_of_kin
-    WHERE member_id = ?
-      AND slot = ?
-    LIMIT 1
-    `,
+    `SELECT *
+     FROM member_next_of_kin
+     WHERE member_id = ?
+     AND slot = ?
+     LIMIT 1`,
     memberId,
     slot,
   );
 }
 
-function validateKinSlot(slot: number): void {
-  if (slot !== 1 && slot !== 2) {
+function validateKinSlot(
+  slot: number,
+): void {
+  if (
+    slot !== 1 &&
+    slot !== 2
+  ) {
     throw new Error(
       'Next-of-kin slot must be 1 or 2.',
     );
@@ -1467,14 +1717,12 @@ async function assertNoPendingKinChange(
 ): Promise<void> {
   const pending =
     await db.getFirstAsync<{ id: number }>(
-      `
-      SELECT id
-      FROM next_of_kin_change_history
-      WHERE member_id = ?
-        AND slot = ?
-        AND applied = 0
-      LIMIT 1
-      `,
+      `SELECT id
+       FROM next_of_kin_change_history
+       WHERE member_id = ?
+       AND slot = ?
+       AND applied = 0
+       LIMIT 1`,
       memberId,
       slot,
     );
@@ -1493,14 +1741,12 @@ async function assertNoPendingKinBenefit(
 ): Promise<void> {
   const pending =
     await db.getFirstAsync<{ id: number }>(
-      `
-      SELECT id
-      FROM next_of_kin_benefits
-      WHERE member_id = ?
-        AND slot = ?
-        AND status = 'pending'
-      LIMIT 1
-      `,
+      `SELECT id
+       FROM next_of_kin_benefits
+       WHERE member_id = ?
+       AND slot = ?
+       AND status = 'pending'
+       LIMIT 1`,
       memberId,
       slot,
     );
@@ -1526,11 +1772,12 @@ export async function requestNextOfKinChange(
   validateKinSlot(slot);
 
   if (!normalizeText(reason)) {
-    throw new Error('A reason is required.');
+    throw new Error(
+      'A reason is required for every next-of-kin change.',
+    );
   }
 
   await applyDueNextOfKinChanges(db);
-
   await applyDueNextOfKinBenefits(db);
 
   const kin =
@@ -1551,7 +1798,7 @@ export async function requestNextOfKinChange(
     kin.benefit_received === 1
   ) {
     throw new Error(
-      'This slot is locked because benefits have been received.',
+      'This next-of-kin slot is locked because benefits have been received.',
     );
   }
 
@@ -1567,110 +1814,144 @@ export async function requestNextOfKinChange(
     slot,
   );
 
-  const effectiveDate = new Date();
+  const effectiveDate =
+    new Date();
 
   effectiveDate.setDate(
     effectiveDate.getDate() +
-      Math.max(0, effectiveDays),
+      Math.max(
+        0,
+        effectiveDays,
+      ),
   );
 
-  const result = await db.runAsync(
-    `
-    INSERT INTO next_of_kin_change_history
-    (
-      member_id,
+  const result =
+    await db.runAsync(
+      `INSERT INTO next_of_kin_change_history (
+        member_id,
+        slot,
+        action,
+        old_name,
+        old_phone,
+        old_gender,
+        new_name,
+        new_phone,
+        new_gender,
+        reason,
+        requested_at,
+        effective_at,
+        applied
+      )
+      VALUES (?, ?, 'update', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      memberId,
       slot,
-      action,
-      old_name,
-      old_phone,
-      old_gender,
-      new_name,
-      new_phone,
-      new_gender,
-      reason,
-      requested_at,
-      effective_at,
-      applied
-    )
-    VALUES
-    (?, ?, 'update', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-    `,
-    memberId,
-    slot,
-    kin.name,
-    kin.phone,
-    kin.gender,
-    normalizeText(name) || null,
-    normalizeText(phone) || null,
-    normalizeText(gender) || null,
-    normalizeText(reason),
-    now(),
-    effectiveDate.toISOString(),
-  );
+      kin.name,
+      kin.phone,
+      kin.gender,
+      normalizeText(name) || null,
+      normalizeText(phone) || null,
+      normalizeText(gender) || null,
+      normalizeText(reason),
+      now(),
+      effectiveDate.toISOString(),
+    );
 
   return result.lastInsertRowId;
 }
 
-async function applyDueNextOfKinChanges(
-  db: SQLite.SQLiteDatabase,
-): Promise<void> {
-  const pending =
-    await db.getAllAsync<any>(
-      `
-      SELECT *
-      FROM next_of_kin_change_history
-      WHERE applied = 0
-        AND effective_at <= ?
-      ORDER BY id ASC
-      `,
-      now(),
-    );
+export async function requestNextOfKinDeletion(
+  memberId: number,
+  slot: number,
+  reason: string,
+  effectiveDays = 30,
+): Promise<number> {
+  const db = await getDatabase();
 
-  for (const change of pending) {
-    if (change.action === 'delete') {
-      await db.runAsync(
-        `
-        UPDATE member_next_of_kin
-        SET name = NULL,
-            phone = NULL,
-            gender = NULL,
-            updated_at = ?
-        WHERE member_id = ?
-          AND slot = ?
-        `,
-        now(),
-        change.member_id,
-        change.slot,
-      );
-    } else {
-      await db.runAsync(
-        `
-        UPDATE member_next_of_kin
-        SET name = ?,
-            phone = ?,
-            gender = ?,
-            updated_at = ?
-        WHERE member_id = ?
-          AND slot = ?
-        `,
-        change.new_name,
-        change.new_phone,
-        change.new_gender,
-        now(),
-        change.member_id,
-        change.slot,
-      );
-    }
+  validateKinSlot(slot);
 
-    await db.runAsync(
-      `
-      UPDATE next_of_kin_change_history
-      SET applied = 1
-      WHERE id = ?
-      `,
-      change.id,
+  if (!normalizeText(reason)) {
+    throw new Error(
+      'A reason is required when deleting a next of kin.',
     );
   }
+
+  await applyDueNextOfKinChanges(db);
+  await applyDueNextOfKinBenefits(db);
+
+  const kin =
+    await getKin(
+      db,
+      memberId,
+      slot,
+    );
+
+  if (!kin) {
+    throw new Error(
+      'Next-of-kin slot not found.',
+    );
+  }
+
+  if (
+    kin.locked === 1 ||
+    kin.benefit_received === 1
+  ) {
+    throw new Error(
+      'This next-of-kin slot is locked because benefits have been received.',
+    );
+  }
+
+  await assertNoPendingKinChange(
+    db,
+    memberId,
+    slot,
+  );
+
+  await assertNoPendingKinBenefit(
+    db,
+    memberId,
+    slot,
+  );
+
+  const effectiveDate =
+    new Date();
+
+  effectiveDate.setDate(
+    effectiveDate.getDate() +
+      Math.max(
+        0,
+        effectiveDays,
+      ),
+  );
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO next_of_kin_change_history (
+        member_id,
+        slot,
+        action,
+        old_name,
+        old_phone,
+        old_gender,
+        new_name,
+        new_phone,
+        new_gender,
+        reason,
+        requested_at,
+        effective_at,
+        applied
+      )
+      VALUES (?, ?, 'delete', ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, 0)`,
+      memberId,
+      slot,
+      kin.name,
+      kin.phone,
+      kin.gender,
+      normalizeText(reason),
+      now(),
+      effectiveDate.toISOString(),
+    );
+
+  return result.lastInsertRowId;
 }
 
 export async function recordNextOfKinBenefit(
@@ -1700,7 +1981,6 @@ export async function recordNextOfKinBenefit(
   }
 
   await applyDueNextOfKinChanges(db);
-
   await applyDueNextOfKinBenefits(db);
 
   const kin =
@@ -1721,7 +2001,7 @@ export async function recordNextOfKinBenefit(
     kin.benefit_received === 1
   ) {
     throw new Error(
-      'This slot has already received benefits and is locked.',
+      'This next-of-kin slot has already received benefits and is locked.',
     );
   }
 
@@ -1731,78 +2011,43 @@ export async function recordNextOfKinBenefit(
     slot,
   );
 
-  const effectiveDate = new Date();
+  const effectiveDate =
+    new Date();
 
   effectiveDate.setDate(
     effectiveDate.getDate() +
-      Math.max(0, effectiveDays),
+      Math.max(
+        0,
+        effectiveDays,
+      ),
   );
 
-  const result = await db.runAsync(
-    `
-    INSERT INTO next_of_kin_benefits
-    (
-      member_id,
+  const result =
+    await db.runAsync(
+      `INSERT INTO next_of_kin_benefits (
+        member_id,
+        slot,
+        benefit_amount,
+        reason,
+        benefit_date,
+        effective_at,
+        status
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
+      memberId,
       slot,
-      benefit_amount,
-      reason,
-      benefit_date,
-      effective_at,
-      status
-    )
-    VALUES (?, ?, ?, ?, ?, ?, 'pending')
-    `,
-    memberId,
-    slot,
-    amount,
-    normalizeText(reason),
-    now(),
-    effectiveDate.toISOString(),
-  );
+      amount,
+      normalizeText(reason),
+      now(),
+      effectiveDate.toISOString(),
+    );
 
   return result.lastInsertRowId;
 }
 
-async function applyDueNextOfKinBenefits(
-  db: SQLite.SQLiteDatabase,
-): Promise<void> {
-  const pending =
-    await db.getAllAsync<any>(
-      `
-      SELECT id, member_id, slot
-      FROM next_of_kin_benefits
-      WHERE status = 'pending'
-        AND effective_at <= ?
-      ORDER BY id ASC
-      `,
-      now(),
-    );
-
-  for (const benefit of pending) {
-    await db.runAsync(
-      `
-      UPDATE next_of_kin_benefits
-      SET status = 'received'
-      WHERE id = ?
-      `,
-      benefit.id,
-    );
-
-    await db.runAsync(
-      `
-      UPDATE member_next_of_kin
-      SET benefit_received = 1,
-          locked = 1,
-          updated_at = ?
-      WHERE member_id = ?
-        AND slot = ?
-      `,
-      now(),
-      benefit.member_id,
-      benefit.slot,
-    );
-  }
-}
+/* ============================================================
+   FINANCIAL ACCOUNT SYSTEM
+   ============================================================ */
 
 export async function getFinancialAccounts(
   groupId: number,
@@ -1815,29 +2060,27 @@ export async function getFinancialAccounts(
   );
 
   return db.getAllAsync<FinancialAccountRecord>(
-    `
-    SELECT
+    `SELECT
       id,
       group_id,
       account_type,
       balance,
       created_at,
       updated_at
-    FROM financial_accounts
-    WHERE group_id = ?
-    ORDER BY
-      CASE account_type
-        WHEN 'savings' THEN 1
-        WHEN 'loan_fund' THEN 2
-        WHEN 'loan_repayment' THEN 3
-        WHEN 'social_fund' THEN 4
-        WHEN 'fines' THEN 5
-        WHEN 'external_fund' THEN 6
-        WHEN 'expenditure_fund' THEN 7
-        WHEN 'insurance_fund' THEN 8
-        ELSE 99
-      END
-    `,
+     FROM financial_accounts
+     WHERE group_id = ?
+     ORDER BY
+       CASE account_type
+         WHEN 'savings' THEN 1
+         WHEN 'loan_fund' THEN 2
+         WHEN 'loan_repayment' THEN 3
+         WHEN 'social_fund' THEN 4
+         WHEN 'fines' THEN 5
+         WHEN 'external_fund' THEN 6
+         WHEN 'expenditure_fund' THEN 7
+         WHEN 'insurance_fund' THEN 8
+         ELSE 99
+       END`,
     groupId,
   );
 }
@@ -1854,19 +2097,17 @@ export async function getFinancialAccount(
   );
 
   return db.getFirstAsync<FinancialAccountRecord>(
-    `
-    SELECT
+    `SELECT
       id,
       group_id,
       account_type,
       balance,
       created_at,
       updated_at
-    FROM financial_accounts
-    WHERE group_id = ?
-      AND account_type = ?
-    LIMIT 1
-    `,
+     FROM financial_accounts
+     WHERE group_id = ?
+     AND account_type = ?
+     LIMIT 1`,
     groupId,
     accountType,
   );
@@ -1893,23 +2134,21 @@ export async function recordFinancialIncome(
   }
 
   if (!normalizeText(reason)) {
-    throw new Error('A reason is required.');
+    throw new Error(
+      'A reason is required for every financial transaction.',
+    );
   }
 
-  let transactionId = 0;
+  await ensureFinancialAccountsForGroup(
+    db,
+    groupId,
+  );
 
-  await db.withTransactionAsync(async () => {
-    await ensureFinancialAccountsForGroup(
-      db,
-      groupId,
-    );
+  const timestamp = now();
 
-    const timestamp = now();
-
-    const result = await db.runAsync(
-      `
-      INSERT INTO financial_transactions
-      (
+  const result =
+    await db.runAsync(
+      `INSERT INTO financial_transactions (
         group_id,
         account_type,
         amount,
@@ -1919,8 +2158,7 @@ export async function recordFinancialIncome(
         transaction_type,
         created_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       groupId,
       accountType,
       amount,
@@ -1931,36 +2169,24 @@ export async function recordFinancialIncome(
       timestamp,
     );
 
-    transactionId =
-      result.lastInsertRowId;
+  await db.runAsync(
+    `UPDATE financial_accounts
+     SET
+       balance = balance + ?,
+       updated_at = ?
+     WHERE group_id = ?
+     AND account_type = ?`,
+    amount,
+    timestamp,
+    groupId,
+    accountType,
+  );
 
-    await db.runAsync(
-      `
-      UPDATE financial_accounts
-      SET balance = balance + ?,
-          updated_at = ?
-      WHERE group_id = ?
-        AND account_type = ?
-      `,
-      amount,
-      timestamp,
-      groupId,
-      accountType,
-    );
+  await recordGroupActivity(
+    groupId,
+  );
 
-    await db.runAsync(
-      `
-      UPDATE groups
-      SET status = 'active',
-          last_activity_at = ?
-      WHERE id = ?
-      `,
-      timestamp,
-      groupId,
-    );
-  });
-
-  return transactionId;
+  return result.lastInsertRowId;
 }
 
 export async function recordFinancialExpense(
@@ -1984,53 +2210,24 @@ export async function recordFinancialExpense(
   }
 
   if (!normalizeText(reason)) {
-    throw new Error('A reason is required.');
+    throw new Error(
+      'A reason is required for every expenditure.',
+    );
   }
 
-  let transactionId = 0;
+  await ensureFinancialAccountsForGroup(
+    db,
+    groupId,
+  );
 
-  await db.withTransactionAsync(async () => {
-    await ensureFinancialAccountsForGroup(
-      db,
-      groupId,
-    );
+  const negativeAmount =
+    -Math.abs(amount);
 
-    const account =
-      await db.getFirstAsync<{
-        balance: number;
-      }>(
-        `
-        SELECT balance
-        FROM financial_accounts
-        WHERE group_id = ?
-          AND account_type = ?
-        LIMIT 1
-        `,
-        groupId,
-        accountType,
-      );
+  const timestamp = now();
 
-    if (!account) {
-      throw new Error(
-        'Financial account was not found.',
-      );
-    }
-
-    if (account.balance < amount) {
-      throw new Error(
-        `Insufficient ${accountType} balance.`,
-      );
-    }
-
-    const negativeAmount =
-      -Math.abs(amount);
-
-    const timestamp = now();
-
-    const result = await db.runAsync(
-      `
-      INSERT INTO financial_transactions
-      (
+  const result =
+    await db.runAsync(
+      `INSERT INTO financial_transactions (
         group_id,
         account_type,
         amount,
@@ -2040,8 +2237,7 @@ export async function recordFinancialExpense(
         transaction_type,
         created_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       groupId,
       accountType,
       negativeAmount,
@@ -2052,16 +2248,1270 @@ export async function recordFinancialExpense(
       timestamp,
     );
 
-    transactionId =
-      result.lastInsertRowId;
+  await db.runAsync(
+    `UPDATE financial_accounts
+     SET
+       balance = balance + ?,
+       updated_at = ?
+     WHERE group_id = ?
+     AND account_type = ?`,
+    negativeAmount,
+    timestamp,
+    groupId,
+    accountType,
+  );
+
+  await recordGroupActivity(
+    groupId,
+  );
+
+  return result.lastInsertRowId;
+}
+
+export async function recordSavings(
+  groupId: number,
+  memberId: number,
+  amount: number,
+  meetingId: number | null = null,
+): Promise<number> {
+  return recordFinancialIncome(
+    groupId,
+    'savings',
+    amount,
+    'Member savings contribution',
+    memberId,
+    meetingId,
+    'savings_contribution',
+  );
+}
+
+export async function recordLoanFund(
+  groupId: number,
+  amount: number,
+  reason: string,
+  meetingId: number | null = null,
+): Promise<number> {
+  return recordFinancialIncome(
+    groupId,
+    'loan_fund',
+    amount,
+    reason,
+    null,
+    meetingId,
+    'loan_fund',
+  );
+}
+
+export async function issueLoan(
+  groupId: number,
+  memberId: number,
+  amount: number,
+  reason = 'Loan issued to member',
+  meetingId: number | null = null,
+): Promise<number> {
+  const db = await getDatabase();
+
+  if (
+    !Number.isFinite(amount) ||
+    amount <= 0
+  ) {
+    throw new Error(
+      'Loan amount must be greater than zero.',
+    );
+  }
+
+  if (!normalizeText(reason)) {
+    throw new Error(
+      'A reason is required for every loan.',
+    );
+  }
+
+  const account =
+    await getFinancialAccount(
+      groupId,
+      'loan_fund',
+    );
+
+  if (!account) {
+    throw new Error(
+      'Loan Fund account was not found.',
+    );
+  }
+
+  if (account.balance < amount) {
+    throw new Error(
+      'Insufficient Loan Fund balance.',
+    );
+  }
+
+  const timestamp = now();
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO financial_transactions (
+        group_id,
+        account_type,
+        amount,
+        reason,
+        member_id,
+        meeting_id,
+        transaction_type,
+        created_at
+      )
+      VALUES (?, 'loan_fund', ?, ?, ?, ?, 'loan_issued', ?)`,
+      groupId,
+      -Math.abs(amount),
+      normalizeText(reason),
+      memberId,
+      meetingId,
+      timestamp,
+    );
+
+  await db.runAsync(
+    `UPDATE financial_accounts
+     SET
+       balance = balance - ?,
+       updated_at = ?
+     WHERE group_id = ?
+     AND account_type = 'loan_fund'`,
+    amount,
+    timestamp,
+    groupId,
+  );
+
+  await recordGroupActivity(
+    groupId,
+  );
+
+  return result.lastInsertRowId;
+}
+
+export async function recordLoanRepayment(
+  groupId: number,
+  memberId: number,
+  amount: number,
+  meetingId: number | null = null,
+  reason = 'Loan repayment',
+): Promise<number> {
+  return recordFinancialIncome(
+    groupId,
+    'loan_repayment',
+    amount,
+    reason,
+    memberId,
+    meetingId,
+    'loan_repayment',
+  );
+}
+
+export async function recordSocialFund(
+  groupId: number,
+  amount: number,
+  meetingId: number | null = null,
+  memberId: number | null = null,
+  reason = 'Social fund contribution',
+): Promise<number> {
+  return recordFinancialIncome(
+    groupId,
+    'social_fund',
+    amount,
+    reason,
+    memberId,
+    meetingId,
+    'social_fund_contribution',
+  );
+}
+
+export async function recordFine(
+  groupId: number,
+  amount: number,
+  reason: string,
+  memberId: number | null = null,
+  meetingId: number | null = null,
+): Promise<number> {
+  return recordFinancialIncome(
+    groupId,
+    'fines',
+    amount,
+    reason,
+    memberId,
+    meetingId,
+    'fine',
+  );
+}
+
+export async function recordExternalFund(
+  groupId: number,
+  amount: number,
+  reason: string,
+  meetingId: number | null = null,
+): Promise<number> {
+  return recordFinancialIncome(
+    groupId,
+    'external_fund',
+    amount,
+    reason,
+    null,
+    meetingId,
+    'external_fund',
+  );
+}
+
+export async function recordExpenditure(
+  groupId: number,
+  amount: number,
+  reason: string,
+  meetingId: number | null = null,
+): Promise<number> {
+  return recordFinancialExpense(
+    groupId,
+    'expenditure_fund',
+    amount,
+    reason,
+    null,
+    meetingId,
+    'expenditure',
+  );
+}
+
+export async function recordInsuranceContribution(
+  groupId: number,
+  memberId: number,
+  amount: number,
+  meetingId: number | null = null,
+): Promise<number> {
+  return recordFinancialIncome(
+    groupId,
+    'insurance_fund',
+    amount,
+    'Insurance contribution',
+    memberId,
+    meetingId,
+    'insurance_contribution',
+  );
+}
+
+export async function recordInsuranceBenefit(
+  groupId: number,
+  memberId: number,
+  amount: number,
+  reason: string,
+  meetingId: number | null = null,
+): Promise<number> {
+  const db = await getDatabase();
+
+  if (
+    !Number.isFinite(amount) ||
+    amount <= 0
+  ) {
+    throw new Error(
+      'Insurance benefit amount must be greater than zero.',
+    );
+  }
+
+  if (!normalizeText(reason)) {
+    throw new Error(
+      'A reason is required for every insurance benefit.',
+    );
+  }
+
+  const contribution =
+    await db.getFirstAsync<{
+      total: number;
+    }>(
+      `SELECT
+        COALESCE(
+          SUM(amount),
+          0
+        ) AS total
+       FROM financial_transactions
+       WHERE group_id = ?
+       AND account_type = 'insurance_fund'
+       AND member_id = ?
+       AND transaction_type = 'insurance_contribution'`,
+      groupId,
+      memberId,
+    );
+
+  if (
+    !contribution ||
+    contribution.total <= 0
+  ) {
+    throw new Error(
+      'This member is not insured and cannot receive an insurance benefit.',
+    );
+  }
+
+  const insuranceAccount =
+    await getFinancialAccount(
+      groupId,
+      'insurance_fund',
+    );
+
+  if (!insuranceAccount) {
+    throw new Error(
+      'Insurance Fund account was not found.',
+    );
+  }
+
+  if (
+    insuranceAccount.balance <
+    amount
+  ) {
+    throw new Error(
+      'Insufficient Insurance Fund balance.',
+    );
+  }
+
+  const timestamp = now();
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO financial_transactions (
+        group_id,
+        account_type,
+        amount,
+        reason,
+        member_id,
+        meeting_id,
+        transaction_type,
+        created_at
+      )
+      VALUES (?, 'insurance_fund', ?, ?, ?, ?, 'insurance_benefit', ?)`,
+      groupId,
+      -Math.abs(amount),
+      normalizeText(reason),
+      memberId,
+      meetingId,
+      timestamp,
+    );
+
+  await db.runAsync(
+    `UPDATE financial_accounts
+     SET
+       balance = balance - ?,
+       updated_at = ?
+     WHERE group_id = ?
+     AND account_type = 'insurance_fund'`,
+    amount,
+    timestamp,
+    groupId,
+  );
+
+  await recordGroupActivity(
+    groupId,
+  );
+
+  return result.lastInsertRowId;
+}
+
+export async function getFinancialSummary(
+  groupId: number,
+): Promise<FinancialSummary> {
+  const db = await getDatabase();
+
+  await ensureFinancialAccountsForGroup(
+    db,
+    groupId,
+  );
+
+  const rows =
+    await db.getAllAsync<{
+      account_type: string;
+      balance: number;
+    }>(
+      `SELECT
+        account_type,
+        balance
+       FROM financial_accounts
+       WHERE group_id = ?`,
+      groupId,
+    );
+
+  const balances: Record<
+    FinancialAccountType,
+    number
+  > = {
+    savings: 0,
+    loan_fund: 0,
+    loan_repayment: 0,
+    social_fund: 0,
+    fines: 0,
+    external_fund: 0,
+    expenditure_fund: 0,
+    insurance_fund: 0,
+  };
+
+  for (const row of rows) {
+    if (
+      isFinancialAccountType(
+        row.account_type,
+      )
+    ) {
+      balances[row.account_type] =
+        Number(row.balance) || 0;
+    }
+  }
+
+  const partial = {
+    savings: balances.savings,
+    loanFund: balances.loan_fund,
+    loanRepayment:
+      balances.loan_repayment,
+    socialFund:
+      balances.social_fund,
+    fines: balances.fines,
+    externalFund:
+      balances.external_fund,
+    expenditureFund:
+      balances.expenditure_fund,
+    insuranceFund:
+      balances.insurance_fund,
+  };
+
+  return {
+    ...partial,
+    fundBalance:
+      calculateFundBalance(
+        partial,
+      ),
+  };
+}
+
+export async function getFinancialTransactions(
+  groupId: number,
+): Promise<FinancialTransactionRecord[]> {
+  const db = await getDatabase();
+
+  return db.getAllAsync<FinancialTransactionRecord>(
+    `SELECT
+      id,
+      group_id,
+      account_type,
+      amount,
+      reason,
+      member_id,
+      meeting_id,
+      transaction_type,
+      created_at
+     FROM financial_transactions
+     WHERE group_id = ?
+     ORDER BY created_at DESC, id DESC`,
+    groupId,
+  );
+}
+
+export async function getFinancialTransactionsByAccount(
+  groupId: number,
+  accountType: FinancialAccountType,
+): Promise<FinancialTransactionRecord[]> {
+  const db = await getDatabase();
+
+  return db.getAllAsync<FinancialTransactionRecord>(
+    `SELECT
+      id,
+      group_id,
+      account_type,
+      amount,
+      reason,
+      member_id,
+      meeting_id,
+      transaction_type,
+      created_at
+     FROM financial_transactions
+     WHERE group_id = ?
+     AND account_type = ?
+     ORDER BY created_at DESC, id DESC`,
+    groupId,
+    accountType,
+  );
+}
+
+export async function getLoansOut(
+  groupId: number,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const issued =
+    await db.getFirstAsync<{
+      total: number;
+    }>(
+      `SELECT
+        COALESCE(
+          SUM(
+            CASE
+              WHEN transaction_type = 'loan_issued'
+              THEN ABS(amount)
+              ELSE 0
+            END
+          ),
+          0
+        ) AS total
+       FROM financial_transactions
+       WHERE group_id = ?`,
+      groupId,
+    );
+
+  const repayments =
+    await db.getFirstAsync<{
+      total: number;
+    }>(
+      `SELECT
+        COALESCE(
+          SUM(
+            CASE
+              WHEN transaction_type = 'loan_repayment'
+              THEN ABS(amount)
+              ELSE 0
+            END
+          ),
+          0
+        ) AS total
+       FROM financial_transactions
+       WHERE group_id = ?`,
+      groupId,
+    );
+
+  return Math.max(
+    0,
+    (issued?.total ?? 0) -
+      (repayments?.total ?? 0),
+  );
+}
+
+export async function getActiveMemberCount(
+  groupId: number,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const result =
+    await db.getFirstAsync<{
+      count: number;
+    }>(
+      `SELECT COUNT(*) AS count
+       FROM members
+       WHERE group_id = ?
+       AND status = 'active'`,
+      groupId,
+    );
+
+  return result?.count ?? 0;
+}
+
+/* ============================================================
+   MEMBER PASSCODES
+   ============================================================ */
+
+export async function setMemberPasscode(
+  memberId: number,
+  passcode: string,
+): Promise<void> {
+  const db = await getDatabase();
+
+  if (!isValidPasscode(passcode)) {
+    throw new Error(
+      'Passcode must contain exactly 4 characters using A-Z, a-z, 1-9, ., /, $ or -.',
+    );
+  }
+
+  const member =
+    await db.getFirstAsync<{
+      phone: string | null;
+    }>(
+      `SELECT phone
+       FROM members
+       WHERE id = ?
+       LIMIT 1`,
+      memberId,
+    );
+
+  if (!member) {
+    throw new Error(
+      'Member not found.',
+    );
+  }
+
+  if (!normalizeText(member.phone)) {
+    throw new Error(
+      'Only members with a phone number can have a passcode.',
+    );
+  }
+
+  const credential =
+    await db.getFirstAsync<{
+      salt: string;
+    }>(
+      `SELECT salt
+       FROM member_credentials
+       WHERE member_id = ?
+       LIMIT 1`,
+      memberId,
+    );
+
+  const salt =
+    credential?.salt ??
+    Crypto.randomUUID();
+
+  const passcodeHash =
+    await hashPasscode(
+      passcode,
+      salt,
+    );
+
+  const timestamp = now();
+
+  await db.runAsync(
+    `INSERT INTO member_credentials (
+      member_id,
+      salt,
+      passcode_hash,
+      phone_eligible,
+      failed_attempts,
+      locked_until,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, 1, 0, NULL, ?, ?)
+    ON CONFLICT(member_id)
+    DO UPDATE SET
+      salt = excluded.salt,
+      passcode_hash = excluded.passcode_hash,
+      phone_eligible = 1,
+      failed_attempts = 0,
+      locked_until = NULL,
+      updated_at = excluded.updated_at`,
+    memberId,
+    salt,
+    passcodeHash,
+    timestamp,
+    timestamp,
+  );
+}
+
+export async function hasMemberPasscode(
+  memberId: number,
+): Promise<boolean> {
+  const db = await getDatabase();
+
+  const result =
+    await db.getFirstAsync<{
+      passcode_hash: string | null;
+    }>(
+      `SELECT passcode_hash
+       FROM member_credentials
+       WHERE member_id = ?
+       LIMIT 1`,
+      memberId,
+    );
+
+  return Boolean(
+    result?.passcode_hash,
+  );
+}
+
+export async function verifyMemberPasscode(
+  memberId: number,
+  passcode: string,
+): Promise<boolean> {
+  const db = await getDatabase();
+
+  if (!isValidPasscode(passcode)) {
+    return false;
+  }
+
+  const credential =
+    await db.getFirstAsync<{
+      salt: string;
+      passcode_hash: string | null;
+      failed_attempts: number;
+      locked_until: string | null;
+    }>(
+      `SELECT
+        salt,
+        passcode_hash,
+        failed_attempts,
+        locked_until
+       FROM member_credentials
+       WHERE member_id = ?
+       LIMIT 1`,
+      memberId,
+    );
+
+  if (!credential?.passcode_hash) {
+    return false;
+  }
+
+  if (
+    credential.locked_until &&
+    new Date(
+      credential.locked_until,
+    ).getTime() > Date.now()
+  ) {
+    return false;
+  }
+
+  const suppliedHash =
+    await hashPasscode(
+      passcode,
+      credential.salt,
+    );
+
+  const success =
+    suppliedHash ===
+    credential.passcode_hash;
+
+  await db.runAsync(
+    `INSERT INTO member_auth_attempts (
+      member_id,
+      success,
+      attempted_at
+    )
+    VALUES (?, ?, ?)`,
+    memberId,
+    success ? 1 : 0,
+    now(),
+  );
+
+  if (success) {
+    await db.runAsync(
+      `UPDATE member_credentials
+       SET
+         failed_attempts = 0,
+         locked_until = NULL,
+         updated_at = ?
+       WHERE member_id = ?`,
+      now(),
+      memberId,
+    );
+
+    return true;
+  }
+
+  const attempts =
+    credential.failed_attempts + 1;
+
+  if (attempts >= 5) {
+    const lockedUntil =
+      new Date();
+
+    lockedUntil.setMinutes(
+      lockedUntil.getMinutes() + 15,
+    );
 
     await db.runAsync(
-      `
-      UPDATE financial_accounts
-      SET balance = balance + ?,
-          updated_at = ?
-      WHERE group_id = ?
-        AND account_type = ?
-      `,
-      negativeAmount,
-     
+      `UPDATE member_credentials
+       SET
+         failed_attempts = 0,
+         locked_until = ?,
+         updated_at = ?
+       WHERE member_id = ?`,
+      lockedUntil.toISOString(),
+      now(),
+      memberId,
+    );
+  } else {
+    await db.runAsync(
+      `UPDATE member_credentials
+       SET
+         failed_attempts = ?,
+         updated_at = ?
+       WHERE member_id = ?`,
+      attempts,
+      now(),
+      memberId,
+    );
+  }
+
+  return false;
+}
+
+export async function resetMemberPasscode(
+  memberId: number,
+  newPasscode: string,
+): Promise<void> {
+  await setMemberPasscode(
+    memberId,
+    newPasscode,
+  );
+}
+
+export async function signMemberTransaction(
+  memberId: number,
+  passcode: string,
+  transactionType: string,
+  transactionId: number | null = null,
+): Promise<boolean> {
+  const verified =
+    await verifyMemberPasscode(
+      memberId,
+      passcode,
+    );
+
+  if (!verified) {
+    return false;
+  }
+
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `INSERT INTO member_transaction_signatures (
+      member_id,
+      transaction_type,
+      transaction_id,
+      signed_at
+    )
+    VALUES (?, ?, ?, ?)`,
+    memberId,
+    normalizeText(transactionType),
+    transactionId,
+    now(),
+  );
+
+  return true;
+}
+
+/* ============================================================
+   MEETINGS AND APP ACCESS
+   ============================================================ */
+
+export async function createMeeting(
+  groupId: number,
+  meetingDate: string,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const timestamp = now();
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO group_meetings (
+        group_id,
+        meeting_date,
+        opened_at,
+        status,
+        created_at
+      )
+      VALUES (?, ?, ?, 'open', ?)`,
+      groupId,
+      meetingDate,
+      timestamp,
+      timestamp,
+    );
+
+  await recordGroupActivity(
+    groupId,
+  );
+
+  return result.lastInsertRowId;
+}
+
+export async function openAppAccess(
+  groupId: number,
+  meetingId: number | null,
+  authorizers: Array<{
+    memberId: number;
+    passcode: string;
+    role: 'executive' | 'member';
+  }>,
+): Promise<number> {
+  const db = await getDatabase();
+
+  if (authorizers.length !== 3) {
+    throw new Error(
+      'Exactly three members are required to open access.',
+    );
+  }
+
+  const uniqueMembers =
+    new Set(
+      authorizers.map(
+        (item) => item.memberId,
+      ),
+    );
+
+  if (uniqueMembers.size !== 3) {
+    throw new Error(
+      'The three authorizers must be different members.',
+    );
+  }
+
+  const executives =
+    authorizers.filter(
+      (item) =>
+        item.role === 'executive',
+    );
+
+  const ordinaryMembers =
+    authorizers.filter(
+      (item) =>
+        item.role === 'member',
+    );
+
+  if (
+    executives.length !== 2 ||
+    ordinaryMembers.length !== 1
+  ) {
+    throw new Error(
+      'Access requires exactly 2 executive members and 1 ordinary member.',
+    );
+  }
+
+  for (const authorizer of authorizers) {
+    const member =
+      await db.getFirstAsync<{
+        id: number;
+        group_id: number;
+        role: string;
+        phone: string | null;
+      }>(
+        `SELECT
+          id,
+          group_id,
+          role,
+          phone
+         FROM members
+         WHERE id = ?
+         AND status = 'active'
+         LIMIT 1`,
+        authorizer.memberId,
+      );
+
+    if (
+      !member ||
+      member.group_id !== groupId
+    ) {
+      throw new Error(
+        'Every authorizer must be an active member of this group.',
+      );
+    }
+
+    const actualExecutive =
+      member.role !== 'member';
+
+    if (
+      authorizer.role ===
+        'executive' &&
+      !actualExecutive
+    ) {
+      throw new Error(
+        'An executive authorizer must have an executive role.',
+      );
+    }
+
+    if (
+      authorizer.role ===
+        'member' &&
+      actualExecutive
+    ) {
+      throw new Error(
+        'The ordinary authorizer must not be an executive.',
+      );
+    }
+
+    const verified =
+      await verifyMemberPasscode(
+        authorizer.memberId,
+        authorizer.passcode,
+      );
+
+    if (!verified) {
+      throw new Error(
+        `Passcode verification failed for member ${member.id}.`,
+      );
+    }
+  }
+
+  const sessionResult =
+    await db.runAsync(
+      `INSERT INTO app_access_sessions (
+        group_id,
+        meeting_id,
+        opened_at,
+        status
+      )
+      VALUES (?, ?, ?, 'open')`,
+      groupId,
+      meetingId,
+      now(),
+    );
+
+  const sessionId =
+    sessionResult.lastInsertRowId;
+
+  for (const authorizer of authorizers) {
+    await db.runAsync(
+      `INSERT INTO app_access_authorizers (
+        session_id,
+        member_id,
+        authorizer_role,
+        authorized_at
+      )
+      VALUES (?, ?, ?, ?)`,
+      sessionId,
+      authorizer.memberId,
+      authorizer.role,
+      now(),
+    );
+  }
+
+  await recordGroupActivity(
+    groupId,
+  );
+
+  return sessionId;
+}
+
+export async function closeAppAccess(
+  sessionId: number,
+): Promise<void> {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `UPDATE app_access_sessions
+     SET
+       closed_at = ?,
+       status = 'closed'
+     WHERE id = ?`,
+    now(),
+    sessionId,
+  );
+}
+
+/* ============================================================
+   MEETING CLOSURE
+   ============================================================ */
+
+/**
+ * Existing meeting closure function retained
+ * for compatibility.
+ *
+ * Individual member statements are stored separately
+ * using saveMemberStatement().
+ */
+export async function closeMeeting(
+  meetingId: number,
+  totalSavings: number,
+  loanFund: number,
+  groupFund: number,
+): Promise<void> {
+  const db = await getDatabase();
+
+  const timestamp = now();
+
+  await db.runAsync(
+    `UPDATE group_meetings
+     SET
+       closed_at = ?,
+       status = 'closed'
+     WHERE id = ?`,
+    timestamp,
+    meetingId,
+  );
+
+  await db.runAsync(
+    `INSERT INTO meeting_closures (
+      meeting_id,
+      closed_at,
+      total_savings,
+      loan_fund,
+      group_fund
+    )
+    VALUES (?, ?, ?, ?, ?)`,
+    meetingId,
+    timestamp,
+    totalSavings,
+    loanFund,
+    groupFund,
+  );
+
+  const meeting =
+    await db.getFirstAsync<{
+      group_id: number;
+    }>(
+      `SELECT group_id
+       FROM group_meetings
+       WHERE id = ?
+       LIMIT 1`,
+      meetingId,
+    );
+
+  if (meeting) {
+    await recordGroupActivity(
+      meeting.group_id,
+    );
+  }
+}
+
+/**
+ * Saves an individual member's meeting statement.
+ *
+ * Each member can receive:
+ * - their individual total savings
+ * - their individual loan balance
+ * - their individual loan due date
+ */
+export async function saveMemberStatement(
+  meetingId: number,
+  memberId: number,
+  individualTotalSavings: number,
+  individualLoanBalance: number,
+  individualLoanDueDate: string | null,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO member_statement_records (
+        meeting_id,
+        member_id,
+        individual_total_savings,
+        individual_loan_balance,
+        individual_loan_due_date,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?)`,
+      meetingId,
+      memberId,
+      individualTotalSavings,
+      individualLoanBalance,
+      individualLoanDueDate,
+      now(),
+    );
+
+  return result.lastInsertRowId;
+}
+
+/* ============================================================
+   NOTIFICATIONS
+   ============================================================ */
+
+export async function queueImportantGroupNotification(
+  groupId: number,
+  title: string,
+  message: string,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO notification_queue (
+        group_id,
+        member_id,
+        notification_type,
+        priority,
+        title,
+        message,
+        created_at,
+        status
+      )
+      VALUES (
+        ?,
+        NULL,
+        'group_summary',
+        'important',
+        ?,
+        ?,
+        ?,
+        'pending'
+      )`,
+      groupId,
+      title,
+      message,
+      now(),
+    );
+
+  return result.lastInsertRowId;
+}
+
+export async function queueImportantMemberNotification(
+  groupId: number,
+  memberId: number,
+  title: string,
+  message: string,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO notification_queue (
+        group_id,
+        member_id,
+        notification_type,
+        priority,
+        title,
+        message,
+        created_at,
+        status
+      )
+      VALUES (
+        ?,
+        ?,
+        'member_statement',
+        'important',
+        ?,
+        ?,
+        ?,
+        'pending'
+      )`,
+      groupId,
+      memberId,
+      title,
+      message,
+      now(),
+    );
+
+  return result.lastInsertRowId;
+}
+
+export async function getPendingNotifications(): Promise<
+  Array<{
+    id: number;
+    group_id: number;
+    member_id: number | null;
+    notification_type: string;
+    priority: string;
+    title: string;
+    message: string;
+    created_at: string;
+    status: string;
+  }>
+> {
+  const db = await getDatabase();
+
+  return db.getAllAsync(
+    `SELECT *
+     FROM notification_queue
+     WHERE status = 'pending'
+     ORDER BY
+       CASE
+         WHEN priority = 'important' THEN 0
+         ELSE 1
+       END,
+       created_at ASC`,
+  );
+}
+
+/* ============================================================
+   GROUP ID CHECK
+   ============================================================ */
+
+export async function checkGroupIdRange(): Promise<
+  Array<{
+    id: number;
+    group_number: string | number;
+    group_name: string;
+    status: string;
+  }>
+> {
+  const db = await getDatabase();
+
+  return db.getAllAsync(
+    `SELECT
+      id,
+      group_number,
+      group_name,
+      status
+     FROM groups
+     WHERE id BETWEEN 2000 AND 2009`,
+  );
+  }
