@@ -39,6 +39,343 @@ export type NextOfKinRecord = {
   created_at: string;
   updated_at: string;
 };
+/* ============================================================
+   VSLA SETUP RULES
+   ============================================================ */
+
+/**
+ * Returns the VSLA setup rules belonging to one group.
+ */
+export async function getVSLASetupRules(
+  groupId: number,
+): Promise<VSLASetupRuleRecord | null> {
+  const db = await getDatabase();
+
+  let rules =
+    await db.getFirstAsync<VSLASetupRuleRecord>(
+      `SELECT *
+       FROM vsla_setup_rules
+       WHERE group_id = ?
+       LIMIT 1`,
+      groupId,
+    );
+
+  /**
+   * This also supports groups that already existed
+   * before the VSLA setup rules were added.
+   */
+  if (!rules) {
+    await createDefaultVSLASetupRules(
+      db,
+      groupId,
+    );
+
+    rules =
+      await db.getFirstAsync<VSLASetupRuleRecord>(
+        `SELECT *
+         FROM vsla_setup_rules
+         WHERE group_id = ?
+         LIMIT 1`,
+        groupId,
+      );
+  }
+
+  return rules ?? null;
+}
+
+/**
+ * Updates the VSLA setup rules for one group.
+ *
+ * Only the supplied fields are changed.
+ * The group number and constitution are not changed.
+ */
+export async function updateVSLASetupRules(
+  groupId: number,
+  data: {
+    shareValue?: number;
+    minimumSharesPerMeeting?: number;
+    maximumSharesPerMeeting?: number;
+    maximumLoanMultiple?: number;
+    loanInterestPercentage?: number;
+    loanInterestPeriod?: string;
+    maximumLoanRepaymentPeriod?: number;
+    socialFundContribution?: number;
+    absenceFine?: number;
+    lateFine?: number;
+    nonSavingFine?: number;
+    meetingFrequency?: string;
+    cycleDurationMonths?: number;
+    leadershipTermMonths?: number;
+    shareOutEnabled?: boolean;
+  },
+): Promise<VSLASetupRuleRecord> {
+  const db = await getDatabase();
+
+  const group =
+    await getGroupById(groupId);
+
+  if (!group) {
+    throw new Error(
+      'Group not found.',
+    );
+  }
+
+  let current =
+    await getVSLASetupRules(groupId);
+
+  if (!current) {
+    throw new Error(
+      'VSLA setup rules could not be created.',
+    );
+  }
+
+  const shareValue =
+    data.shareValue ??
+    current.share_value;
+
+  const minimumShares =
+    data.minimumSharesPerMeeting ??
+    current.minimum_shares_per_meeting;
+
+  const maximumShares =
+    data.maximumSharesPerMeeting ??
+    current.maximum_shares_per_meeting;
+
+  const maximumLoanMultiple =
+    data.maximumLoanMultiple ??
+    current.maximum_loan_multiple;
+
+  const loanInterestPercentage =
+    data.loanInterestPercentage ??
+    current.loan_interest_percentage;
+
+  const loanInterestPeriod =
+    normalizeText(
+      data.loanInterestPeriod ??
+        current.loan_interest_period,
+    );
+
+  const maximumLoanRepaymentPeriod =
+    data.maximumLoanRepaymentPeriod ??
+    current.maximum_loan_repayment_period;
+
+  const socialFundContribution =
+    data.socialFundContribution ??
+    current.social_fund_contribution;
+
+  const absenceFine =
+    data.absenceFine ??
+    current.absence_fine;
+
+  const lateFine =
+    data.lateFine ??
+    current.late_fine;
+
+  const nonSavingFine =
+    data.nonSavingFine ??
+    current.non_saving_fine;
+
+  const meetingFrequency =
+    normalizeText(
+      data.meetingFrequency ??
+        current.meeting_frequency,
+    );
+
+  const cycleDurationMonths =
+    data.cycleDurationMonths ??
+    current.cycle_duration_months;
+
+  const leadershipTermMonths =
+    data.leadershipTermMonths ??
+    current.leadership_term_months;
+
+  const shareOutEnabled =
+    data.shareOutEnabled === undefined
+      ? current.share_out_enabled
+      : data.shareOutEnabled
+        ? 1
+        : 0;
+
+  if (
+    !Number.isFinite(shareValue) ||
+    shareValue <= 0
+  ) {
+    throw new Error(
+      'Share value must be greater than zero.',
+    );
+  }
+
+  if (
+    !Number.isInteger(minimumShares) ||
+    minimumShares < 1
+  ) {
+    throw new Error(
+      'Minimum shares per meeting must be at least 1.',
+    );
+  }
+
+  if (
+    !Number.isInteger(maximumShares) ||
+    maximumShares < minimumShares
+  ) {
+    throw new Error(
+      'Maximum shares per meeting cannot be less than the minimum.',
+    );
+  }
+
+  if (
+    !Number.isFinite(maximumLoanMultiple) ||
+    maximumLoanMultiple <= 0
+  ) {
+    throw new Error(
+      'Maximum loan multiple must be greater than zero.',
+    );
+  }
+
+  if (
+    !Number.isFinite(loanInterestPercentage) ||
+    loanInterestPercentage < 0
+  ) {
+    throw new Error(
+      'Loan interest percentage cannot be negative.',
+    );
+  }
+
+  if (!loanInterestPeriod) {
+    throw new Error(
+      'Loan interest period is required.',
+    );
+  }
+
+  if (
+    !Number.isInteger(
+      maximumLoanRepaymentPeriod,
+    ) ||
+    maximumLoanRepaymentPeriod <= 0
+  ) {
+    throw new Error(
+      'Maximum loan repayment period must be greater than zero.',
+    );
+  }
+
+  if (
+    !Number.isFinite(
+      socialFundContribution,
+    ) ||
+    socialFundContribution < 0
+  ) {
+    throw new Error(
+      'Social fund contribution cannot be negative.',
+    );
+  }
+
+  if (
+    !Number.isFinite(absenceFine) ||
+    absenceFine < 0
+  ) {
+    throw new Error(
+      'Absence fine cannot be negative.',
+    );
+  }
+
+  if (
+    !Number.isFinite(lateFine) ||
+    lateFine < 0
+  ) {
+    throw new Error(
+      'Late fine cannot be negative.',
+    );
+  }
+
+  if (
+    !Number.isFinite(nonSavingFine) ||
+    nonSavingFine < 0
+  ) {
+    throw new Error(
+      'Non-saving fine cannot be negative.',
+    );
+  }
+
+  if (!meetingFrequency) {
+    throw new Error(
+      'Meeting frequency is required.',
+    );
+  }
+
+  if (
+    !Number.isInteger(
+      cycleDurationMonths,
+    ) ||
+    cycleDurationMonths <= 0
+  ) {
+    throw new Error(
+      'Cycle duration must be greater than zero.',
+    );
+  }
+
+  if (
+    !Number.isInteger(
+      leadershipTermMonths,
+    ) ||
+    leadershipTermMonths <= 0
+  ) {
+    throw new Error(
+      'Leadership term must be greater than zero.',
+    );
+  }
+
+  const timestamp = now();
+
+  await db.runAsync(
+    `UPDATE vsla_setup_rules
+     SET
+       share_value = ?,
+       minimum_shares_per_meeting = ?,
+       maximum_shares_per_meeting = ?,
+       maximum_loan_multiple = ?,
+       loan_interest_percentage = ?,
+       loan_interest_period = ?,
+       maximum_loan_repayment_period = ?,
+       social_fund_contribution = ?,
+       absence_fine = ?,
+       late_fine = ?,
+       non_saving_fine = ?,
+       meeting_frequency = ?,
+       cycle_duration_months = ?,
+       leadership_term_months = ?,
+       share_out_enabled = ?,
+       updated_at = ?
+     WHERE group_id = ?`,
+    shareValue,
+    minimumShares,
+    maximumShares,
+    maximumLoanMultiple,
+    loanInterestPercentage,
+    loanInterestPeriod,
+    maximumLoanRepaymentPeriod,
+    socialFundContribution,
+    absenceFine,
+    lateFine,
+    nonSavingFine,
+    meetingFrequency,
+    cycleDurationMonths,
+    leadershipTermMonths,
+    shareOutEnabled,
+    timestamp,
+    groupId,
+  );
+
+  current =
+    await getVSLASetupRules(groupId);
+
+  if (!current) {
+    throw new Error(
+      'VSLA setup rules were updated but could not be loaded.',
+    );
+  }
+
+  return current;
+  }
 
 export type GroupRuleRecord = {
   id: number;
