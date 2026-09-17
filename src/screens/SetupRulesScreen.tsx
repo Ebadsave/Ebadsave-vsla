@@ -23,21 +23,21 @@ type Props = {
 };
 
 const DEFAULT_RULES: VSLASetupRuleUpdates = {
-  share_value: 1000,
-  minimum_shares_per_meeting: 1,
-  maximum_shares_per_meeting: 5,
-  maximum_loan_multiple: 3,
-  loan_interest_percentage: 5,
-  loan_interest_period: 'per month',
-  maximum_loan_repayment_period: 12,
-  social_fund_contribution: 0,
-  absence_fine: 0,
-  late_fine: 0,
-  non_saving_fine: 0,
-  meeting_frequency: 'weekly',
-  cycle_duration_months: 12,
-  leadership_term_months: 12,
-  share_out_enabled: true,
+  shareValue: 1000,
+  minimumSharesPerMeeting: 1,
+  maximumSharesPerMeeting: 5,
+  maximumLoanMultiple: 3,
+  loanInterestPercentage: 5,
+  loanInterestPeriod: 'per month',
+  maximumLoanRepaymentPeriod: 12,
+  socialFundContribution: 0,
+  absenceFine: 0,
+  lateFine: 0,
+  nonSavingFine: 0,
+  meetingFrequency: 'weekly',
+  cycleDurationMonths: 12,
+  leadershipTermMonths: 12,
+  shareOutEnabled: true,
 };
 
 export default function SetupRulesScreen({
@@ -65,32 +65,32 @@ export default function SetupRulesScreen({
       }
 
       setRules({
-        share_value: current.share_value,
-        minimum_shares_per_meeting:
+        shareValue: current.share_value,
+        minimumSharesPerMeeting:
           current.minimum_shares_per_meeting,
-        maximum_shares_per_meeting:
+        maximumSharesPerMeeting:
           current.maximum_shares_per_meeting,
-        maximum_loan_multiple:
+        maximumLoanMultiple:
           current.maximum_loan_multiple,
-        loan_interest_percentage:
+        loanInterestPercentage:
           current.loan_interest_percentage,
-        loan_interest_period:
+        loanInterestPeriod:
           current.loan_interest_period,
-        maximum_loan_repayment_period:
+        maximumLoanRepaymentPeriod:
           current.maximum_loan_repayment_period,
-        social_fund_contribution:
+        socialFundContribution:
           current.social_fund_contribution,
-        absence_fine: current.absence_fine,
-        late_fine: current.late_fine,
-        non_saving_fine:
+        absenceFine: current.absence_fine,
+        lateFine: current.late_fine,
+        nonSavingFine:
           current.non_saving_fine,
-        meeting_frequency:
+        meetingFrequency:
           current.meeting_frequency,
-        cycle_duration_months:
+        cycleDurationMonths:
           current.cycle_duration_months,
-        leadership_term_months:
+        leadershipTermMonths:
           current.leadership_term_months,
-        share_out_enabled:
+        shareOutEnabled:
           current.share_out_enabled,
       });
     } catch (error) {
@@ -109,7 +109,7 @@ export default function SetupRulesScreen({
     key: K,
     value: VSLASetupRuleUpdates[K],
   ) {
-    setRules((current: VSLASetupRuleUpdates) => ({
+    setRules((current) => ({
       ...current,
       [key]: value,
     }));
@@ -117,14 +117,14 @@ export default function SetupRulesScreen({
 
   async function saveRules() {
     if (
-      Number(rules.share_value) <= 0 ||
-      Number(rules.minimum_shares_per_meeting) <= 0 ||
-      Number(rules.maximum_shares_per_meeting) <= 0 ||
-      Number(rules.maximum_loan_multiple) <= 0 ||
-      Number(rules.loan_interest_percentage) < 0 ||
-      Number(rules.maximum_loan_repayment_period) <= 0 ||
-      Number(rules.cycle_duration_months) <= 0 ||
-      Number(rules.leadership_term_months) <= 0
+      Number(rules.shareValue) <= 0 ||
+      Number(rules.minimumSharesPerMeeting) <= 0 ||
+      Number(rules.maximumSharesPerMeeting) <= 0 ||
+      Number(rules.maximumLoanMultiple) <= 0 ||
+      Number(rules.loanInterestPercentage) < 0 ||
+      Number(rules.maximumLoanRepaymentPeriod) <= 0 ||
+      Number(rules.cycleDurationMonths) <= 0 ||
+      Number(rules.leadershipTermMonths) <= 0
     ) {
       Alert.alert(
         'Invalid Rules',
@@ -134,8 +134,8 @@ export default function SetupRulesScreen({
     }
 
     if (
-      Number(rules.minimum_shares_per_meeting) >
-      Number(rules.maximum_shares_per_meeting)
+      Number(rules.minimumSharesPerMeeting) >
+      Number(rules.maximumSharesPerMeeting)
     ) {
       Alert.alert(
         'Invalid Shares',
@@ -149,27 +149,27 @@ export default function SetupRulesScreen({
 
       await updateVSLASetupRules(groupId, {
         ...rules,
-        share_value: Number(rules.share_value),
-        minimum_shares_per_meeting:
-          Number(rules.minimum_shares_per_meeting),
-        maximum_shares_per_meeting:
-          Number(rules.maximum_shares_per_meeting),
-        maximum_loan_multiple:
-          Number(rules.maximum_loan_multiple),
-        loan_interest_percentage:
-          Number(rules.loan_interest_percentage),
-        maximum_loan_repayment_period:
-          Number(rules.maximum_loan_repayment_period),
-        social_fund_contribution:
-          Number(rules.social_fund_contribution),
-        absence_fine: Number(rules.absence_fine),
-        late_fine: Number(rules.late_fine),
-        non_saving_fine:
-          Number(rules.non_saving_fine),
-        cycle_duration_months:
-          Number(rules.cycle_duration_months),
-        leadership_term_months:
-          Number(rules.leadership_term_months),
+        shareValue: Number(rules.shareValue),
+        minimumSharesPerMeeting:
+          Number(rules.minimumSharesPerMeeting),
+        maximumSharesPerMeeting:
+          Number(rules.maximumSharesPerMeeting),
+        maximumLoanMultiple:
+          Number(rules.maximumLoanMultiple),
+        loanInterestPercentage:
+          Number(rules.loanInterestPercentage),
+        maximumLoanRepaymentPeriod:
+          Number(rules.maximumLoanRepaymentPeriod),
+        socialFundContribution:
+          Number(rules.socialFundContribution),
+        absenceFine: Number(rules.absenceFine),
+        lateFine: Number(rules.lateFine),
+        nonSavingFine:
+          Number(rules.nonSavingFine),
+        cycleDurationMonths:
+          Number(rules.cycleDurationMonths),
+        leadershipTermMonths:
+          Number(rules.leadershipTermMonths),
       });
 
       await loadRules();
@@ -228,10 +228,10 @@ export default function SetupRulesScreen({
 
         <TextInput
           style={styles.input}
-          value={String(rules.share_value)}
+          value={String(rules.shareValue)}
           onChangeText={(value) =>
             updateRule(
-              'share_value',
+              'shareValue',
               Number(value) || 0,
             )
           }
@@ -246,11 +246,11 @@ export default function SetupRulesScreen({
         <TextInput
           style={styles.input}
           value={String(
-            rules.minimum_shares_per_meeting,
+            rules.minimumSharesPerMeeting,
           )}
           onChangeText={(value) =>
             updateRule(
-              'minimum_shares_per_meeting',
+              'minimumSharesPerMeeting',
               Number(value) || 0,
             )
           }
@@ -265,11 +265,11 @@ export default function SetupRulesScreen({
         <TextInput
           style={styles.input}
           value={String(
-            rules.maximum_shares_per_meeting,
+            rules.maximumSharesPerMeeting,
           )}
           onChangeText={(value) =>
             updateRule(
-              'maximum_shares_per_meeting',
+              'maximumSharesPerMeeting',
               Number(value) || 0,
             )
           }
@@ -290,11 +290,11 @@ export default function SetupRulesScreen({
         <TextInput
           style={styles.input}
           value={String(
-            rules.maximum_loan_multiple,
+            rules.maximumLoanMultiple,
           )}
           onChangeText={(value) =>
             updateRule(
-              'maximum_loan_multiple',
+              'maximumLoanMultiple',
               Number(value) || 0,
             )
           }
@@ -309,11 +309,11 @@ export default function SetupRulesScreen({
         <TextInput
           style={styles.input}
           value={String(
-            rules.loan_interest_percentage,
+            rules.loanInterestPercentage,
           )}
           onChangeText={(value) =>
             updateRule(
-              'loan_interest_percentage',
+              'loanInterestPercentage',
               Number(value) || 0,
             )
           }
@@ -335,13 +335,13 @@ export default function SetupRulesScreen({
               key={period}
               style={[
                 styles.optionButton,
-                rules.loan_interest_period ===
+                rules.loanInterestPeriod ===
                   period &&
                   styles.optionButtonActive,
               ]}
               onPress={() =>
                 updateRule(
-                  'loan_interest_period',
+                  'loanInterestPeriod',
                   period,
                 )
               }
@@ -349,7 +349,7 @@ export default function SetupRulesScreen({
               <Text
                 style={[
                   styles.optionText,
-                  rules.loan_interest_period ===
+                  rules.loanInterestPeriod ===
                     period &&
                     styles.optionTextActive,
                 ]}
@@ -367,11 +367,11 @@ export default function SetupRulesScreen({
         <TextInput
           style={styles.input}
           value={String(
-            rules.maximum_loan_repayment_period,
+            rules.maximumLoanRepaymentPeriod,
           )}
           onChangeText={(value) =>
             updateRule(
-              'maximum_loan_repayment_period',
+              'maximumLoanRepaymentPeriod',
               Number(value) || 0,
             )
           }
@@ -392,11 +392,11 @@ export default function SetupRulesScreen({
         <TextInput
           style={styles.input}
           value={String(
-            rules.social_fund_contribution,
+            rules.socialFundContribution,
           )}
           onChangeText={(value) =>
             updateRule(
-              'social_fund_contribution',
+              'socialFundContribution',
               Number(value) || 0,
             )
           }
@@ -410,10 +410,10 @@ export default function SetupRulesScreen({
 
         <TextInput
           style={styles.input}
-          value={String(rules.absence_fine)}
+          value={String(rules.absenceFine)}
           onChangeText={(value) =>
             updateRule(
-              'absence_fine',
+              'absenceFine',
               Number(value) || 0,
             )
           }
@@ -427,10 +427,10 @@ export default function SetupRulesScreen({
 
         <TextInput
           style={styles.input}
-          value={String(rules.late_fine)}
+          value={String(rules.lateFine)}
           onChangeText={(value) =>
             updateRule(
-              'late_fine',
+              'lateFine',
               Number(value) || 0,
             )
           }
@@ -445,11 +445,11 @@ export default function SetupRulesScreen({
         <TextInput
           style={styles.input}
           value={String(
-            rules.non_saving_fine,
+            rules.nonSavingFine,
           )}
           onChangeText={(value) =>
             updateRule(
-              'non_saving_fine',
+              'nonSavingFine',
               Number(value) || 0,
             )
           }
@@ -477,13 +477,13 @@ export default function SetupRulesScreen({
               key={frequency}
               style={[
                 styles.optionButton,
-                rules.meeting_frequency ===
+                rules.meetingFrequency ===
                   frequency &&
                   styles.optionButtonActive,
               ]}
               onPress={() =>
                 updateRule(
-                  'meeting_frequency',
+                  'meetingFrequency',
                   frequency,
                 )
               }
@@ -491,7 +491,7 @@ export default function SetupRulesScreen({
               <Text
                 style={[
                   styles.optionText,
-                  rules.meeting_frequency ===
+                  rules.meetingFrequency ===
                     frequency &&
                     styles.optionTextActive,
                 ]}
@@ -509,11 +509,11 @@ export default function SetupRulesScreen({
         <TextInput
           style={styles.input}
           value={String(
-            rules.cycle_duration_months,
+            rules.cycleDurationMonths,
           )}
           onChangeText={(value) =>
             updateRule(
-              'cycle_duration_months',
+              'cycleDurationMonths',
               Number(value) || 0,
             )
           }
@@ -528,11 +528,11 @@ export default function SetupRulesScreen({
         <TextInput
           style={styles.input}
           value={String(
-            rules.leadership_term_months,
+            rules.leadershipTermMonths,
           )}
           onChangeText={(value) =>
             updateRule(
-              'leadership_term_months',
+              'leadershipTermMonths',
               Number(value) || 0,
             )
           }
@@ -552,10 +552,10 @@ export default function SetupRulesScreen({
           </View>
 
           <Switch
-            value={rules.share_out_enabled}
+            value={rules.shareOutEnabled}
             onValueChange={(value) =>
               updateRule(
-                'share_out_enabled',
+                'shareOutEnabled',
                 value,
               )
             }
