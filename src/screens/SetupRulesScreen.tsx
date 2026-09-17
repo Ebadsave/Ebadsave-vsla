@@ -12,9 +12,9 @@ import {
 } from 'react-native';
 
 import {
-  getSetupRules,
-  updateSetupRules,
-  GroupSetupRules,
+  getVSLASetupRules,
+  updateVSLASetupRules,
+  VSLASetupRuleUpdates,
 } from '../database/database';
 
 type Props = {
@@ -22,16 +22,31 @@ type Props = {
   executiveMemberId: number;
 };
 
+const DEFAULT_RULES: VSLASetupRuleUpdates = {
+  usesSavings: true,
+  loanCapMultiplier: 3,
+  loanInterestPercentage: 0,
+  loanInterestMethod: 'flat',
+  loanGracePeriodDays: 0,
+  loanRepaymentPeriodDays: 90,
+  loanRequiredCommitteeApprovals: 1,
+  insuranceEnabled: true,
+  insuranceContributionAmount: 0,
+  finesEnabled: true,
+  socialFundEnabled: true,
+  externalFundEnabled: true,
+  expenditureFundEnabled: true,
+};
+
 export default function SetupRulesScreen({
   groupId,
   executiveMemberId,
 }: Props) {
-  const [rules, setRules] = useState<GroupSetupRules | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
+  const [rules, setRules] = useState<VSLASetupRuleUpdates>(DEFAULT_RULES);
   const [passcode, setPasscode] = useState('');
   const [reason, setReason] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     loadRules();
@@ -40,98 +55,94 @@ export default function SetupRulesScreen({
   async function loadRules() {
     try {
       setLoading(true);
-      const data = await getSetupRules(groupId);
-      setRules(data);
+
+      const current = await getVSLASetupRules(groupId);
+
+      setRules({
+        usesSavings: current.usesSavings,
+        loanCapMultiplier: current.loanCapMultiplier,
+        loanInterestPercentage: current.loanInterestPercentage,
+        loanInterestMethod: current.loanInterestMethod,
+        loanGracePeriodDays: current.loanGracePeriodDays,
+        loanRepaymentPeriodDays: current.loanRepaymentPeriodDays,
+        loanRequiredCommitteeApprovals:
+          current.loanRequiredCommitteeApprovals,
+        insuranceEnabled: current.insuranceEnabled,
+        insuranceContributionAmount:
+          current.insuranceContributionAmount,
+        finesEnabled: current.finesEnabled,
+        socialFundEnabled: current.socialFundEnabled,
+        externalFundEnabled: current.externalFundEnabled,
+        expenditureFundEnabled: current.expenditureFundEnabled,
+      });
     } catch (error) {
       Alert.alert(
         'Error',
-        'Unable to load Setup Rules.',
+        error instanceof Error
+          ? error.message
+          : 'Failed to load setup rules.',
       );
     } finally {
       setLoading(false);
     }
   }
 
-  function updateRule<K extends keyof GroupSetupRules>(
+  function updateRule<K extends keyof VSLASetupRuleUpdates>(
     key: K,
-    value: GroupSetupRules[K],
+    value: VSLASetupRuleUpdates[K],
   ) {
-    setRules((current) =>
-      current
-        ? {
-            ...current,
-            [key]: value,
-          }
-        : current,
-    );
+    setRules((current: VSLASetupRuleUpdates) => ({
+      ...current,
+      [key]: value,
+    }));
   }
 
-  async function saveChanges() {
-    if (!rules) return;
-
-    if (passcode.length !== 4) {
-      Alert.alert(
-        'Passcode Required',
-        'Enter your 4-character executive passcode.',
-      );
+  async function saveRules() {
+    if (passcode.trim().length < 4) {
+      Alert.alert('Passcode Required', 'Enter an executive passcode of at least 4 characters.');
       return;
     }
 
     if (!reason.trim()) {
-      Alert.alert(
-        'Reason Required',
-        'Enter a reason for changing the Setup Rules.',
-      );
+      Alert.alert('Reason Required', 'Enter a reason for changing the setup rules.');
       return;
     }
 
-    if (
-      rules.loanCapMultiplier < 2 ||
-      rules.loanCapMultiplier > 100 ||
-      !Number.isInteger(rules.loanCapMultiplier)
-    ) {
-      Alert.alert(
-        'Invalid Multiplier',
-        'Loan multiplier must be a whole number from 2 to 100.',
-      );
+    const multiplier = Number(rules.loanCapMultiplier);
+    const interest = Number(rules.loanInterestPercentage);
+    const grace = Number(rules.loanGracePeriodDays);
+    const repayment = Number(rules.loanRepaymentPeriodDays);
+    const approvals = Number(rules.loanRequiredCommitteeApprovals);
+    const insuranceAmount = Number(rules.insuranceContributionAmount);
+
+    if (!Number.isInteger(multiplier) || multiplier < 2 || multiplier > 100) {
+      Alert.alert('Invalid Loan Multiplier', 'Loan multiplier must be an integer from 2 to 100.');
       return;
     }
 
-    if (rules.loanInterestPercentage < 0) {
-      Alert.alert(
-        'Invalid Interest',
-        'Interest percentage cannot be negative.',
-      );
+    if (!Number.isFinite(interest) || interest < 0) {
+      Alert.alert('Invalid Interest', 'Interest percentage cannot be negative.');
       return;
     }
 
-    if (rules.loanGracePeriodDays < 0) {
-      Alert.alert(
-        'Invalid Grace Period',
-        'Grace period cannot be negative.',
-      );
+    if (!Number.isInteger(grace) || grace < 0) {
+      Alert.alert('Invalid Grace Period', 'Grace period must be 0 or more days.');
       return;
     }
 
-    if (rules.loanRepaymentPeriodDays <= 0) {
-      Alert.alert(
-        'Invalid Repayment Period',
-        'Repayment period must be greater than zero.',
-      );
+    if (!Number.isInteger(repayment) || repayment <= 0) {
+      Alert.alert('Invalid Repayment Period', 'Repayment period must be greater than 0 days.');
       return;
     }
 
-    if (rules.loanRequiredCommitteeApprovals < 0) {
-      Alert.alert(
-        'Invalid Approvals',
-        'Committee approvals cannot be negative.',
-      );
+    if (!Number.isInteger(approvals) || approvals < 0) {
+      Alert.alert('Invalid Approvals', 'Committee approvals must be 0 or more.');
       return;
     }
 
-    if (rules.insuranceContributionAmount < 0) {
+    if (!Number.isFinite(insuranceAmount) || insuranceAmount < 0) {
       Alert.alert(
-        'Invalid Insurance',
+        'Invalid Insurance Contribution',
         'Insurance contribution cannot be negative.',
       );
       return;
@@ -140,11 +151,19 @@ export default function SetupRulesScreen({
     try {
       setSaving(true);
 
-      await updateSetupRules(
+      await updateVSLASetupRules(
         groupId,
         executiveMemberId,
         passcode,
-        rules,
+        {
+          ...rules,
+          loanCapMultiplier: multiplier,
+          loanInterestPercentage: interest,
+          loanGracePeriodDays: grace,
+          loanRepaymentPeriodDays: repayment,
+          loanRequiredCommitteeApprovals: approvals,
+          insuranceContributionAmount: insuranceAmount,
+        },
         undefined,
         reason.trim(),
       );
@@ -154,14 +173,13 @@ export default function SetupRulesScreen({
 
       await loadRules();
 
+      Alert.alert('Saved', 'Setup rules updated successfully.');
+    } catch (error) {
       Alert.alert(
-        'Saved',
-        'Setup Rules have been saved successfully.',
-      );
-    } catch (error: any) {
-      Alert.alert(
-        'Unable to Save',
-        error?.message || 'The Setup Rules could not be saved.',
+        'Error',
+        error instanceof Error
+          ? error.message
+          : 'Failed to update setup rules.',
       );
     } finally {
       setSaving(false);
@@ -172,26 +190,7 @@ export default function SetupRulesScreen({
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#16a34a" />
-        <Text style={styles.loadingText}>
-          Loading Setup Rules...
-        </Text>
-      </View>
-    );
-  }
-
-  if (!rules) {
-    return (
-      <View style={styles.center}>
-        <Text style={styles.errorText}>
-          Setup Rules could not be loaded.
-        </Text>
-
-        <TouchableOpacity
-          style={styles.retryButton}
-          onPress={loadRules}
-        >
-          <Text style={styles.retryText}>Retry</Text>
-        </TouchableOpacity>
+        <Text style={styles.loadingText}>Loading setup rules...</Text>
       </View>
     );
   }
@@ -204,203 +203,124 @@ export default function SetupRulesScreen({
     >
       <View style={styles.header}>
         <Text style={styles.title}>Setup Rules</Text>
-        <Text style={styles.subtitle}>
-          Rules for this VSLA group
-        </Text>
+        <Text style={styles.subtitle}>Rules for this VSLA group</Text>
       </View>
 
-      {/* SAVINGS */}
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Savings Rules</Text>
 
-        <View style={styles.switchRow}>
-          <View style={styles.switchText}>
+        <View style={styles.row}>
+          <View style={styles.rowText}>
             <Text style={styles.label}>Use Savings</Text>
             <Text style={styles.description}>
-              Members' savings can be used when determining loan limits.
+              Members use savings when calculating loan limits.
             </Text>
           </View>
 
           <Switch
             value={rules.usesSavings}
-            onValueChange={(value) =>
-              updateRule('usesSavings', value)
-            }
+            onValueChange={(value) => updateRule('usesSavings', value)}
             trackColor={{
-  false: '#d1d5db',
-  true: '#86efac',
-}}
-            thumbColor={
-              rules.usesSavings ? '#16a34a' : '#f4f4f5'
-            }
+              false: '#d1d5db',
+              true: '#86efac',
+            }}
+            thumbColor="#16a34a"
           />
         </View>
 
-        {rules.usesSavings && (
-          <View style={styles.field}>
-            <Text style={styles.label}>
-              Maximum Loan Multiplier
-            </Text>
-
-            <TextInput
-              style={styles.input}
-              value={String(rules.loanCapMultiplier)}
-              onChangeText={(text) => {
-                const value = Number(text);
-                if (!Number.isNaN(value)) {
-                  updateRule('loanCapMultiplier', value);
-                }
-              }}
-              keyboardType="numeric"
-              placeholder="2 - 100"
-            />
-
-            <Text style={styles.description}>
-              Example: 3 means a member may qualify for up to
-              3× their savings.
-            </Text>
-          </View>
-        )}
+        <Text style={styles.label}>Loan Cap Multiplier</Text>
+        <TextInput
+          style={styles.input}
+          value={String(rules.loanCapMultiplier)}
+          onChangeText={(value) =>
+            updateRule('loanCapMultiplier', Number(value) || 0)
+          }
+          keyboardType="numeric"
+          placeholder="3"
+        />
       </View>
 
-      {/* LOAN RULES */}
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Loan Rules</Text>
 
-        <View style={styles.field}>
-          <Text style={styles.label}>
-            Interest Percentage
-          </Text>
+        <Text style={styles.label}>Interest Percentage</Text>
+        <TextInput
+          style={styles.input}
+          value={String(rules.loanInterestPercentage)}
+          onChangeText={(value) =>
+            updateRule('loanInterestPercentage', Number(value) || 0)
+          }
+          keyboardType="decimal-pad"
+          placeholder="0"
+        />
 
-          <TextInput
-            style={styles.input}
-            value={String(rules.loanInterestPercentage)}
-            onChangeText={(text) => {
-              const value = Number(text);
-              if (!Number.isNaN(value)) {
-                updateRule(
-                  'loanInterestPercentage',
-                  value,
-                );
-              }
-            }}
-            keyboardType="decimal-pad"
-            placeholder="0"
-          />
+        <Text style={styles.label}>Interest Method</Text>
+
+        <View style={styles.methodRow}>
+          {(['fixed', 'flat', 'declining'] as const).map((method) => (
+            <TouchableOpacity
+              key={method}
+              style={[
+                styles.methodButton,
+                rules.loanInterestMethod === method &&
+                  styles.methodButtonActive,
+              ]}
+              onPress={() => updateRule('loanInterestMethod', method)}
+            >
+              <Text
+                style={[
+                  styles.methodText,
+                  rules.loanInterestMethod === method &&
+                    styles.methodTextActive,
+                ]}
+              >
+                {method.charAt(0).toUpperCase() + method.slice(1)}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </View>
 
-        <View style={styles.field}>
-          <Text style={styles.label}>Interest Method</Text>
+        <Text style={styles.label}>Grace Period (Days)</Text>
+        <TextInput
+          style={styles.input}
+          value={String(rules.loanGracePeriodDays)}
+          onChangeText={(value) =>
+            updateRule('loanGracePeriodDays', Number(value) || 0)
+          }
+          keyboardType="numeric"
+          placeholder="0"
+        />
 
-          <View style={styles.optionRow}>
-            {(['fixed', 'flat', 'declining'] as const).map(
-              (method) => (
-                <TouchableOpacity
-                  key={method}
-                  style={[
-                    styles.option,
-                    rules.loanInterestMethod === method &&
-                      styles.optionSelected,
-                  ]}
-                  onPress={() =>
-                    updateRule(
-                      'loanInterestMethod',
-                      method,
-                    )
-                  }
-                >
-                  <Text
-                    style={[
-                      styles.optionText,
-                      rules.loanInterestMethod === method &&
-                        styles.optionTextSelected,
-                    ]}
-                  >
-                    {method.charAt(0).toUpperCase() +
-                      method.slice(1)}
-                  </Text>
-                </TouchableOpacity>
-              ),
-            )}
-          </View>
-        </View>
+        <Text style={styles.label}>Repayment Period (Days)</Text>
+        <TextInput
+          style={styles.input}
+          value={String(rules.loanRepaymentPeriodDays)}
+          onChangeText={(value) =>
+            updateRule('loanRepaymentPeriodDays', Number(value) || 0)
+          }
+          keyboardType="numeric"
+          placeholder="90"
+        />
 
-        <View style={styles.field}>
-          <Text style={styles.label}>
-            Grace Period (Days)
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={String(rules.loanGracePeriodDays)}
-            onChangeText={(text) => {
-              const value = Number(text);
-              if (!Number.isNaN(value)) {
-                updateRule(
-                  'loanGracePeriodDays',
-                  value,
-                );
-              }
-            }}
-            keyboardType="numeric"
-            placeholder="0"
-          />
-        </View>
-
-        <View style={styles.field}>
-          <Text style={styles.label}>
-            Repayment Period (Days)
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={String(
-              rules.loanRepaymentPeriodDays,
-            )}
-            onChangeText={(text) => {
-              const value = Number(text);
-              if (!Number.isNaN(value)) {
-                updateRule(
-                  'loanRepaymentPeriodDays',
-                  value,
-                );
-              }
-            }}
-            keyboardType="numeric"
-            placeholder="90"
-          />
-        </View>
-
-        <View style={styles.field}>
-          <Text style={styles.label}>
-            Required Committee Approvals
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={String(
-              rules.loanRequiredCommitteeApprovals,
-            )}
-            onChangeText={(text) => {
-              const value = Number(text);
-              if (!Number.isNaN(value)) {
-                updateRule(
-                  'loanRequiredCommitteeApprovals',
-                  value,
-                );
-              }
-            }}
-            keyboardType="numeric"
-            placeholder="1"
-          />
-        </View>
+        <Text style={styles.label}>Required Committee Approvals</Text>
+        <TextInput
+          style={styles.input}
+          value={String(rules.loanRequiredCommitteeApprovals)}
+          onChangeText={(value) =>
+            updateRule(
+              'loanRequiredCommitteeApprovals',
+              Number(value) || 0,
+            )
+          }
+          keyboardType="numeric"
+          placeholder="1"
+        />
       </View>
 
-      {/* FUND RULES */}
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Fund Rules</Text>
 
-        <View style={styles.switchRow}>
+        <View style={styles.row}>
           <Text style={styles.label}>Insurance Fund</Text>
           <Switch
             value={rules.insuranceEnabled}
@@ -411,60 +331,38 @@ export default function SetupRulesScreen({
               false: '#d1d5db',
               true: '#86efac',
             }}
-            thumbColor={
-              rules.insuranceEnabled
-                ? '#16a34a'
-                : '#f4f4f5'
-            }
+            thumbColor="#16a34a"
           />
         </View>
 
-        {rules.insuranceEnabled && (
-          <View style={styles.field}>
-            <Text style={styles.label}>
-              Insurance Contribution Amount
-            </Text>
+        <Text style={styles.label}>Insurance Contribution</Text>
+        <TextInput
+          style={styles.input}
+          value={String(rules.insuranceContributionAmount)}
+          onChangeText={(value) =>
+            updateRule(
+              'insuranceContributionAmount',
+              Number(value) || 0,
+            )
+          }
+          keyboardType="decimal-pad"
+          placeholder="0"
+        />
 
-            <TextInput
-              style={styles.input}
-              value={String(
-                rules.insuranceContributionAmount,
-              )}
-              onChangeText={(text) => {
-                const value = Number(text);
-                if (!Number.isNaN(value)) {
-                  updateRule(
-                    'insuranceContributionAmount',
-                    value,
-                  );
-                }
-              }}
-              keyboardType="decimal-pad"
-              placeholder="0"
-            />
-          </View>
-        )}
-
-        <View style={styles.switchRow}>
+        <View style={styles.row}>
           <Text style={styles.label}>Fines Fund</Text>
           <Switch
             value={rules.finesEnabled}
-            onValueChange={(value) =>
-              updateRule('finesEnabled', value)
-            }
+            onValueChange={(value) => updateRule('finesEnabled', value)}
             trackColor={{
               false: '#d1d5db',
               true: '#86efac',
             }}
-            thumbColor={
-              rules.finesEnabled
-                ? '#16a34a'
-                : '#f4f4f5'
-            }
+            thumbColor="#16a34a"
           />
         </View>
 
-        <View style={styles.switchRow}>
+        <View style={styles.row}>
           <Text style={styles.label}>Social Fund</Text>
           <Switch
             value={rules.socialFundEnabled}
@@ -475,123 +373,76 @@ export default function SetupRulesScreen({
               false: '#d1d5db',
               true: '#86efac',
             }}
-            thumbColor={
-              rules.socialFundEnabled
-                ? '#16a34a'
-                : '#f4f4f5'
-            }
+            thumbColor="#16a34a"
           />
         </View>
 
-        <View style={styles.switchRow}>
+        <View style={styles.row}>
           <Text style={styles.label}>External Fund</Text>
           <Switch
             value={rules.externalFundEnabled}
             onValueChange={(value) =>
-              updateRule(
-                'externalFundEnabled',
-                value,
-              )
+              updateRule('externalFundEnabled', value)
             }
             trackColor={{
               false: '#d1d5db',
               true: '#86efac',
             }}
-            thumbColor={
-              rules.externalFundEnabled
-                ? '#16a34a'
-                : '#f4f4f5'
-            }
+            thumbColor="#16a34a"
           />
         </View>
 
-        <View style={styles.switchRow}>
+        <View style={styles.row}>
           <Text style={styles.label}>Expenditure Fund</Text>
           <Switch
             value={rules.expenditureFundEnabled}
             onValueChange={(value) =>
-              updateRule(
-                'expenditureFundEnabled',
-                value,
-              )
+              updateRule('expenditureFundEnabled', value)
             }
             trackColor={{
               false: '#d1d5db',
-              true: '#86efef'
+              true: '#86efac',
             }}
-            thumbColor={
-              rules.expenditureFundEnabled
-                ? '#16a34a'
-                : '#f4f4f5'
-            }
+            thumbColor="#16a34a"
           />
         </View>
       </View>
 
-      {/* AUTHORIZATION */}
       <View style={styles.card}>
-        <Text style={styles.sectionTitle}>
-          Executive Authorization
-        </Text>
+        <Text style={styles.sectionTitle}>Executive Authorization</Text>
 
-        <Text style={styles.description}>
-          An executive must authorize changes to the
-          group's Setup Rules.
-        </Text>
+        <Text style={styles.label}>Executive Passcode</Text>
+        <TextInput
+          style={styles.input}
+          value={passcode}
+          onChangeText={setPasscode}
+          secureTextEntry
+          maxLength={100}
+          placeholder="Enter passcode"
+        />
 
-        <View style={styles.field}>
-          <Text style={styles.label}>
-            Executive Passcode
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={passcode}
-            onChangeText={setPasscode}
-            maxLength={4}
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-            placeholder="4 characters"
-          />
-        </View>
-
-        <View style={styles.field}>
-          <Text style={styles.label}>
-            Reason for Change
-          </Text>
-
-          <TextInput
-            style={[
-              styles.input,
-              styles.reasonInput,
-            ]}
-            value={reason}
-            onChangeText={setReason}
-            multiline
-            placeholder="Enter the reason for changing these rules"
-          />
-        </View>
+        <Text style={styles.label}>Reason for Change</Text>
+        <TextInput
+          style={[styles.input, styles.reasonInput]}
+          value={reason}
+          onChangeText={setReason}
+          multiline
+          placeholder="Enter reason"
+          textAlignVertical="top"
+        />
       </View>
 
       <TouchableOpacity
-        style={[
-          styles.saveButton,
-          saving && styles.saveButtonDisabled,
-        ]}
-        onPress={saveChanges}
+        style={[styles.saveButton, saving && styles.saveButtonDisabled]}
+        onPress={saveRules}
         disabled={saving}
       >
         {saving ? (
           <ActivityIndicator color="#ffffff" />
         ) : (
-          <Text style={styles.saveText}>
-            Save Setup Rules
-          </Text>
+          <Text style={styles.saveButtonText}>Save Setup Rules</Text>
         )}
       </TouchableOpacity>
-
-      <View style={styles.bottomSpace} />
     </ScrollView>
   );
 }
@@ -599,178 +450,122 @@ export default function SetupRulesScreen({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f7f5',
+    backgroundColor: '#f9fafb',
   },
-
   content: {
     padding: 16,
+    paddingBottom: 40,
   },
-
   center: {
     flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
-    backgroundColor: '#f5f7f5',
+    justifyContent: 'center',
+    backgroundColor: '#f9fafb',
   },
-
   loadingText: {
     marginTop: 10,
-    fontSize: 15,
     color: '#4b5563',
   },
-
-  errorText: {
-    fontSize: 16,
-    color: '#dc2626',
-    textAlign: 'center',
-  },
-
-  retryButton: {
-    marginTop: 16,
-    backgroundColor: '#16a34a',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-
-  retryText: {
-    color: '#ffffff',
-    fontWeight: '700',
-  },
-
   header: {
+    backgroundColor: '#16a34a',
+    padding: 20,
+    borderRadius: 14,
     marginBottom: 16,
   },
-
   title: {
+    color: '#ffffff',
     fontSize: 26,
-    fontWeight: '800',
-    color: '#166534',
+    fontWeight: '700',
   },
-
   subtitle: {
-    marginTop: 4,
+    color: '#dcfce7',
     fontSize: 14,
-    color: '#6b7280',
+    marginTop: 4,
   },
-
   card: {
     backgroundColor: '#ffffff',
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 16,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
+    marginBottom: 16,
+    elevation: 2,
   },
-
   sectionTitle: {
-    fontSize: 19,
-    fontWeight: '800',
     color: '#166534',
-    marginBottom: 14,
-  },
-
-  field: {
-    marginTop: 14,
-  },
-
-  label: {
-    fontSize: 15,
+    fontSize: 19,
     fontWeight: '700',
-    color: '#1f2937',
+    marginBottom: 16,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  rowText: {
     flex: 1,
+    paddingRight: 12,
   },
-
+  label: {
+    color: '#111827',
+    fontSize: 15,
+    fontWeight: '600',
+    marginBottom: 7,
+  },
   description: {
-    marginTop: 4,
-    fontSize: 12,
-    lineHeight: 17,
     color: '#6b7280',
+    fontSize: 13,
   },
-
   input: {
-    marginTop: 7,
     borderWidth: 1,
     borderColor: '#d1d5db',
-    borderRadius: 8,
+    borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 11,
     fontSize: 15,
     color: '#111827',
     backgroundColor: '#ffffff',
+    marginBottom: 14,
   },
-
   reasonInput: {
     minHeight: 90,
-    textAlignVertical: 'top',
   },
-
-  switchRow: {
-    minHeight: 52,
+  methodRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-    paddingVertical: 8,
-  },
-
-  switchText: {
-    flex: 1,
-    paddingRight: 10,
-  },
-
-  optionRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginTop: 8,
+    marginBottom: 16,
     gap: 8,
   },
-
-  option: {
+  methodButton: {
+    flex: 1,
     borderWidth: 1,
     borderColor: '#d1d5db',
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    paddingVertical: 11,
+    alignItems: 'center',
   },
-
-  optionSelected: {
+  methodButtonActive: {
     backgroundColor: '#16a34a',
     borderColor: '#16a34a',
   },
-
-  optionText: {
-    fontSize: 14,
-    fontWeight: '600',
+  methodText: {
     color: '#374151',
+    fontWeight: '600',
   },
-
-  optionTextSelected: {
+  methodTextActive: {
     color: '#ffffff',
   },
-
   saveButton: {
-    minHeight: 52,
-    borderRadius: 10,
     backgroundColor: '#16a34a',
-    justifyContent: 'center',
+    borderRadius: 12,
+    paddingVertical: 15,
     alignItems: 'center',
-    marginTop: 2,
+    marginTop: 4,
   },
-
   saveButtonDisabled: {
-    opacity: 0.65,
+    opacity: 0.7,
   },
-
-  saveText: {
+  saveButtonText: {
     color: '#ffffff',
     fontSize: 16,
-    fontWeight: '800',
-  },
-
-  bottomSpace: {
-    height: 30,
+    fontWeight: '700',
   },
 });
