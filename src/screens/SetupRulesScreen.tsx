@@ -227,9 +227,9 @@ export default function SetupRulesScreen({
               updateRule('usesSavings', value)
             }
             trackColor={{
-              false: '#d1d5db',
-              true: '#86efac',
-            }}
+  false: '#d1d5db',
+  true: '#86efac',
+}}
             thumbColor={
               rules.usesSavings ? '#16a34a' : '#f4f4f5'
             }
