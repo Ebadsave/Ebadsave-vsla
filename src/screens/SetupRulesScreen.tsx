@@ -91,7 +91,7 @@ export default function SetupRulesScreen({
         leadershipTermMonths:
           current.leadership_term_months,
         shareOutEnabled:
-          current.share_out_enabled,
+          Boolean(current.share_out_enabled),
       });
     } catch (error) {
       Alert.alert(
@@ -170,6 +170,8 @@ export default function SetupRulesScreen({
           Number(rules.cycleDurationMonths),
         leadershipTermMonths:
           Number(rules.leadershipTermMonths),
+        shareOutEnabled:
+          Boolean(rules.shareOutEnabled),
       });
 
       await loadRules();
@@ -552,14 +554,13 @@ export default function SetupRulesScreen({
           </View>
 
           <Switch
-  value={Boolean(rules.shareOutEnabled)}
-  onValueChange={(value) =>
-    updateRule(
-      'shareOutEnabled',
-      value,
-    )
-  }
-/>
+            value={Boolean(rules.shareOutEnabled)}
+            onValueChange={(value) =>
+              updateRule(
+                'shareOutEnabled',
+                value,
+              )
+            }
             trackColor={{
               false: '#d1d5db',
               true: '#86efac',
