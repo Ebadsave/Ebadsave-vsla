@@ -552,13 +552,14 @@ export default function SetupRulesScreen({
           </View>
 
           <Switch
-            value={rules.shareOutEnabled}
-            onValueChange={(value) =>
-              updateRule(
-                'shareOutEnabled',
-                value,
-              )
-            }
+  value={Boolean(rules.shareOutEnabled)}
+  onValueChange={(value) =>
+    updateRule(
+      'shareOutEnabled',
+      value,
+    )
+  }
+/>
             trackColor={{
               false: '#d1d5db',
               true: '#86efac',
