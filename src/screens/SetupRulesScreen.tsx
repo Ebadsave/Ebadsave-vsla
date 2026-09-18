@@ -11,16 +11,27 @@ import {
   View,
 } from 'react-native';
 
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+
 import {
   getVSLASetupRules,
   updateVSLASetupRules,
   VSLASetupRuleUpdates,
 } from '../database/database';
 
-type Props = {
-  groupId: number;
-  executiveMemberId: number;
+type RootStackParamList = {
+  Home: undefined;
+  Constitution: undefined;
+  SetupRules: {
+    groupId: number;
+    executiveMemberId: number;
+  };
 };
+
+type Props = NativeStackScreenProps<
+  RootStackParamList,
+  'SetupRules'
+>;
 
 const DEFAULT_RULES: VSLASetupRuleUpdates = {
   shareValue: 1000,
@@ -41,8 +52,10 @@ const DEFAULT_RULES: VSLASetupRuleUpdates = {
 };
 
 export default function SetupRulesScreen({
-  groupId,
+  route,
 }: Props) {
+  const { groupId } = route.params;
+
   const [rules, setRules] =
     useState<VSLASetupRuleUpdates>(DEFAULT_RULES);
 
@@ -199,6 +212,7 @@ export default function SetupRulesScreen({
           size="large"
           color="#16a34a"
         />
+
         <Text style={styles.loadingText}>
           Loading setup rules...
         </Text>
@@ -213,7 +227,10 @@ export default function SetupRulesScreen({
       keyboardShouldPersistTaps="handled"
     >
       <View style={styles.header}>
-        <Text style={styles.title}>Setup Rules</Text>
+        <Text style={styles.title}>
+          Setup Rules
+        </Text>
+
         <Text style={styles.subtitle}>
           Rules for this VSLA group
         </Text>
@@ -554,7 +571,9 @@ export default function SetupRulesScreen({
           </View>
 
           <Switch
-            value={Boolean(rules.shareOutEnabled)}
+            value={Boolean(
+              rules.shareOutEnabled,
+            )}
             onValueChange={(value) =>
               updateRule(
                 'shareOutEnabled',
@@ -573,13 +592,16 @@ export default function SetupRulesScreen({
       <TouchableOpacity
         style={[
           styles.saveButton,
-          saving && styles.saveButtonDisabled,
+          saving &&
+            styles.saveButtonDisabled,
         ]}
         onPress={saveRules}
         disabled={saving}
       >
         {saving ? (
-          <ActivityIndicator color="#ffffff" />
+          <ActivityIndicator
+            color="#ffffff"
+          />
         ) : (
           <Text style={styles.saveButtonText}>
             Save Setup Rules
