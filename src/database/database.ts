@@ -1,4 +1,3 @@
-Database code misses executive roles , chair, vice , secretary, treasure, 3key holders, 2 money counter
 import * as SQLite from 'expo-sqlite';
 import * as Crypto from 'expo-crypto';
 
@@ -3127,6 +3126,6 @@ export async function getFinancialTransactionsByAccount(
       AND account_type = ?
     ORDER BY created_at DESC`,
     [groupId, accountType],
-  );
+  
     }
   
