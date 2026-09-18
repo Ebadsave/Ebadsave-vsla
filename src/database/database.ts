@@ -52,7 +52,7 @@ export type GroupRuleRecord = {
 
 /* ============================================================
    VSLA SETUP RULES
-   ============================================================ */
+============================================================ */
 
 export type VSLASetupRuleRecord = {
   id: number;
@@ -96,7 +96,7 @@ export type VSLASetupRuleUpdates = {
 
 /* ============================================================
    FINANCIAL TYPES
-   ============================================================ */
+============================================================ */
 
 export type FinancialAccountType =
   | 'savings'
@@ -143,7 +143,7 @@ export type FinancialSummary = {
 
 /* ============================================================
    DATABASE CONSTANTS
-   ============================================================ */
+============================================================ */
 
 const dbPromise = SQLite.openDatabaseAsync(
   'ebadsave_vsla.db',
@@ -163,7 +163,7 @@ const normalizeText = (
 
 /* ============================================================
    PASSCODE
-   ============================================================ */
+============================================================ */
 
 const isValidPasscode = (
   code: string,
@@ -183,7 +183,7 @@ async function hashPasscode(
 
 /* ============================================================
    GROUP NUMBER HELPERS
-   ============================================================ */
+============================================================ */
 
 function parseGroupNumber(
   value: number | string | null | undefined,
@@ -237,7 +237,7 @@ const GROUP_SELECT = `
 
 /* ============================================================
    FINANCIAL HELPERS
-   ============================================================ */
+============================================================ */
 
 const FINANCIAL_ACCOUNT_TYPES: FinancialAccountType[] = [
   'savings',
@@ -258,16 +258,6 @@ function isFinancialAccountType(
   );
 }
 
-const FUND_BALANCE_ACCOUNTS: FinancialAccountType[] = [
-  'savings',
-  'loan_fund',
-  'loan_repayment',
-  'social_fund',
-  'fines',
-  'external_fund',
-  'expenditure_fund',
-];
-
 function calculateFundBalance(
   summary: Omit<FinancialSummary, 'fundBalance'>,
 ): number {
@@ -284,7 +274,7 @@ function calculateFundBalance(
 
 /* ============================================================
    DATABASE MIGRATION HELPER
-   ============================================================ */
+============================================================ */
 
 async function addColumnIfMissing(
   db: SQLite.SQLiteDatabase,
@@ -310,7 +300,7 @@ async function addColumnIfMissing(
 
 /* ============================================================
    FINANCIAL ACCOUNT CREATION
-   ============================================================ */
+============================================================ */
 
 async function ensureFinancialAccountsForGroup(
   db: SQLite.SQLiteDatabase,
@@ -322,14 +312,15 @@ async function ensureFinancialAccountsForGroup(
     const accountType of FINANCIAL_ACCOUNT_TYPES
   ) {
     await db.runAsync(
-      `INSERT OR IGNORE INTO financial_accounts (
-        group_id,
-        account_type,
-        balance,
-        created_at,
-        updated_at
-      )
-      VALUES (?, ?, 0, ?, ?)`,
+      `INSERT OR IGNORE INTO financial_accounts
+       (
+         group_id,
+         account_type,
+         balance,
+         created_at,
+         updated_at
+       )
+       VALUES (?, ?, 0, ?, ?)`,
       groupId,
       accountType,
       timestamp,
@@ -356,7 +347,7 @@ async function ensureFinancialAccountsForAllGroups(
 
 /* ============================================================
    VSLA DEFAULT RULES
-   ============================================================ */
+============================================================ */
 
 async function createDefaultVSLASetupRules(
   db: SQLite.SQLiteDatabase,
@@ -365,46 +356,48 @@ async function createDefaultVSLASetupRules(
   const timestamp = now();
 
   await db.runAsync(
-    `INSERT OR IGNORE INTO vsla_setup_rules (
-      group_id,
-      share_value,
-      minimum_shares_per_meeting,
-      maximum_shares_per_meeting,
-      maximum_loan_multiple,
-      loan_interest_percentage,
-      loan_interest_period,
-      maximum_loan_repayment_period,
-      social_fund_contribution,
-      absence_fine,
-      late_fine,
-      non_saving_fine,
-      meeting_frequency,
-      cycle_duration_months,
-      leadership_term_months,
-      share_out_enabled,
-      created_at,
-      updated_at
-    )
-    VALUES (
-      ?,
-      1000,
-      1,
-      5,
-      3,
-      5,
-      'per month',
-      12,
-      0,
-      0,
-      0,
-      0,
-      'weekly',
-      12,
-      12,
-      1,
-      ?,
-      ?
-    )`,
+    `INSERT OR IGNORE INTO vsla_setup_rules
+     (
+       group_id,
+       share_value,
+       minimum_shares_per_meeting,
+       maximum_shares_per_meeting,
+       maximum_loan_multiple,
+       loan_interest_percentage,
+       loan_interest_period,
+       maximum_loan_repayment_period,
+       social_fund_contribution,
+       absence_fine,
+       late_fine,
+       non_saving_fine,
+       meeting_frequency,
+       cycle_duration_months,
+       leadership_term_months,
+       share_out_enabled,
+       created_at,
+       updated_at
+     )
+     VALUES
+     (
+       ?,
+       1000,
+       1,
+       5,
+       3,
+       5,
+       'per month',
+       12,
+       0,
+       0,
+       0,
+       0,
+       'weekly',
+       12,
+       12,
+       1,
+       ?,
+       ?
+     )`,
     groupId,
     timestamp,
     timestamp,
@@ -413,7 +406,7 @@ async function createDefaultVSLASetupRules(
 
 /* ============================================================
    GROUP DORMANCY
-   ============================================================ */
+============================================================ */
 
 async function refreshGroupDormancy(
   db: SQLite.SQLiteDatabase,
@@ -435,7 +428,7 @@ async function refreshGroupDormancy(
 
 /* ============================================================
    NEXT OF KIN AUTOMATIC APPLICATIONS
-   ============================================================ */
+============================================================ */
 
 async function applyDueNextOfKinChanges(
   db: SQLite.SQLiteDatabase,
@@ -452,14 +445,14 @@ async function applyDueNextOfKinChanges(
       effective_at: string;
     }>(
       `SELECT
-        id,
-        member_id,
-        slot,
-        action,
-        new_name,
-        new_phone,
-        new_gender,
-        effective_at
+         id,
+         member_id,
+         slot,
+         action,
+         new_name,
+         new_phone,
+         new_gender,
+         effective_at
        FROM next_of_kin_change_history
        WHERE applied = 0
        AND effective_at <= ?
@@ -520,9 +513,9 @@ async function applyDueNextOfKinBenefits(
       slot: number;
     }>(
       `SELECT
-        id,
-        member_id,
-        slot
+         id,
+         member_id,
+         slot
        FROM next_of_kin_benefits
        WHERE status = 'pending'
        AND effective_at <= ?
@@ -555,7 +548,7 @@ async function applyDueNextOfKinBenefits(
 
 /* ============================================================
    DATABASE INITIALIZATION
-   ============================================================ */
+============================================================ */
 
 async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   const db = await dbPromise;
@@ -910,7 +903,7 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
 
 /* ============================================================
    DATABASE COMPATIBILITY
-   ============================================================ */
+============================================================ */
 
 export async function initializeDatabase(): Promise<void> {
   await getDatabase();
@@ -922,7 +915,7 @@ export async function initDatabase(): Promise<void> {
 
 /* ============================================================
    GROUP FUNCTIONS
-   ============================================================ */
+============================================================ */
 
 export async function getAllGroups(): Promise<GroupRecord[]> {
   const db = await getDatabase();
@@ -1035,16 +1028,17 @@ export async function createGroup(
 
   const result =
     await db.runAsync(
-      `INSERT INTO groups (
-        group_number,
-        group_name,
-        district,
-        country,
-        status,
-        created_at,
-        last_activity_at
-      )
-      VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+      `INSERT INTO groups
+       (
+         group_number,
+         group_name,
+         district,
+         country,
+         status,
+         created_at,
+         last_activity_at
+       )
+       VALUES (?, ?, ?, ?, 'active', ?, ?)`,
       groupNumber,
       cleanName,
       cleanDistrict,
@@ -1214,7 +1208,7 @@ export async function updateGroup(
 
 /* ============================================================
    CONSTITUTION
-   ============================================================ */
+============================================================ */
 
 async function insertDefaultConstitution(
   db: SQLite.SQLiteDatabase,
@@ -1289,15 +1283,16 @@ async function insertDefaultConstitution(
 
   for (const article of articles) {
     await db.runAsync(
-      `INSERT OR IGNORE INTO group_rules (
-        group_id,
-        article_number,
-        title,
-        content,
-        effective_days,
-        updated_at
-      )
-      VALUES (?, ?, ?, ?, 30, ?)`,
+      `INSERT OR IGNORE INTO group_rules
+       (
+         group_id,
+         article_number,
+         title,
+         content,
+         effective_days,
+         updated_at
+       )
+       VALUES (?, ?, ?, ?, 30, ?)`,
       groupId,
       article[0],
       article[1],
@@ -1323,7 +1318,7 @@ export async function getGroupRules(
 
 /* ============================================================
    VSLA SETUP RULE FUNCTIONS
-   ============================================================ */
+============================================================ */
 
 export async function getVSLASetupRules(
   groupId: number,
@@ -1634,7 +1629,7 @@ export async function updateVSLASetupRules(
 
 /* ============================================================
    MEMBERS
-   ============================================================ */
+============================================================ */
 
 export async function getMembersByGroupId(
   groupId: number,
@@ -1643,18 +1638,18 @@ export async function getMembersByGroupId(
 
   return db.getAllAsync<MemberRecord>(
     `SELECT
-      id,
-      group_id,
-      member_number,
-      full_name,
-      gender,
-      age,
-      phone,
-      cell,
-      district,
-      photo_uri,
-      status,
-      created_at
+       id,
+       group_id,
+       member_number,
+       full_name,
+       gender,
+       age,
+       phone,
+       cell,
+       district,
+       photo_uri,
+       status,
+       created_at
      FROM members
      WHERE group_id = ?
      AND status = 'active'
@@ -1801,21 +1796,22 @@ export async function registerMember(
 
   const result =
     await db.runAsync(
-      `INSERT INTO members (
-        group_id,
-        member_number,
-        full_name,
-        gender,
-        age,
-        phone,
-        cell,
-        district,
-        photo_uri,
-        role,
-        status,
-        created_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'member', 'active', ?)`,
+      `INSERT INTO members
+       (
+         group_id,
+         member_number,
+         full_name,
+         gender,
+         age,
+         phone,
+         cell,
+         district,
+         photo_uri,
+         role,
+         status,
+         created_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'member', 'active', ?)`,
       groupId,
       memberNumber,
       name,
@@ -1832,20 +1828,21 @@ export async function registerMember(
     result.lastInsertRowId;
 
   await db.runAsync(
-    `INSERT INTO member_next_of_kin (
-      member_id,
-      slot,
-      name,
-      phone,
-      gender,
-      benefit_received,
-      locked,
-      created_at,
-      updated_at
-    )
-    VALUES
-      (?, 1, NULL, NULL, NULL, 0, 0, ?, ?),
-      (?, 2, NULL, NULL, NULL, 0, 0, ?, ?)`,
+    `INSERT INTO member_next_of_kin
+     (
+       member_id,
+       slot,
+       name,
+       phone,
+       gender,
+       benefit_received,
+       locked,
+       created_at,
+       updated_at
+     )
+     VALUES
+       (?, 1, NULL, NULL, NULL, 0, 0, ?, ?),
+       (?, 2, NULL, NULL, NULL, 0, 0, ?, ?)`,
     memberId,
     timestamp,
     timestamp,
@@ -1858,15 +1855,16 @@ export async function registerMember(
     Crypto.randomUUID();
 
   await db.runAsync(
-    `INSERT INTO member_credentials (
-      member_id,
-      salt,
-      passcode_hash,
-      phone_eligible,
-      created_at,
-      updated_at
-    )
-    VALUES (?, ?, NULL, ?, ?, ?)`,
+    `INSERT INTO member_credentials
+     (
+       member_id,
+       salt,
+       passcode_hash,
+       phone_eligible,
+       created_at,
+       updated_at
+     )
+     VALUES (?, ?, NULL, ?, ?, ?)`,
     memberId,
     salt,
     normalizeText(phone)
@@ -2049,12 +2047,13 @@ export async function deleteMember(
   );
 
   await db.runAsync(
-    `INSERT INTO deleted_member_numbers (
-      group_id,
-      member_number,
-      deleted_at
-    )
-    VALUES (?, ?, ?)`,
+    `INSERT INTO deleted_member_numbers
+     (
+       group_id,
+       member_number,
+       deleted_at
+     )
+     VALUES (?, ?, ?)`,
     member.group_id,
     member.member_number,
     timestamp,
@@ -2067,7 +2066,7 @@ export async function deleteMember(
 
 /* ============================================================
    NEXT OF KIN
-   ============================================================ */
+============================================================ */
 
 export async function getNextOfKin(
   memberId: number,
@@ -2232,22 +2231,23 @@ export async function requestNextOfKinChange(
 
   const result =
     await db.runAsync(
-      `INSERT INTO next_of_kin_change_history (
-        member_id,
-        slot,
-        action,
-        old_name,
-        old_phone,
-        old_gender,
-        new_name,
-        new_phone,
-        new_gender,
-        reason,
-        requested_at,
-        effective_at,
-        applied
-      )
-      VALUES (?, ?, 'update', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      `INSERT INTO next_of_kin_change_history
+       (
+         member_id,
+         slot,
+         action,
+         old_name,
+         old_phone,
+         old_gender,
+         new_name,
+         new_phone,
+         new_gender,
+         reason,
+         requested_at,
+         effective_at,
+         applied
+       )
+       VALUES (?, ?, 'update', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       memberId,
       slot,
       kin.name,
@@ -2330,22 +2330,23 @@ export async function requestNextOfKinDeletion(
 
   const result =
     await db.runAsync(
-      `INSERT INTO next_of_kin_change_history (
-        member_id,
-        slot,
-        action,
-        old_name,
-        old_phone,
-        old_gender,
-        new_name,
-        new_phone,
-        new_gender,
-        reason,
-        requested_at,
-        effective_at,
-        applied
-      )
-      VALUES (?, ?, 'delete', ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, 0)`,
+      `INSERT INTO next_of_kin_change_history
+       (
+         member_id,
+         slot,
+         action,
+         old_name,
+         old_phone,
+         old_gender,
+         new_name,
+         new_phone,
+         new_gender,
+         reason,
+         requested_at,
+         effective_at,
+         applied
+       )
+       VALUES (?, ?, 'delete', ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, 0)`,
       memberId,
       slot,
       kin.name,
@@ -2429,16 +2430,17 @@ export async function recordNextOfKinBenefit(
 
   const result =
     await db.runAsync(
-      `INSERT INTO next_of_kin_benefits (
-        member_id,
-        slot,
-        benefit_amount,
-        reason,
-        benefit_date,
-        effective_at,
-        status
-      )
-      VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
+      `INSERT INTO next_of_kin_benefits
+       (
+         member_id,
+         slot,
+         benefit_amount,
+         reason,
+         benefit_date,
+         effective_at,
+         status
+       )
+       VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
       memberId,
       slot,
       amount,
@@ -2452,7 +2454,7 @@ export async function recordNextOfKinBenefit(
 
 /* ============================================================
    FINANCIAL ACCOUNT SYSTEM
-   ============================================================ */
+============================================================ */
 
 export async function getFinancialAccounts(
   groupId: number,
@@ -2466,12 +2468,12 @@ export async function getFinancialAccounts(
 
   return db.getAllAsync<FinancialAccountRecord>(
     `SELECT
-      id,
-      group_id,
-      account_type,
-      balance,
-      created_at,
-      updated_at
+       id,
+       group_id,
+       account_type,
+       balance,
+       created_at,
+       updated_at
      FROM financial_accounts
      WHERE group_id = ?
      ORDER BY
@@ -2503,12 +2505,12 @@ export async function getFinancialAccount(
 
   return db.getFirstAsync<FinancialAccountRecord>(
     `SELECT
-      id,
-      group_id,
-      account_type,
-      balance,
-      created_at,
-      updated_at
+       id,
+       group_id,
+       account_type,
+       balance,
+       created_at,
+       updated_at
      FROM financial_accounts
      WHERE group_id = ?
      AND account_type = ?
@@ -2553,17 +2555,18 @@ export async function recordFinancialIncome(
 
   const result =
     await db.runAsync(
-      `INSERT INTO financial_transactions (
-        group_id,
-        account_type,
-        amount,
-        reason,
-        member_id,
-        meeting_id,
-        transaction_type,
-        created_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO financial_transactions
+       (
+         group_id,
+         account_type,
+         amount,
+         reason,
+         member_id,
+         meeting_id,
+         transaction_type,
+         created_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       groupId,
       accountType,
       amount,
@@ -2632,17 +2635,18 @@ export async function recordFinancialExpense(
 
   const result =
     await db.runAsync(
-      `INSERT INTO financial_transactions (
-        group_id,
-        account_type,
-        amount,
-        reason,
-        member_id,
-        meeting_id,
-        transaction_type,
-        created_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO financial_transactions
+       (
+         group_id,
+         account_type,
+         amount,
+         reason,
+         member_id,
+         meeting_id,
+         transaction_type,
+         created_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       groupId,
       accountType,
       negativeAmount,
@@ -2753,17 +2757,18 @@ export async function issueLoan(
 
   const result =
     await db.runAsync(
-      `INSERT INTO financial_transactions (
-        group_id,
-        account_type,
-        amount,
-        reason,
-        member_id,
-        meeting_id,
-        transaction_type,
-        created_at
-      )
-      VALUES (?, 'loan_fund', ?, ?, ?, ?, 'loan_issued', ?)`,
+      `INSERT INTO financial_transactions
+       (
+         group_id,
+         account_type,
+         amount,
+         reason,
+         member_id,
+         meeting_id,
+         transaction_type,
+         created_at
+       )
+       VALUES (?, 'loan_fund', ?, ?, ?, ?, 'loan_issued', ?)`,
       groupId,
       -Math.abs(amount),
       normalizeText(reason),
@@ -2925,10 +2930,10 @@ export async function recordInsuranceBenefit(
       total: number;
     }>(
       `SELECT
-        COALESCE(
-          SUM(amount),
-          0
-        ) AS total
+         COALESCE(
+           SUM(amount),
+           0
+         ) AS total
        FROM financial_transactions
        WHERE group_id = ?
        AND account_type = 'insurance_fund'
@@ -2972,17 +2977,18 @@ export async function recordInsuranceBenefit(
 
   const result =
     await db.runAsync(
-      `INSERT INTO financial_transactions (
-        group_id,
-        account_type,
-        amount,
-        reason,
-        member_id,
-        meeting_id,
-        transaction_type,
-        created_at
-      )
-      VALUES (?, 'insurance_fund', ?, ?, ?, ?, 'insurance_benefit', ?)`,
+      `INSERT INTO financial_transactions
+       (
+         group_id,
+         account_type,
+         amount,
+         reason,
+         member_id,
+         meeting_id,
+         transaction_type,
+         created_at
+       )
+       VALUES (?, 'insurance_fund', ?, ?, ?, ?, 'insurance_benefit', ?)`,
       groupId,
       -Math.abs(amount),
       normalizeText(reason),
@@ -3026,8 +3032,8 @@ export async function getFinancialSummary(
       balance: number;
     }>(
       `SELECT
-        account_type,
-        balance
+         account_type,
+         balance
        FROM financial_accounts
        WHERE group_id = ?`,
       groupId,
@@ -3090,15 +3096,15 @@ export async function getFinancialTransactions(
 
   return db.getAllAsync<FinancialTransactionRecord>(
     `SELECT
-      id,
-      group_id,
-      account_type,
-      amount,
-      reason,
-      member_id,
-      meeting_id,
-      transaction_type,
-      created_at
+       id,
+       group_id,
+       account_type,
+       amount,
+       reason,
+       member_id,
+       meeting_id,
+       transaction_type,
+       created_at
      FROM financial_transactions
      WHERE group_id = ?
      ORDER BY created_at DESC, id DESC`,
@@ -3114,15 +3120,15 @@ export async function getFinancialTransactionsByAccount(
 
   return db.getAllAsync<FinancialTransactionRecord>(
     `SELECT
-      id,
-      group_id,
-      account_type,
-      amount,
-      reason,
-      member_id,
-      meeting_id,
-      transaction_type,
-      created_at
+       id,
+       group_id,
+       account_type,
+       amount,
+       reason,
+       member_id,
+       meeting_id,
+       transaction_type,
+       created_at
      FROM financial_transactions
      WHERE group_id = ?
      AND account_type = ?
@@ -3142,16 +3148,16 @@ export async function getLoansOut(
       total: number;
     }>(
       `SELECT
-        COALESCE(
-          SUM(
-            CASE
-              WHEN transaction_type = 'loan_issued'
-              THEN ABS(amount)
-              ELSE 0
-            END
-          ),
-          0
-        ) AS total
+         COALESCE(
+           SUM(
+             CASE
+               WHEN transaction_type = 'loan_issued'
+               THEN ABS(amount)
+               ELSE 0
+             END
+           ),
+           0
+         ) AS total
        FROM financial_transactions
        WHERE group_id = ?`,
       groupId,
@@ -3162,16 +3168,16 @@ export async function getLoansOut(
       total: number;
     }>(
       `SELECT
-        COALESCE(
-          SUM(
-            CASE
-              WHEN transaction_type = 'loan_repayment'
-              THEN ABS(amount)
-              ELSE 0
-            END
-          ),
-          0
-        ) AS total
+         COALESCE(
+           SUM(
+             CASE
+               WHEN transaction_type = 'loan_repayment'
+               THEN ABS(amount)
+               ELSE 0
+             END
+           ),
+           0
+         ) AS total
        FROM financial_transactions
        WHERE group_id = ?`,
       groupId,
@@ -3205,7 +3211,7 @@ export async function getActiveMemberCount(
 
 /* ============================================================
    MEMBER PASSCODES
-   ============================================================ */
+============================================================ */
 
 export async function setMemberPasscode(
   memberId: number,
@@ -3266,25 +3272,26 @@ export async function setMemberPasscode(
   const timestamp = now();
 
   await db.runAsync(
-    `INSERT INTO member_credentials (
-      member_id,
-      salt,
-      passcode_hash,
-      phone_eligible,
-      failed_attempts,
-      locked_until,
-      created_at,
-      updated_at
-    )
-    VALUES (?, ?, ?, 1, 0, NULL, ?, ?)
-    ON CONFLICT(member_id)
-    DO UPDATE SET
-      salt = excluded.salt,
-      passcode_hash = excluded.passcode_hash,
-      phone_eligible = 1,
-      failed_attempts = 0,
-      locked_until = NULL,
-      updated_at = excluded.updated_at`,
+    `INSERT INTO member_credentials
+     (
+       member_id,
+       salt,
+       passcode_hash,
+       phone_eligible,
+       failed_attempts,
+       locked_until,
+       created_at,
+       updated_at
+     )
+     VALUES (?, ?, ?, 1, 0, NULL, ?, ?)
+     ON CONFLICT(member_id)
+     DO UPDATE SET
+       salt = excluded.salt,
+       passcode_hash = excluded.passcode_hash,
+       phone_eligible = 1,
+       failed_attempts = 0,
+       locked_until = NULL,
+       updated_at = excluded.updated_at`,
     memberId,
     salt,
     passcodeHash,
@@ -3332,10 +3339,10 @@ export async function verifyMemberPasscode(
       locked_until: string | null;
     }>(
       `SELECT
-        salt,
-        passcode_hash,
-        failed_attempts,
-        locked_until
+         salt,
+         passcode_hash,
+         failed_attempts,
+         locked_until
        FROM member_credentials
        WHERE member_id = ?
        LIMIT 1`,
@@ -3366,12 +3373,13 @@ export async function verifyMemberPasscode(
     credential.passcode_hash;
 
   await db.runAsync(
-    `INSERT INTO member_auth_attempts (
-      member_id,
-      success,
-      attempted_at
-    )
-    VALUES (?, ?, ?)`,
+    `INSERT INTO member_auth_attempts
+     (
+       member_id,
+       success,
+       attempted_at
+     )
+     VALUES (?, ?, ?)`,
     memberId,
     success ? 1 : 0,
     now(),
@@ -3459,13 +3467,14 @@ export async function signMemberTransaction(
   const db = await getDatabase();
 
   await db.runAsync(
-    `INSERT INTO member_transaction_signatures (
-      member_id,
-      transaction_type,
-      transaction_id,
-      signed_at
-    )
-    VALUES (?, ?, ?, ?)`,
+    `INSERT INTO member_transaction_signatures
+     (
+       member_id,
+       transaction_type,
+       transaction_id,
+       signed_at
+     )
+     VALUES (?, ?, ?, ?)`,
     memberId,
     normalizeText(transactionType),
     transactionId,
@@ -3477,7 +3486,7 @@ export async function signMemberTransaction(
 
 /* ============================================================
    MEETINGS AND APP ACCESS
-   ============================================================ */
+============================================================ */
 
 export async function createMeeting(
   groupId: number,
@@ -3489,14 +3498,15 @@ export async function createMeeting(
 
   const result =
     await db.runAsync(
-      `INSERT INTO group_meetings (
-        group_id,
-        meeting_date,
-        opened_at,
-        status,
-        created_at
-      )
-      VALUES (?, ?, ?, 'open', ?)`,
+      `INSERT INTO group_meetings
+       (
+         group_id,
+         meeting_date,
+         opened_at,
+         status,
+         created_at
+       )
+       VALUES (?, ?, ?, 'open', ?)`,
       groupId,
       meetingDate,
       timestamp,
@@ -3570,10 +3580,10 @@ export async function openAppAccess(
         phone: string | null;
       }>(
         `SELECT
-          id,
-          group_id,
-          role,
-          phone
+           id,
+           group_id,
+           role,
+           phone
          FROM members
          WHERE id = ?
          AND status = 'active'
@@ -3628,13 +3638,14 @@ export async function openAppAccess(
 
   const sessionResult =
     await db.runAsync(
-      `INSERT INTO app_access_sessions (
-        group_id,
-        meeting_id,
-        opened_at,
-        status
-      )
-      VALUES (?, ?, ?, 'open')`,
+      `INSERT INTO app_access_sessions
+       (
+         group_id,
+         meeting_id,
+         opened_at,
+         status
+       )
+       VALUES (?, ?, ?, 'open')`,
       groupId,
       meetingId,
       now(),
@@ -3645,13 +3656,14 @@ export async function openAppAccess(
 
   for (const authorizer of authorizers) {
     await db.runAsync(
-      `INSERT INTO app_access_authorizers (
-        session_id,
-        member_id,
-        authorizer_role,
-        authorized_at
-      )
-      VALUES (?, ?, ?, ?)`,
+      `INSERT INTO app_access_authorizers
+       (
+         session_id,
+         member_id,
+         authorizer_role,
+         authorized_at
+       )
+       VALUES (?, ?, ?, ?)`,
       sessionId,
       authorizer.memberId,
       authorizer.role,
@@ -3684,7 +3696,7 @@ export async function closeAppAccess(
 
 /* ============================================================
    MEETING CLOSURE
-   ============================================================ */
+============================================================ */
 
 export async function closeMeeting(
   meetingId: number,
@@ -3707,14 +3719,15 @@ export async function closeMeeting(
   );
 
   await db.runAsync(
-    `INSERT INTO meeting_closures (
-      meeting_id,
-      closed_at,
-      total_savings,
-      loan_fund,
-      group_fund
-    )
-    VALUES (?, ?, ?, ?, ?)`,
+    `INSERT INTO meeting_closures
+     (
+       meeting_id,
+       closed_at,
+       total_savings,
+       loan_fund,
+       group_fund
+     )
+     VALUES (?, ?, ?, ?, ?)`,
     meetingId,
     timestamp,
     totalSavings,
@@ -3742,7 +3755,7 @@ export async function closeMeeting(
 
 /* ============================================================
    INDIVIDUAL MEMBER STATEMENTS
-   ============================================================ */
+============================================================ */
 
 export async function saveMemberStatement(
   meetingId: number,
@@ -3755,15 +3768,16 @@ export async function saveMemberStatement(
 
   const result =
     await db.runAsync(
-      `INSERT INTO member_statement_records (
-        meeting_id,
-        member_id,
-        individual_total_savings,
-        individual_loan_balance,
-        individual_loan_due_date,
-        created_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO member_statement_records
+       (
+         meeting_id,
+         member_id,
+         individual_total_savings,
+         individual_loan_balance,
+         individual_loan_due_date,
+         created_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?)`,
       meetingId,
       memberId,
       individualTotalSavings,
@@ -3777,7 +3791,7 @@ export async function saveMemberStatement(
 
 /* ============================================================
    NOTIFICATIONS
-   ============================================================ */
+============================================================ */
 
 export async function queueImportantGroupNotification(
   groupId: number,
@@ -3788,26 +3802,28 @@ export async function queueImportantGroupNotification(
 
   const result =
     await db.runAsync(
-      `INSERT INTO notification_queue (
-        group_id,
-        member_id,
-        notification_type,
-        priority,
-        title,
-        message,
-        created_at,
-        status
-      )
-      VALUES (
-        ?,
-        NULL,
-        'group_summary',
-        'important',
-        ?,
-        ?,
-        ?,
-        'pending'
-      )`,
+      `INSERT INTO notification_queue
+       (
+         group_id,
+         member_id,
+         notification_type,
+         priority,
+         title,
+         message,
+         created_at,
+         status
+       )
+       VALUES
+       (
+         ?,
+         NULL,
+         'group_summary',
+         'important',
+         ?,
+         ?,
+         ?,
+         'pending'
+       )`,
       groupId,
       title,
       message,
@@ -3827,26 +3843,28 @@ export async function queueImportantMemberNotification(
 
   const result =
     await db.runAsync(
-      `INSERT INTO notification_queue (
-        group_id,
-        member_id,
-        notification_type,
-        priority,
-        title,
-        message,
-        created_at,
-        status
-      )
-      VALUES (
-        ?,
-        ?,
-        'member_statement',
-        'important',
-        ?,
-        ?,
-        ?,
-        'pending'
-      )`,
+      `INSERT INTO notification_queue
+       (
+         group_id,
+         member_id,
+         notification_type,
+         priority,
+         title,
+         message,
+         created_at,
+         status
+       )
+       VALUES
+       (
+         ?,
+         ?,
+         'member_statement',
+         'important',
+         ?,
+         ?,
+         ?,
+         'pending'
+       )`,
       groupId,
       memberId,
       title,
@@ -3886,8 +3904,8 @@ export async function getPendingNotifications(): Promise<
 }
 
 /* ============================================================
-   GROUP ID CHECK
-   ============================================================ */
+   GROUP NUMBER CHECK
+============================================================ */
 
 export async function checkGroupIdRange(): Promise<
   Array<{
@@ -3901,11 +3919,36 @@ export async function checkGroupIdRange(): Promise<
 
   return db.getAllAsync(
     `SELECT
-      id,
-      group_number,
-      group_name,
-      status
+       id,
+       group_number,
+       group_name,
+       status
      FROM groups
-     WHERE id BETWEEN 2000 AND 2009`,
+     WHERE CAST(
+       CASE
+         WHEN UPPER(CAST(group_number AS TEXT)) LIKE 'KYA%'
+         THEN REPLACE(
+           UPPER(CAST(group_number AS TEXT)),
+           'KYA',
+           ''
+         )
+         ELSE CAST(group_number AS TEXT)
+       END
+       AS INTEGER
+     ) BETWEEN ? AND ?
+     ORDER BY CAST(
+       CASE
+         WHEN UPPER(CAST(group_number AS TEXT)) LIKE 'KYA%'
+         THEN REPLACE(
+           UPPER(CAST(group_number AS TEXT)),
+           'KYA',
+           ''
+         )
+         ELSE CAST(group_number AS TEXT)
+       END
+       AS INTEGER
+     ) ASC`,
+    GROUP_START,
+    GROUP_END,
   );
   }
