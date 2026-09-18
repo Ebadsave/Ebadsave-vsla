@@ -3059,28 +3059,21 @@ export async function getFinancialSummary(
   }
 
   const partial = {
-    savings: balances.savings,
-    loanFund: balances.loan_fund,
-    loanRepayment:
-      balances.loan_repayment,
-    socialFund:
-      balances.social_fund,
-    fines: balances.fines,
-    externalFund:
-      balances.external_fund,
-    expenditureFund:
-      balances.expenditure_fund,
-    insuranceFund:
-      balances.insurance_fund,
-  };
+  savings: balances.savings,
+  loanFund: balances.loan_fund,
+  loanRepayment: balances.loan_repayment,
+  socialFund: balances.social_fund,
+  fines: balances.fines,
+  externalFund: balances.external_fund,
+  expenditureFund: balances.expenditure_fund,
+  insuranceFund: balances.insurance_fund,
+};
 
-  return {
-    ...partial,
-    fundBalance:
-      calculateFundBalance(
-        partial,
-      ),
-  };
+return {
+  ...partial,
+  fundBalance: calculateFundBalance(partial),
+};
+
 }
 
 export async function getFinancialTransactions(
@@ -3098,11 +3091,15 @@ export async function getFinancialTransactions(
       member_id,
       meeting_id,
       transaction_type,
+      transaction_date,
       created_at
      FROM financial_transactions
      WHERE group_id = ?
      ORDER BY created_at DESC, id DESC`,
-    groupId,
+    [groupId],
+  );
+}
+
 export async function getFinancialTransactionsByAccount(
   groupId: number,
   accountType: string,
@@ -3121,11 +3118,10 @@ export async function getFinancialTransactionsByAccount(
       transaction_type,
       transaction_date,
       created_at
-    FROM financial_transactions
-    WHERE group_id = ?
-      AND account_type = ?
-    ORDER BY created_at DESC`,
+     FROM financial_transactions
+     WHERE group_id = ?
+       AND account_type = ?
+     ORDER BY created_at DESC, id DESC`,
     [groupId, accountType],
-  
+  );
     }
-  
