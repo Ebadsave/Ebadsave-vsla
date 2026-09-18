@@ -23,6 +23,7 @@ export type MemberRecord = {
   cell: string;
   district: string;
   photo_uri: string | null;
+  role: string;
   status: string;
   created_at: string;
 };
