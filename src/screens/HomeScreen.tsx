@@ -82,7 +82,8 @@ export default function HomeScreen({
       const groups = await getAllGroups();
 
       const activeGroups = groups.filter(
-        (group) => group.status.toLowerCase() === 'active',
+        (group) =>
+          group.status.toLowerCase() === 'active',
       );
 
       if (activeGroups.length > 0) {
@@ -90,11 +91,13 @@ export default function HomeScreen({
 
         setActiveGroup(group);
 
-        const members = await getMembersByGroupId(group.id);
+        const members =
+          await getMembersByGroupId(group.id);
 
         const executive = members.find(
           (member: MemberRecord) =>
-            member.role?.toLowerCase() === 'executive',
+            member.role?.toLowerCase() ===
+            'executive',
         );
 
         setExecutiveMemberId(
@@ -121,36 +124,29 @@ export default function HomeScreen({
     }, [loadActiveGroup]),
   );
 
+  /*
+   * Setup Rules does NOT require an executive member.
+   * A group can configure its VSLA rules before
+   * executives are assigned.
+   */
   const handleSetupRules = () => {
-  if (!activeGroup) {
-    Alert.alert(
-      'No Active Group',
-      'Please register a group before opening Setup Rules.',
-    );
-    return;
-  }
-
-  navigation.navigate('SetupRules', {
-    groupId: activeGroup.id,
-  });
-};
-      return;
-    }
-
-    if (!executiveMemberId) {
+    if (!activeGroup) {
       Alert.alert(
-        'No Executive Member',
-        'Please register an executive member before opening Setup Rules.',
+        'No Active Group',
+        'Please register a group before opening Setup Rules.',
       );
       return;
     }
 
     navigation.navigate('SetupRules', {
       groupId: activeGroup.id,
-      executiveMemberId: executiveMemberId,
     });
   };
 
+  /*
+   * New Meeting still records activity for the
+   * currently active group.
+   */
   const handleNewMeeting = async () => {
     try {
       await loadActiveGroup();
@@ -158,7 +154,8 @@ export default function HomeScreen({
       const groups = await getAllGroups();
 
       const activeGroups = groups.filter(
-        (group) => group.status.toLowerCase() === 'active',
+        (group) =>
+          group.status.toLowerCase() === 'active',
       );
 
       if (activeGroups.length === 0) {
@@ -268,7 +265,9 @@ export default function HomeScreen({
                 <Text
                   style={[
                     styles.iconText,
-                    { color: card.iconColor },
+                    {
+                      color: card.iconColor,
+                    },
                   ]}
                 >
                   {card.icon}
@@ -292,7 +291,9 @@ export default function HomeScreen({
           </Text>
 
           <View style={styles.emptyActivity}>
-            <Text style={styles.emptyIcon}>—</Text>
+            <Text style={styles.emptyIcon}>
+              —
+            </Text>
 
             <Text style={styles.emptyText}>
               No transactions yet
