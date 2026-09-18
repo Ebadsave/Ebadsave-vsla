@@ -3104,7 +3104,29 @@ export async function getFinancialTransactions(
      WHERE group_id = ?
      ORDER BY created_at DESC, id DESC`,
     groupId,
-  );
-}
+export async function getFinancialTransactionsByAccount(
+  groupId: number,
+  accountType: string,
+): Promise<FinancialTransactionRecord[]> {
+  const db = await getDatabase();
 
-export async function getFinancialTransactionsByAccou
+  return db.getAllAsync<FinancialTransactionRecord>(
+    `SELECT
+      id,
+      group_id,
+      account_type,
+      amount,
+      reason,
+      member_id,
+      meeting_id,
+      transaction_type,
+      transaction_date,
+      created_at
+    FROM financial_transactions
+    WHERE group_id = ?
+      AND account_type = ?
+    ORDER BY created_at DESC`,
+    [groupId, accountType],
+  );
+    }
+  
