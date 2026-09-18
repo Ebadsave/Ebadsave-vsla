@@ -122,11 +122,18 @@ export default function HomeScreen({
   );
 
   const handleSetupRules = () => {
-    if (!activeGroup) {
-      Alert.alert(
-        'No Active Group',
-        'Please register a group before opening Setup Rules.',
-      );
+  if (!activeGroup) {
+    Alert.alert(
+      'No Active Group',
+      'Please register a group before opening Setup Rules.',
+    );
+    return;
+  }
+
+  navigation.navigate('SetupRules', {
+    groupId: activeGroup.id,
+  });
+};
       return;
     }
 
