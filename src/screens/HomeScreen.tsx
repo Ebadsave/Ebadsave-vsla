@@ -11,8 +11,10 @@ import {
 
 import {
   getAllGroups,
+  getMembersByGroupId,
   recordGroupActivity,
   GroupRecord,
+  MemberRecord,
 } from '../database/database';
 
 import { useFocusEffect } from '@react-navigation/native';
@@ -72,6 +74,9 @@ export default function HomeScreen({
   const [activeGroup, setActiveGroup] =
     useState<GroupRecord | null>(null);
 
+  const [executiveMemberId, setExecutiveMemberId] =
+    useState<number | null>(null);
+
   const loadActiveGroup = useCallback(async () => {
     try {
       const groups = await getAllGroups();
@@ -81,9 +86,23 @@ export default function HomeScreen({
       );
 
       if (activeGroups.length > 0) {
-        setActiveGroup(activeGroups[0]);
+        const group = activeGroups[0];
+
+        setActiveGroup(group);
+
+        const members = await getMembersByGroupId(group.id);
+
+        const executive = members.find(
+          (member: MemberRecord) =>
+            member.role?.toLowerCase() === 'executive',
+        );
+
+        setExecutiveMemberId(
+          executive ? executive.id : null,
+        );
       } else {
         setActiveGroup(null);
+        setExecutiveMemberId(null);
       }
     } catch (error) {
       console.error(
@@ -92,28 +111,41 @@ export default function HomeScreen({
       );
 
       setActiveGroup(null);
+      setExecutiveMemberId(null);
     }
   }, []);
 
-  /*
-   * Reload the group every time Home becomes visible.
-   *
-   * This fixes the situation where a group is created
-   * in ConstitutionScreen while HomeScreen is still mounted.
-   */
   useFocusEffect(
     useCallback(() => {
       loadActiveGroup();
     }, [loadActiveGroup]),
   );
 
+  const handleSetupRules = () => {
+    if (!activeGroup) {
+      Alert.alert(
+        'No Active Group',
+        'Please register a group before opening Setup Rules.',
+      );
+      return;
+    }
+
+    if (!executiveMemberId) {
+      Alert.alert(
+        'No Executive Member',
+        'Please register an executive member before opening Setup Rules.',
+      );
+      return;
+    }
+
+    navigation.navigate('SetupRules', {
+      groupId: activeGroup.id,
+      executiveMemberId: executiveMemberId,
+    });
+  };
+
   const handleNewMeeting = async () => {
     try {
-      /*
-       * Always refresh the database immediately before
-       * starting a meeting. This prevents HomeScreen from
-       * using an old/null group value.
-       */
       await loadActiveGroup();
 
       const groups = await getAllGroups();
@@ -165,7 +197,6 @@ export default function HomeScreen({
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Green Header */}
       <View style={styles.header}>
         <View style={styles.headerInfo}>
           <View style={styles.logo}>
@@ -183,24 +214,35 @@ export default function HomeScreen({
           </View>
         </View>
 
-        <TouchableOpacity
-          style={styles.constitutionButton}
-          onPress={() =>
-            navigation.navigate('Constitution')
-          }
-          activeOpacity={0.8}
-        >
-          <Text style={styles.constitutionText}>
-            Constitution
-          </Text>
-        </TouchableOpacity>
+        <View style={styles.headerButtons}>
+          <TouchableOpacity
+            style={styles.constitutionButton}
+            onPress={() =>
+              navigation.navigate('Constitution')
+            }
+            activeOpacity={0.8}
+          >
+            <Text style={styles.constitutionText}>
+              Constitution
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.setupRulesButton}
+            onPress={handleSetupRules}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.setupRulesText}>
+              Setup Rules
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
       >
-        {/* Summary Cards */}
         <View style={styles.cardsGrid}>
           {summaryCards.map((card) => (
             <View
@@ -237,7 +279,6 @@ export default function HomeScreen({
           ))}
         </View>
 
-        {/* Recent Activity */}
         <View style={styles.activityContainer}>
           <Text style={styles.sectionTitle}>
             Recent Activity
@@ -252,7 +293,6 @@ export default function HomeScreen({
           </View>
         </View>
 
-        {/* New Meeting */}
         <TouchableOpacity
           style={styles.meetingButton}
           onPress={handleNewMeeting}
@@ -320,6 +360,10 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
+  headerButtons: {
+    alignItems: 'flex-end',
+  },
+
   constitutionButton: {
     backgroundColor: '#ffffff',
     borderRadius: 8,
@@ -329,6 +373,21 @@ const styles = StyleSheet.create({
   },
 
   constitutionText: {
+    color: '#16a34a',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+
+  setupRulesButton: {
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    marginLeft: 8,
+    marginTop: 6,
+  },
+
+  setupRulesText: {
     color: '#16a34a',
     fontSize: 12,
     fontWeight: '800',
