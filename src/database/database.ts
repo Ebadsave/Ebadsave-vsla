@@ -1,133 +1,3110 @@
+Database code misses executive roles , chair, vice , secretary, treasure, 3key holders, 2 money counter
 import * as SQLite from 'expo-sqlite';
+import * as Crypto from 'expo-crypto';
 
-export type ExecutiveRole = 'chairperson'|'vice_chairperson'|'secretary'|'treasurer'|'money_counter_1'|'money_counter_2'|'key_holder_1'|'key_holder_2'|'key_holder_3'|'supervisor'|'member';
-export const EXECUTIVE_ROLES: ExecutiveRole[] = ['chairperson','vice_chairperson','secretary','treasurer','money_counter_1','money_counter_2','key_holder_1','key_holder_2','key_holder_3','supervisor'];
-export const EXECUTIVE_ROLE_LABELS: Record<ExecutiveRole,string> = { chairperson:'Chairperson', vice_chairperson:'Vice Chairperson', secretary:'Secretary', treasurer:'Treasurer', money_counter_1:'Money Counter 1', money_counter_2:'Money Counter 2', key_holder_1:'Key Holder 1', key_holder_2:'Key Holder 2', key_holder_3:'Key Holder 3', supervisor:'Supervisor', member:'Ordinary Member' };
+export type GroupRecord = {
+  id: number;
+  group_number: number;
+  group_name: string;
+  district: string;
+  country: string;
+  status: string;
+  created_at: string;
+  last_activity_at: string;
+};
 
-export type GroupRecord = { id:number; group_number:number; group_name:string; district:string; country:string; status:string; created_at:string; last_activity_at:string; cycle_start_date:string; cycle_end_date:string; share_value:number; };
-export type MemberRecord = { id:number; group_id:number; member_number:string; full_name:string; gender:string; age:number; phone:string|null; cell:string; district:string; photo_uri:string|null; role:ExecutiveRole; status:string; created_at:string; total_shares:number; total_savings:number; };
-export type ExecutiveRecord = { id:number; group_id:number; member_id:number; role:ExecutiveRole; elected_at:string; term_end_at:string; status:string; full_name:string; member_number:string; phone:string|null; photo_uri:string|null; };
-export type NextOfKinRecord = { id:number; member_id:number; slot:number; name:string|null; phone:string|null; gender:string|null; benefit_received:number; locked:number; created_at:string; updated_at:string; };
-export type VSLASetupRecord = { id:number; group_id:number; share_value:number; min_shares_per_meeting:number; max_shares_per_meeting:number; max_loan_multiple:number; loan_interest_rate:number; loan_term_weeks:number; social_fund_contribution:number; absence_fine:number; late_fine:number; meeting_frequency:string; cycle_months:number; };
-export type VSLASetupRuleUpdates = Partial<VSLASetupRecord>;
+export type MemberRecord = {
+  id: number;
+  group_id: number;
+  member_number: string;
+  full_name: string;
+  gender: string;
+  age: number;
+  phone: string | null;
+  cell: string;
+  district: string;
+  photo_uri: string | null;
+  status: string;
+  created_at: string;
+};
 
-let db: SQLite.SQLiteDatabase | null = null;
-export const getDatabase = async (): Promise<SQLite.SQLiteDatabase> => { if(!db) db = await SQLite.openDatabaseAsync('ebadsave_vsla_final.db'); return db; };
+export type NextOfKinRecord = {
+  id: number;
+  member_id: number;
+  slot: number;
+  name: string | null;
+  phone: string | null;
+  gender: string | null;
+  benefit_received: number;
+  locked: number;
+  created_at: string;
+  updated_at: string;
+};
 
-export const initDatabase = async () => {
-  const database = await getDatabase();
-  await database.execAsync('PRAGMA foreign_keys = ON;');
-  await database.execAsync(`
-    CREATE TABLE IF NOT EXISTS groups (id INTEGER PRIMARY KEY AUTOINCREMENT, group_number INTEGER UNIQUE NOT NULL, group_name TEXT NOT NULL, district TEXT NOT NULL, country TEXT DEFAULT 'Uganda', status TEXT DEFAULT 'active', share_value REAL DEFAULT 5000, cycle_start_date TEXT, cycle_end_date TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, last_activity_at TEXT DEFAULT CURRENT_TIMESTAMP);
-    CREATE TABLE IF NOT EXISTS members (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, member_number TEXT UNIQUE NOT NULL, full_name TEXT NOT NULL, gender TEXT NOT NULL, age INTEGER NOT NULL, phone TEXT, cell TEXT NOT NULL, district TEXT NOT NULL, photo_uri TEXT, role TEXT DEFAULT 'member', status TEXT DEFAULT 'active', total_shares INTEGER DEFAULT 0, total_savings REAL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE);
-    CREATE TABLE IF NOT EXISTS group_executives (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, member_id INTEGER NOT NULL, role TEXT NOT NULL, elected_at TEXT DEFAULT CURRENT_TIMESTAMP, term_end_at TEXT, status TEXT DEFAULT 'active', elected_by TEXT, votes_received INTEGER DEFAULT 0, UNIQUE(group_id, role), UNIQUE(group_id, member_id, role), FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE, FOREIGN KEY(member_id) REFERENCES members(id) ON DELETE CASCADE);
-    CREATE TABLE IF NOT EXISTS next_of_kin (id INTEGER PRIMARY KEY AUTOINCREMENT, member_id INTEGER NOT NULL, slot INTEGER NOT NULL, name TEXT, phone TEXT, gender TEXT, benefit_received REAL DEFAULT 0, locked INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(member_id, slot), FOREIGN KEY(member_id) REFERENCES members(id) ON DELETE CASCADE);
-    CREATE TABLE IF NOT EXISTS vsla_setup (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER UNIQUE NOT NULL, share_value REAL DEFAULT 5000, min_shares_per_meeting INTEGER DEFAULT 1, max_shares_per_meeting INTEGER DEFAULT 5, max_loan_multiple REAL DEFAULT 3, loan_interest_rate REAL DEFAULT 10, loan_term_weeks INTEGER DEFAULT 12, social_fund_contribution REAL DEFAULT 1000, absence_fine REAL DEFAULT 2000, late_fine REAL DEFAULT 1000, meeting_frequency TEXT DEFAULT 'weekly', cycle_months INTEGER DEFAULT 12, three_keys_required INTEGER DEFAULT 1, money_counters_required INTEGER DEFAULT 2, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE);
-    CREATE TABLE IF NOT EXISTS meetings (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, meeting_number INTEGER NOT NULL, meeting_date TEXT DEFAULT CURRENT_TIMESTAMP, venue TEXT, attendance_count INTEGER DEFAULT 0, total_shares_bought INTEGER DEFAULT 0, total_savings REAL DEFAULT 0, total_social_fund REAL DEFAULT 0, total_fines REAL DEFAULT 0, box_opened INTEGER DEFAULT 0, key_holder_1_present INTEGER DEFAULT 0, key_holder_2_present INTEGER DEFAULT 0, key_holder_3_present INTEGER DEFAULT 0, money_counter_1_id INTEGER, money_counter_2_id INTEGER, status TEXT DEFAULT 'planned', FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE);
-    CREATE TABLE IF NOT EXISTS savings (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, member_id INTEGER NOT NULL, meeting_id INTEGER, shares_bought INTEGER NOT NULL, amount REAL NOT NULL, share_value_at_time REAL NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE, FOREIGN KEY(member_id) REFERENCES members(id) ON DELETE CASCADE);
-    CREATE TABLE IF NOT EXISTS social_fund (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, member_id INTEGER NOT NULL, amount REAL NOT NULL, type TEXT DEFAULT 'contribution', reason TEXT, meeting_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(group_id) REFERENCES groups(id), FOREIGN KEY(member_id) REFERENCES members(id));
-    CREATE TABLE IF NOT EXISTS loans (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, member_id INTEGER NOT NULL, amount REAL NOT NULL, interest_rate REAL NOT NULL, interest_amount REAL NOT NULL, total_due REAL NOT NULL, amount_paid REAL DEFAULT 0, status TEXT DEFAULT 'active', issue_date TEXT DEFAULT CURRENT_TIMESTAMP, due_date TEXT NOT NULL, guarantor_1_id INTEGER, guarantor_2_id INTEGER, approved_by_secretary INTEGER, approved_by_treasurer INTEGER, meeting_id INTEGER, FOREIGN KEY(group_id) REFERENCES groups(id), FOREIGN KEY(member_id) REFERENCES members(id));
-    CREATE TABLE IF NOT EXISTS fines (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, member_id INTEGER NOT NULL, amount REAL NOT NULL, reason TEXT NOT NULL, status TEXT DEFAULT 'unpaid', meeting_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(group_id) REFERENCES groups(id), FOREIGN KEY(member_id) REFERENCES members(id));
-    CREATE TABLE IF NOT EXISTS attendance (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, member_id INTEGER NOT NULL, meeting_id INTEGER NOT NULL, status TEXT DEFAULT 'present', created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(group_id) REFERENCES groups(id), FOREIGN KEY(member_id) REFERENCES members(id), FOREIGN KEY(meeting_id) REFERENCES meetings(id));
-    CREATE TABLE IF NOT EXISTS shareout (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, member_id INTEGER NOT NULL, total_shares INTEGER NOT NULL, total_savings REAL NOT NULL, loan_balance REAL DEFAULT 0, social_fund_share REAL DEFAULT 0, fines_due REAL DEFAULT 0, net_payout REAL NOT NULL, cycle_end_date TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(group_id) REFERENCES groups(id), FOREIGN KEY(member_id) REFERENCES members(id));
+export type GroupRuleRecord = {
+  id: number;
+  group_id: number;
+  article_number: number;
+  title: string;
+  content: string;
+  effective_days: number;
+  updated_at: string;
+};
+
+/* ============================================================
+   VSLA SETUP RULES
+   ============================================================ */
+
+export type VSLASetupRuleRecord = {
+  id: number;
+  group_id: number;
+  share_value: number;
+  minimum_shares_per_meeting: number;
+  maximum_shares_per_meeting: number;
+  maximum_loan_multiple: number;
+  loan_interest_percentage: number;
+  loan_interest_period: string;
+  maximum_loan_repayment_period: number;
+  social_fund_contribution: number;
+  absence_fine: number;
+  late_fine: number;
+  non_saving_fine: number;
+  meeting_frequency: string;
+  cycle_duration_months: number;
+  leadership_term_months: number;
+  share_out_enabled: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VSLASetupRuleUpdates = {
+  shareValue?: number;
+  minimumSharesPerMeeting?: number;
+  maximumSharesPerMeeting?: number;
+  maximumLoanMultiple?: number;
+  loanInterestPercentage?: number;
+  loanInterestPeriod?: string;
+  maximumLoanRepaymentPeriod?: number;
+  socialFundContribution?: number;
+  absenceFine?: number;
+  lateFine?: number;
+  nonSavingFine?: number;
+  meetingFrequency?: string;
+  cycleDurationMonths?: number;
+  leadershipTermMonths?: number;
+  shareOutEnabled?: boolean | number;
+};
+
+/* ============================================================
+   FINANCIAL TYPES
+   ============================================================ */
+
+export type FinancialAccountType =
+  | 'savings'
+  | 'loan_fund'
+  | 'loan_repayment'
+  | 'social_fund'
+  | 'fines'
+  | 'external_fund'
+  | 'expenditure_fund'
+  | 'insurance_fund';
+
+export type FinancialAccountRecord = {
+  id: number;
+  group_id: number;
+  account_type: FinancialAccountType;
+  balance: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FinancialTransactionRecord = {
+  id: number;
+  group_id: number;
+  account_type: FinancialAccountType;
+  amount: number;
+  reason: string;
+  member_id: number | null;
+  meeting_id: number | null;
+  transaction_type: string;
+  created_at: string;
+};
+
+export type FinancialSummary = {
+  savings: number;
+  loanFund: number;
+  loanRepayment: number;
+  socialFund: number;
+  fines: number;
+  externalFund: number;
+  expenditureFund: number;
+  insuranceFund: number;
+  fundBalance: number;
+};
+
+/* ============================================================
+   DATABASE CONSTANTS
+   ============================================================ */
+
+const dbPromise = SQLite.openDatabaseAsync(
+  'ebadsave_vsla.db',
+);
+
+const GROUP_START = 2010;
+const GROUP_END = 9090;
+
+const now = (): string =>
+  new Date().toISOString();
+
+const normalizeText = (
+  value: string | null | undefined,
+): string => {
+  return (value ?? '').trim();
+};
+
+/* ============================================================
+   PASSCODE
+   ============================================================ */
+
+const isValidPasscode = (
+  code: string,
+): boolean => {
+  return /^[A-Za-z1-9./$-]{4}$/.test(code);
+};
+
+async function hashPasscode(
+  passcode: string,
+  salt: string,
+): Promise<string> {
+  return Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    `${salt}:${passcode}`,
+  );
+}
+
+/* ============================================================
+   GROUP NUMBER HELPERS
+   ============================================================ */
+
+function parseGroupNumber(
+  value: number | string | null | undefined,
+): number {
+  if (typeof value === 'number') {
+    return value;
+  }
+
+  const text = normalizeText(value);
+
+  const match = text.match(
+    /KYA\s*(\d{4})/i,
+  );
+
+  if (match) {
+    return Number(match[1]);
+  }
+
+  const numeric = Number(text);
+
+  if (Number.isFinite(numeric)) {
+    return numeric;
+  }
+
+  return 0;
+}
+
+const GROUP_SELECT = `
+  SELECT
+    id,
+    CAST(
+      CASE
+        WHEN UPPER(CAST(group_number AS TEXT)) LIKE 'KYA%'
+        THEN REPLACE(
+          UPPER(CAST(group_number AS TEXT)),
+          'KYA',
+          ''
+        )
+        ELSE CAST(group_number AS TEXT)
+      END
+      AS INTEGER
+    ) AS group_number,
+    group_name,
+    district,
+    country,
+    status,
+    created_at,
+    last_activity_at
+  FROM groups
+`;
+
+/* ============================================================
+   FINANCIAL HELPERS
+   ============================================================ */
+
+const FINANCIAL_ACCOUNT_TYPES: FinancialAccountType[] = [
+  'savings',
+  'loan_fund',
+  'loan_repayment',
+  'social_fund',
+  'fines',
+  'external_fund',
+  'expenditure_fund',
+  'insurance_fund',
+];
+
+function isFinancialAccountType(
+  value: string,
+): value is FinancialAccountType {
+  return FINANCIAL_ACCOUNT_TYPES.includes(
+    value as FinancialAccountType,
+  );
+}
+
+const FUND_BALANCE_ACCOUNTS: FinancialAccountType[] = [
+  'savings',
+  'loan_fund',
+  'loan_repayment',
+  'social_fund',
+  'fines',
+  'external_fund',
+  'expenditure_fund',
+];
+
+function calculateFundBalance(
+  summary: Omit<FinancialSummary, 'fundBalance'>,
+): number {
+  return (
+    summary.savings +
+    summary.loanFund +
+    summary.loanRepayment +
+    summary.socialFund +
+    summary.fines +
+    summary.externalFund +
+    summary.expenditureFund
+  );
+}
+
+/* ============================================================
+   DATABASE MIGRATION HELPER
+   ============================================================ */
+
+async function addColumnIfMissing(
+  db: SQLite.SQLiteDatabase,
+  table: string,
+  column: string,
+  definition: string,
+): Promise<void> {
+  const columns =
+    await db.getAllAsync<{ name: string }>(
+      `PRAGMA table_info(${table});`,
+    );
+
+  const exists = columns.some(
+    (item) => item.name === column,
+  );
+
+  if (!exists) {
+    await db.execAsync(
+      `ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`,
+    );
+  }
+}
+
+/* ============================================================
+   FINANCIAL ACCOUNT CREATION
+   ============================================================ */
+
+async function ensureFinancialAccountsForGroup(
+  db: SQLite.SQLiteDatabase,
+  groupId: number,
+): Promise<void> {
+  const timestamp = now();
+
+  for (
+    const accountType of FINANCIAL_ACCOUNT_TYPES
+  ) {
+    await db.runAsync(
+      `INSERT OR IGNORE INTO financial_accounts (
+        group_id,
+        account_type,
+        balance,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, 0, ?, ?)`,
+      groupId,
+      accountType,
+      timestamp,
+      timestamp,
+    );
+  }
+}
+
+async function ensureFinancialAccountsForAllGroups(
+  db: SQLite.SQLiteDatabase,
+): Promise<void> {
+  const groups =
+    await db.getAllAsync<{ id: number }>(
+      `SELECT id FROM groups`,
+    );
+
+  for (const group of groups) {
+    await ensureFinancialAccountsForGroup(
+      db,
+      group.id,
+    );
+  }
+}
+
+/* ============================================================
+   VSLA DEFAULT RULES
+   ============================================================ */
+
+async function createDefaultVSLASetupRules(
+  db: SQLite.SQLiteDatabase,
+  groupId: number,
+): Promise<void> {
+  const timestamp = now();
+
+  await db.runAsync(
+    `INSERT OR IGNORE INTO vsla_setup_rules (
+      group_id,
+      share_value,
+      minimum_shares_per_meeting,
+      maximum_shares_per_meeting,
+      maximum_loan_multiple,
+      loan_interest_percentage,
+      loan_interest_period,
+      maximum_loan_repayment_period,
+      social_fund_contribution,
+      absence_fine,
+      late_fine,
+      non_saving_fine,
+      meeting_frequency,
+      cycle_duration_months,
+      leadership_term_months,
+      share_out_enabled,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      ?,
+      1000,
+      1,
+      5,
+      3,
+      5,
+      'per month',
+      12,
+      0,
+      0,
+      0,
+      0,
+      'weekly',
+      12,
+      12,
+      1,
+      ?,
+      ?
+    )`,
+    groupId,
+    timestamp,
+    timestamp,
+  );
+}
+
+/* ============================================================
+   GROUP DORMANCY
+   ============================================================ */
+
+async function refreshGroupDormancy(
+  db: SQLite.SQLiteDatabase,
+): Promise<void> {
+  const cutoff = new Date();
+
+  cutoff.setDate(
+    cutoff.getDate() - 90,
+  );
+
+  await db.runAsync(
+    `UPDATE groups
+     SET status = 'dormant'
+     WHERE status = 'active'
+     AND last_activity_at < ?`,
+    cutoff.toISOString(),
+  );
+}
+
+/* ============================================================
+   NEXT OF KIN AUTOMATIC APPLICATIONS
+   ============================================================ */
+
+async function applyDueNextOfKinChanges(
+  db: SQLite.SQLiteDatabase,
+): Promise<void> {
+  const pending =
+    await db.getAllAsync<{
+      id: number;
+      member_id: number;
+      slot: number;
+      action: string;
+      new_name: string | null;
+      new_phone: string | null;
+      new_gender: string | null;
+      effective_at: string;
+    }>(
+      `SELECT
+        id,
+        member_id,
+        slot,
+        action,
+        new_name,
+        new_phone,
+        new_gender,
+        effective_at
+       FROM next_of_kin_change_history
+       WHERE applied = 0
+       AND effective_at <= ?
+       ORDER BY id ASC`,
+      now(),
+    );
+
+  for (const change of pending) {
+    if (change.action === 'delete') {
+      await db.runAsync(
+        `UPDATE member_next_of_kin
+         SET
+           name = NULL,
+           phone = NULL,
+           gender = NULL,
+           updated_at = ?
+         WHERE member_id = ?
+         AND slot = ?`,
+        now(),
+        change.member_id,
+        change.slot,
+      );
+    } else {
+      await db.runAsync(
+        `UPDATE member_next_of_kin
+         SET
+           name = ?,
+           phone = ?,
+           gender = ?,
+           updated_at = ?
+         WHERE member_id = ?
+         AND slot = ?`,
+        change.new_name,
+        change.new_phone,
+        change.new_gender,
+        now(),
+        change.member_id,
+        change.slot,
+      );
+    }
+
+    await db.runAsync(
+      `UPDATE next_of_kin_change_history
+       SET applied = 1
+       WHERE id = ?`,
+      change.id,
+    );
+  }
+}
+
+async function applyDueNextOfKinBenefits(
+  db: SQLite.SQLiteDatabase,
+): Promise<void> {
+  const pending =
+    await db.getAllAsync<{
+      id: number;
+      member_id: number;
+      slot: number;
+    }>(
+      `SELECT
+        id,
+        member_id,
+        slot
+       FROM next_of_kin_benefits
+       WHERE status = 'pending'
+       AND effective_at <= ?
+       ORDER BY id ASC`,
+      now(),
+    );
+
+  for (const benefit of pending) {
+    await db.runAsync(
+      `UPDATE next_of_kin_benefits
+       SET status = 'received'
+       WHERE id = ?`,
+      benefit.id,
+    );
+
+    await db.runAsync(
+      `UPDATE member_next_of_kin
+       SET
+         benefit_received = 1,
+         locked = 1,
+         updated_at = ?
+       WHERE member_id = ?
+       AND slot = ?`,
+      now(),
+      benefit.member_id,
+      benefit.slot,
+    );
+  }
+}
+
+/* ============================================================
+   DATABASE INITIALIZATION
+   ============================================================ */
+
+async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
+  const db = await dbPromise;
+
+  await db.execAsync(`
+    PRAGMA foreign_keys = ON;
+    PRAGMA journal_mode = WAL;
+
+    CREATE TABLE IF NOT EXISTS groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_number TEXT NOT NULL,
+      group_name TEXT NOT NULL,
+      district TEXT NOT NULL DEFAULT '',
+      country TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      last_activity_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS members (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      member_number TEXT NOT NULL,
+      full_name TEXT NOT NULL,
+      gender TEXT NOT NULL DEFAULT '',
+      age INTEGER NOT NULL DEFAULT 0,
+      phone TEXT,
+      cell TEXT NOT NULL DEFAULT '',
+      district TEXT NOT NULL DEFAULT '',
+      photo_uri TEXT,
+      role TEXT NOT NULL DEFAULT 'member',
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS deleted_member_numbers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      member_number TEXT NOT NULL,
+      deleted_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS member_next_of_kin (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      member_id INTEGER NOT NULL,
+      slot INTEGER NOT NULL,
+      name TEXT,
+      phone TEXT,
+      gender TEXT,
+      benefit_received INTEGER NOT NULL DEFAULT 0,
+      locked INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(member_id, slot),
+      FOREIGN KEY (member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS next_of_kin_change_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      member_id INTEGER NOT NULL,
+      slot INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      old_name TEXT,
+      old_phone TEXT,
+      old_gender TEXT,
+      new_name TEXT,
+      new_phone TEXT,
+      new_gender TEXT,
+      reason TEXT NOT NULL,
+      requested_at TEXT NOT NULL,
+      effective_at TEXT NOT NULL,
+      applied INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS next_of_kin_benefits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      member_id INTEGER NOT NULL,
+      slot INTEGER NOT NULL,
+      benefit_amount REAL NOT NULL DEFAULT 0,
+      reason TEXT NOT NULL,
+      benefit_date TEXT NOT NULL,
+      effective_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      FOREIGN KEY (member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS group_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      article_number INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      effective_days INTEGER NOT NULL DEFAULT 30,
+      updated_at TEXT NOT NULL,
+      UNIQUE(group_id, article_number),
+      FOREIGN KEY (group_id) REFERENCES groups(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS vsla_setup_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL UNIQUE,
+      share_value REAL NOT NULL DEFAULT 1000,
+      minimum_shares_per_meeting INTEGER NOT NULL DEFAULT 1,
+      maximum_shares_per_meeting INTEGER NOT NULL DEFAULT 5,
+      maximum_loan_multiple REAL NOT NULL DEFAULT 3,
+      loan_interest_percentage REAL NOT NULL DEFAULT 5,
+      loan_interest_period TEXT NOT NULL DEFAULT 'per month',
+      maximum_loan_repayment_period INTEGER NOT NULL DEFAULT 12,
+      social_fund_contribution REAL NOT NULL DEFAULT 0,
+      absence_fine REAL NOT NULL DEFAULT 0,
+      late_fine REAL NOT NULL DEFAULT 0,
+      non_saving_fine REAL NOT NULL DEFAULT 0,
+      meeting_frequency TEXT NOT NULL DEFAULT 'weekly',
+      cycle_duration_months INTEGER NOT NULL DEFAULT 12,
+      leadership_term_months INTEGER NOT NULL DEFAULT 12,
+      share_out_enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS group_meetings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      meeting_date TEXT NOT NULL,
+      opened_at TEXT,
+      closed_at TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS member_credentials (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      member_id INTEGER NOT NULL UNIQUE,
+      salt TEXT NOT NULL,
+      passcode_hash TEXT,
+      phone_eligible INTEGER NOT NULL DEFAULT 0,
+      failed_attempts INTEGER NOT NULL DEFAULT 0,
+      locked_until TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS member_auth_attempts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      member_id INTEGER NOT NULL,
+      success INTEGER NOT NULL DEFAULT 0,
+      attempted_at TEXT NOT NULL,
+      FOREIGN KEY (member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS member_transaction_signatures (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      member_id INTEGER NOT NULL,
+      transaction_type TEXT NOT NULL,
+      transaction_id INTEGER,
+      signed_at TEXT NOT NULL,
+      FOREIGN KEY (member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS app_access_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      meeting_id INTEGER,
+      opened_at TEXT NOT NULL,
+      closed_at TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS app_access_authorizers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER NOT NULL,
+      member_id INTEGER NOT NULL,
+      authorizer_role TEXT NOT NULL,
+      authorized_at TEXT NOT NULL,
+      UNIQUE(session_id, member_id),
+      FOREIGN KEY (session_id) REFERENCES app_access_sessions(id),
+      FOREIGN KEY (member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS meeting_closures (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      meeting_id INTEGER NOT NULL,
+      closed_at TEXT NOT NULL,
+      total_savings REAL NOT NULL DEFAULT 0,
+      loan_fund REAL NOT NULL DEFAULT 0,
+      group_fund REAL NOT NULL DEFAULT 0,
+      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS financial_accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      account_type TEXT NOT NULL,
+      balance REAL NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(group_id, account_type),
+      FOREIGN KEY (group_id) REFERENCES groups(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS financial_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      account_type TEXT NOT NULL,
+      amount REAL NOT NULL,
+      reason TEXT NOT NULL,
+      member_id INTEGER,
+      meeting_id INTEGER,
+      transaction_type TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (member_id) REFERENCES members(id),
+      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_financial_accounts_group
+      ON financial_accounts(group_id);
+
+    CREATE INDEX IF NOT EXISTS idx_financial_transactions_group
+      ON financial_transactions(group_id);
+
+    CREATE INDEX IF NOT EXISTS idx_financial_transactions_account
+      ON financial_transactions(group_id, account_type);
+
+    CREATE TABLE IF NOT EXISTS member_statement_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      meeting_id INTEGER NOT NULL,
+      member_id INTEGER NOT NULL,
+      individual_total_savings REAL NOT NULL DEFAULT 0,
+      individual_loan_balance REAL NOT NULL DEFAULT 0,
+      individual_loan_due_date TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
+      FOREIGN KEY (member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS notification_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      member_id INTEGER,
+      notification_type TEXT NOT NULL,
+      priority TEXT NOT NULL DEFAULT 'normal',
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS notification_delivery (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      notification_id INTEGER NOT NULL,
+      channel TEXT NOT NULL,
+      delivered_at TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      FOREIGN KEY (notification_id) REFERENCES notification_queue(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_members_group
+      ON members(group_id);
+
+    CREATE INDEX IF NOT EXISTS idx_members_status
+      ON members(status);
+
+    CREATE INDEX IF NOT EXISTS idx_groups_status
+      ON groups(status);
+
+    CREATE INDEX IF NOT EXISTS idx_kin_member
+      ON member_next_of_kin(member_id);
+
+    CREATE INDEX IF NOT EXISTS idx_kin_history_member
+      ON next_of_kin_change_history(member_id);
+
+    CREATE INDEX IF NOT EXISTS idx_auth_attempt_member
+      ON member_auth_attempts(member_id);
+
+    CREATE INDEX IF NOT EXISTS idx_notifications_status
+      ON notification_queue(status);
   `);
-  return database;
-};
-export const initializeDatabase = initDatabase;
-// ========== EXECUTIVE FUNCTIONS ==========
-export const assignExecutiveRole = async (groupId: number, memberId: number, role: ExecutiveRole, electedBy?: string): Promise<number> => {
-  if(role === 'member') throw new Error('Cannot assign ordinary member as executive');
-  const database = await getDatabase();
-  const member = await database.getFirstAsync('SELECT * FROM members WHERE id=? AND group_id=?', [memberId, groupId]) as any;
-  if(!member) throw new Error('Member not in group');
-  const existingRole = await database.getFirstAsync('SELECT * FROM group_executives WHERE group_id=? AND role=? AND status="active"', [groupId, role]) as any;
-  if(existingRole) {
-    await database.runAsync('UPDATE group_executives SET status="replaced", term_end_at=CURRENT_TIMESTAMP WHERE id=?', [existingRole.id]);
-    await database.runAsync('UPDATE members SET role="member" WHERE id=?', [existingRole.member_id]);
+
+  await addColumnIfMissing(
+    db,
+    'members',
+    'gender',
+    "TEXT NOT NULL DEFAULT ''",
+  );
+
+  await addColumnIfMissing(
+    db,
+    'members',
+    'age',
+    'INTEGER NOT NULL DEFAULT 0',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'members',
+    'cell',
+    "TEXT NOT NULL DEFAULT ''",
+  );
+
+  await addColumnIfMissing(
+    db,
+    'members',
+    'district',
+    "TEXT NOT NULL DEFAULT ''",
+  );
+
+  await addColumnIfMissing(
+    db,
+    'members',
+    'photo_uri',
+    'TEXT',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'members',
+    'role',
+    "TEXT NOT NULL DEFAULT 'member'",
+  );
+
+  await ensureFinancialAccountsForAllGroups(db);
+
+  const groups =
+    await db.getAllAsync<{ id: number }>(
+      `SELECT id FROM groups`,
+    );
+
+  for (const group of groups) {
+    await createDefaultVSLASetupRules(
+      db,
+      group.id,
+    );
   }
-  const existingMemberExec = await database.getFirstAsync('SELECT * FROM group_executives WHERE group_id=? AND member_id=? AND status="active"', [groupId, memberId]) as any;
-  if(existingMemberExec) {
-    await database.runAsync('UPDATE group_executives SET status="replaced" WHERE id=?', [existingMemberExec.id]);
+
+  await refreshGroupDormancy(db);
+  await applyDueNextOfKinChanges(db);
+  await applyDueNextOfKinBenefits(db);
+
+  return db;
+}
+
+/* ============================================================
+   DATABASE COMPATIBILITY
+   ============================================================ */
+
+export async function initializeDatabase(): Promise<void> {
+  await getDatabase();
+}
+
+export async function initDatabase(): Promise<void> {
+  await initializeDatabase();
+}
+
+/* ============================================================
+   GROUP FUNCTIONS
+   ============================================================ */
+
+export async function getAllGroups(): Promise<GroupRecord[]> {
+  const db = await getDatabase();
+
+  return db.getAllAsync<GroupRecord>(
+    `${GROUP_SELECT}
+     ORDER BY
+       CASE WHEN status = 'active' THEN 0 ELSE 1 END,
+       group_number ASC,
+       id ASC`,
+  );
+}
+
+export async function getActiveGroup(): Promise<GroupRecord | null> {
+  const db = await getDatabase();
+
+  return db.getFirstAsync<GroupRecord>(
+    `${GROUP_SELECT}
+     WHERE status = 'active'
+     ORDER BY id ASC
+     LIMIT 1`,
+  );
+}
+
+async function findNextAvailableGroupNumber(
+  db: SQLite.SQLiteDatabase,
+): Promise<number> {
+  await refreshGroupDormancy(db);
+
+  const groups =
+    await db.getAllAsync<{
+      group_number: string | number;
+      status: string;
+    }>(
+      `SELECT group_number, status
+       FROM groups
+       WHERE status = 'active'`,
+    );
+
+  const activeNumbers =
+    new Set<number>();
+
+  for (const group of groups) {
+    const number =
+      parseGroupNumber(
+        group.group_number,
+      );
+
+    if (
+      number >= GROUP_START &&
+      number <= GROUP_END
+    ) {
+      activeNumbers.add(number);
+    }
   }
-  const termEnd = new Date(); termEnd.setMonth(termEnd.getMonth()+12);
-  const result = await database.runAsync('INSERT INTO group_executives (group_id, member_id, role, elected_by, term_end_at) VALUES (?,?,?,?,?)', [groupId, memberId, role, electedBy||'group', termEnd.toISOString()]);
-  await database.runAsync('UPDATE members SET role=? WHERE id=?', [role, memberId]);
-  return result.lastInsertRowId;
-};
 
-export const getExecutivesByGroupId = async (groupId: number): Promise<ExecutiveRecord[]> => {
-  const database = await getDatabase();
-  return await database.getAllAsync(`SELECT ge.*, m.full_name, m.member_number, m.phone, m.photo_uri FROM group_executives ge JOIN members m ON ge.member_id=m.id WHERE ge.group_id=? AND ge.status='active' ORDER BY CASE ge.role WHEN 'chairperson' THEN 1 WHEN 'vice_chairperson' THEN 2 WHEN 'secretary' THEN 3 WHEN 'treasurer' THEN 4 WHEN 'money_counter_1' THEN 5 WHEN 'money_counter_2' THEN 6 WHEN 'key_holder_1' THEN 7 WHEN 'key_holder_2' THEN 8 WHEN 'key_holder_3' THEN 9 WHEN 'supervisor' THEN 10 ELSE 99 END`, [groupId]) as ExecutiveRecord[];
-};
-
-export const getKeyHolders = async (groupId: number): Promise<ExecutiveRecord[]> => {
-  const database = await getDatabase();
-  return await database.getAllAsync(`SELECT ge.*, m.full_name, m.member_number, m.phone, m.photo_uri FROM group_executives ge JOIN members m ON ge.member_id=m.id WHERE ge.group_id=? AND ge.role IN ('key_holder_1','key_holder_2','key_holder_3') AND ge.status='active' ORDER BY ge.role`, [groupId]) as ExecutiveRecord[];
-};
-
-export const getMoneyCounters = async (groupId: number): Promise<ExecutiveRecord[]> => {
-  const database = await getDatabase();
-  return await database.getAllAsync(`SELECT ge.*, m.full_name, m.member_number, m.phone FROM group_executives ge JOIN members m ON ge.member_id=m.id WHERE ge.group_id=? AND ge.role IN ('money_counter_1','money_counter_2') AND ge.status='active'`, [groupId]) as ExecutiveRecord[];
-};
-
-export const canOpenBox = async (groupId: number) => {
-  const holders = await getKeyHolders(groupId);
-  return { canOpen: holders.length >= 3, present: holders.length, required: 3, holders };
-};
-
-export const removeExecutiveRole = async (groupId: number, role: ExecutiveRole): Promise<void> => {
-  const database = await getDatabase();
-  const exec = await database.getFirstAsync('SELECT * FROM group_executives WHERE group_id=? AND role=? AND status="active"', [groupId, role]) as any;
-  if(exec) {
-    await database.runAsync('UPDATE group_executives SET status="removed", term_end_at=CURRENT_TIMESTAMP WHERE id=?', [exec.id]);
-    await database.runAsync('UPDATE members SET role="member" WHERE id=?', [exec.member_id]);
+  for (
+    let number = GROUP_START;
+    number <= GROUP_END;
+    number += 1
+  ) {
+    if (!activeNumbers.has(number)) {
+      return number;
+    }
   }
-};
 
-export const getExecutiveRequirementsStatus = async (groupId: number) => {
-  const execs = await getExecutivesByGroupId(groupId);
-  const has = (r:ExecutiveRole) => execs.some(e=>e.role===r);
-  return { chairperson:has('chairperson'), vice_chairperson:has('vice_chairperson'), secretary:has('secretary'), treasurer:has('treasurer'), money_counter_1:has('money_counter_1'), money_counter_2:has('money_counter_2'), key_holder_1:has('key_holder_1'), key_holder_2:has('key_holder_2'), key_holder_3:has('key_holder_3'), supervisor:has('supervisor'), total:execs.length, required:10, isComplete:execs.length>=7, executives:execs };
-};
+  throw new Error(
+    'No group number is currently available.',
+  );
+}
 
-export const createGroup = async (data: {group_name:string; district:string; share_value?:number; country?:string;}): Promise<number> => {
-  const database = await getDatabase();
-  const last = await database.getFirstAsync('SELECT MAX(group_number) as maxNum FROM groups') as any;
-  const nextNumber = (last?.maxNum || 0) + 1;
-  const now = new Date(); const end = new Date(); end.setMonth(end.getMonth()+12);
-  const result = await database.runAsync('INSERT INTO groups (group_number, group_name, district, country, share_value, cycle_start_date, cycle_end_date) VALUES (?,?,?,?,?,?,?)', [nextNumber, data.group_name, data.district, data.country||'Uganda', data.share_value||5000, now.toISOString(), end.toISOString()]);
-  const groupId = result.lastInsertRowId;
-  await database.runAsync('INSERT INTO vsla_setup (group_id, share_value) VALUES (?,?)', [groupId, data.share_value||5000]);
-  await database.runAsync('UPDATE groups SET last_activity_at=? WHERE id=?', [now.toISOString(), groupId]);
+export async function createGroup(
+  groupName: string,
+  district: string,
+  country: string,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const cleanName =
+    normalizeText(groupName);
+
+  const cleanDistrict =
+    normalizeText(district);
+
+  const cleanCountry =
+    normalizeText(country);
+
+  if (!cleanName) {
+    throw new Error(
+      'Group name is required.',
+    );
+  }
+
+  if (!cleanDistrict) {
+    throw new Error(
+      'District is required.',
+    );
+  }
+
+  if (!cleanCountry) {
+    throw new Error(
+      'Country is required.',
+    );
+  }
+
+  const groupNumber =
+    await findNextAvailableGroupNumber(db);
+
+  const timestamp = now();
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO groups (
+        group_number,
+        group_name,
+        district,
+        country,
+        status,
+        created_at,
+        last_activity_at
+      )
+      VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+      groupNumber,
+      cleanName,
+      cleanDistrict,
+      cleanCountry,
+      timestamp,
+      timestamp,
+    );
+
+  const groupId =
+    result.lastInsertRowId;
+
+  await ensureFinancialAccountsForGroup(
+    db,
+    groupId,
+  );
+
+  await insertDefaultConstitution(
+    db,
+    groupId,
+  );
+
+  await createDefaultVSLASetupRules(
+    db,
+    groupId,
+  );
+
   return groupId;
-};
-export const registerGroup = createGroup;
-export const getAllGroups = async (): Promise<GroupRecord[]> => { const database = await getDatabase(); return await database.getAllAsync('SELECT * FROM groups ORDER BY created_at DESC') as GroupRecord[]; };
-export const getGroupById = async (id:number): Promise<GroupRecord|null> => { const database = await getDatabase(); return await database.getFirstAsync('SELECT * FROM groups WHERE id=?', [id]) as GroupRecord|null; };
-export const recordGroupActivity = async (groupId:number): Promise<void> => { const database = await getDatabase(); await database.runAsync('UPDATE groups SET last_activity_at=? WHERE id=?', [new Date().toISOString(), groupId]); };
+}
 
-export const createMember = async (data: {group_id:number; full_name:string; gender:string; age:number; cell:string; district:string; phone?:string; role?:ExecutiveRole; photo_uri?:string;}): Promise<number> => {
-  const database = await getDatabase();
-  const memberNumber = `M-${data.group_id}-${Date.now().toString().slice(-6)}`;
-  const result = await database.runAsync('INSERT INTO members (group_id, member_number, full_name, gender, age, phone, cell, district, role, photo_uri) VALUES (?,?,?,?,?,?,?,?,?,?)', [data.group_id, memberNumber, data.full_name, data.gender, data.age, data.phone||null, data.cell, data.district, data.role||'member', data.photo_uri||null]);
-  const memberId = result.lastInsertRowId;
-  await database.runAsync('INSERT INTO next_of_kin (member_id, slot) VALUES (?,1), (?,2)', [memberId, memberId]);
-  await recordGroupActivity(data.group_id);
+export async function registerGroup(input: {
+  groupName: string;
+  district: string;
+  country: string;
+}): Promise<GroupRecord> {
+  const groupId =
+    await createGroup(
+      input.groupName,
+      input.district,
+      input.country,
+    );
+
+  const group =
+    await getGroupById(groupId);
+
+  if (!group) {
+    throw new Error(
+      'Group was created but could not be loaded.',
+    );
+  }
+
+  return group;
+}
+
+export async function recordGroupActivity(
+  groupId: number,
+): Promise<void> {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `UPDATE groups
+     SET
+       status = 'active',
+       last_activity_at = ?
+     WHERE id = ?`,
+    now(),
+    groupId,
+  );
+}
+
+export async function getGroupById(
+  groupId: number,
+): Promise<GroupRecord | null> {
+  const db = await getDatabase();
+
+  return db.getFirstAsync<GroupRecord>(
+    `${GROUP_SELECT}
+     WHERE id = ?
+     LIMIT 1`,
+    groupId,
+  );
+}
+
+export async function updateGroup(
+  groupId: number,
+  groupName: string,
+  district: string,
+  country: string,
+): Promise<GroupRecord> {
+  const db = await getDatabase();
+
+  const cleanName =
+    normalizeText(groupName);
+
+  const cleanDistrict =
+    normalizeText(district);
+
+  const cleanCountry =
+    normalizeText(country);
+
+  if (!cleanName) {
+    throw new Error(
+      'Group name is required.',
+    );
+  }
+
+  if (!cleanDistrict) {
+    throw new Error(
+      'District is required.',
+    );
+  }
+
+  if (!cleanCountry) {
+    throw new Error(
+      'Country is required.',
+    );
+  }
+
+  const existingGroup =
+    await getGroupById(groupId);
+
+  if (!existingGroup) {
+    throw new Error(
+      'Group not found.',
+    );
+  }
+
+  const timestamp = now();
+
+  await db.runAsync(
+    `UPDATE groups
+     SET
+       group_name = ?,
+       district = ?,
+       country = ?,
+       last_activity_at = ?
+     WHERE id = ?`,
+    cleanName,
+    cleanDistrict,
+    cleanCountry,
+    timestamp,
+    groupId,
+  );
+
+  await db.runAsync(
+    `UPDATE group_rules
+     SET
+       content = ?,
+       updated_at = ?
+     WHERE group_id = ?
+     AND article_number = 1`,
+    `This group shall operate as ${cleanName}. Its purpose is to encourage members to save together, grow together, access appropriate financial services, support one another, and improve the financial wellbeing of members.`,
+    timestamp,
+    groupId,
+  );
+
+  const updatedGroup =
+    await getGroupById(groupId);
+
+  if (!updatedGroup) {
+    throw new Error(
+      'Group was updated but could not be loaded.',
+    );
+  }
+
+  return updatedGroup;
+}
+
+/* ============================================================
+   CONSTITUTION
+   ============================================================ */
+
+async function insertDefaultConstitution(
+  db: SQLite.SQLiteDatabase,
+  groupId: number,
+): Promise<void> {
+  const articles: Array<
+    [number, string, string]
+  > = [
+    [
+      1,
+      'Name and Purpose',
+      'This group shall operate as Ebadsave VSLA. Its purpose is to encourage members to save together, grow together, access appropriate financial services, support one another, and improve the financial wellbeing of members.',
+    ],
+    [
+      2,
+      'Membership',
+      'Membership shall be open to eligible persons who accept this constitution, follow group rules, contribute regularly, attend meetings, and participate in group activities.',
+    ],
+    [
+      3,
+      'Contributions',
+      'Members shall make regular savings contributions according to the amount and schedule approved by the group. All contributions shall be properly recorded.',
+    ],
+    [
+      4,
+      'Loans',
+      'Members may apply for loans subject to group approval and the availability of funds. The default maximum loan amount shall be three times the member savings, unless the group approves another limit through an amendment.',
+    ],
+    [
+      5,
+      'Meetings and Attendance',
+      'Members shall attend scheduled meetings on time and participate in group activities. Members who are absent or late without an acceptable reason may be subject to penalties approved by the group.',
+    ],
+    [
+      6,
+      'Leadership',
+      'The group shall have a Chair, Vice Chair, Secretary, Treasurer, two Money Counters, three Key Keepers, and a Supervisor. Leaders shall perform their duties honestly and in the interests of the group.',
+    ],
+    [
+      7,
+      'Welfare, and Insurance Fund',
+      'The group may maintain welfare and insurance funds to support members during qualifying emergencies, approved welfare needs, and other circumstances agreed upon by members.',
+    ],
+    [
+      8,
+      'Penalties and Fines',
+      'Members who fail to follow approved group rules may be required to pay penalties or fines. All fines shall be recorded and allocated to the group fines fund.',
+    ],
+    [
+      9,
+      'Sharing and Dissolution',
+      'Savings, profits, and other group funds shall be shared according to approved group rules. If the group is dissolved, all outstanding obligations shall first be settled before the remaining funds are distributed.',
+    ],
+    [
+      10,
+      'Amendments',
+      'This constitution may be amended when members approve proposed changes according to the agreed voting procedure. Approved amendments shall be recorded as part of the group constitution.',
+    ],
+    [
+      11,
+      'Executive expire period',
+      'The executive committee shall serve for the period agreed by the members. At the end of the approved period, elections or approved replacements shall take place according to group rules.',
+    ],
+    [
+      12,
+      'Interest percentage and period of loan',
+      'The group shall determine the applicable loan interest percentage and repayment period. These terms shall be approved by members and recorded in the group rules before loans are issued.',
+    ],
+  ];
+
+  const timestamp = now();
+
+  for (const article of articles) {
+    await db.runAsync(
+      `INSERT OR IGNORE INTO group_rules (
+        group_id,
+        article_number,
+        title,
+        content,
+        effective_days,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, 30, ?)`,
+      groupId,
+      article[0],
+      article[1],
+      article[2],
+      timestamp,
+    );
+  }
+}
+
+export async function getGroupRules(
+  groupId: number,
+): Promise<GroupRuleRecord[]> {
+  const db = await getDatabase();
+
+  return db.getAllAsync<GroupRuleRecord>(
+    `SELECT *
+     FROM group_rules
+     WHERE group_id = ?
+     ORDER BY article_number ASC`,
+    groupId,
+  );
+}
+
+/* ============================================================
+   VSLA SETUP RULE FUNCTIONS
+   ============================================================ */
+
+export async function getVSLASetupRules(
+  groupId: number,
+): Promise<VSLASetupRuleRecord | null> {
+  const db = await getDatabase();
+
+  let rules =
+    await db.getFirstAsync<VSLASetupRuleRecord>(
+      `SELECT *
+       FROM vsla_setup_rules
+       WHERE group_id = ?
+       LIMIT 1`,
+      groupId,
+    );
+
+  if (!rules) {
+    await createDefaultVSLASetupRules(
+      db,
+      groupId,
+    );
+
+    rules =
+      await db.getFirstAsync<VSLASetupRuleRecord>(
+        `SELECT *
+         FROM vsla_setup_rules
+         WHERE group_id = ?
+         LIMIT 1`,
+        groupId,
+      );
+  }
+
+  return rules ?? null;
+}
+
+export async function updateVSLASetupRules(
+  groupId: number,
+  data: VSLASetupRuleUpdates,
+): Promise<VSLASetupRuleRecord> {
+  const db = await getDatabase();
+
+  const group =
+    await getGroupById(groupId);
+
+  if (!group) {
+    throw new Error(
+      'Group not found.',
+    );
+  }
+
+  let current =
+    await getVSLASetupRules(groupId);
+
+  if (!current) {
+    throw new Error(
+      'VSLA setup rules could not be created.',
+    );
+  }
+
+  const shareValue =
+    data.shareValue ??
+    current.share_value;
+
+  const minimumShares =
+    data.minimumSharesPerMeeting ??
+    current.minimum_shares_per_meeting;
+
+  const maximumShares =
+    data.maximumSharesPerMeeting ??
+    current.maximum_shares_per_meeting;
+
+  const maximumLoanMultiple =
+    data.maximumLoanMultiple ??
+    current.maximum_loan_multiple;
+
+  const loanInterestPercentage =
+    data.loanInterestPercentage ??
+    current.loan_interest_percentage;
+
+  const loanInterestPeriod =
+    normalizeText(
+      data.loanInterestPeriod ??
+        current.loan_interest_period,
+    );
+
+  const maximumLoanRepaymentPeriod =
+    data.maximumLoanRepaymentPeriod ??
+    current.maximum_loan_repayment_period;
+
+  const socialFundContribution =
+    data.socialFundContribution ??
+    current.social_fund_contribution;
+
+  const absenceFine =
+    data.absenceFine ??
+    current.absence_fine;
+
+  const lateFine =
+    data.lateFine ??
+    current.late_fine;
+
+  const nonSavingFine =
+    data.nonSavingFine ??
+    current.non_saving_fine;
+
+  const meetingFrequency =
+    normalizeText(
+      data.meetingFrequency ??
+        current.meeting_frequency,
+    );
+
+  const cycleDurationMonths =
+    data.cycleDurationMonths ??
+    current.cycle_duration_months;
+
+  const leadershipTermMonths =
+    data.leadershipTermMonths ??
+    current.leadership_term_months;
+
+  const shareOutEnabled =
+    data.shareOutEnabled === undefined
+      ? current.share_out_enabled
+      : data.shareOutEnabled
+        ? 1
+        : 0;
+
+  if (
+    !Number.isFinite(shareValue) ||
+    shareValue <= 0
+  ) {
+    throw new Error(
+      'Share value must be greater than zero.',
+    );
+  }
+
+  if (
+    !Number.isInteger(minimumShares) ||
+    minimumShares < 1
+  ) {
+    throw new Error(
+      'Minimum shares per meeting must be at least 1.',
+    );
+  }
+
+  if (
+    !Number.isInteger(maximumShares) ||
+    maximumShares < minimumShares
+  ) {
+    throw new Error(
+      'Maximum shares per meeting cannot be less than the minimum.',
+    );
+  }
+
+  if (
+    !Number.isFinite(maximumLoanMultiple) ||
+    maximumLoanMultiple <= 0
+  ) {
+    throw new Error(
+      'Maximum loan multiple must be greater than zero.',
+    );
+  }
+
+  if (
+    !Number.isFinite(
+      loanInterestPercentage,
+    ) ||
+    loanInterestPercentage < 0
+  ) {
+    throw new Error(
+      'Loan interest percentage cannot be negative.',
+    );
+  }
+
+  if (!loanInterestPeriod) {
+    throw new Error(
+      'Loan interest period is required.',
+    );
+  }
+
+  if (
+    !Number.isInteger(
+      maximumLoanRepaymentPeriod,
+    ) ||
+    maximumLoanRepaymentPeriod <= 0
+  ) {
+    throw new Error(
+      'Maximum loan repayment period must be greater than zero.',
+    );
+  }
+
+  if (
+    !Number.isFinite(
+      socialFundContribution,
+    ) ||
+    socialFundContribution < 0
+  ) {
+    throw new Error(
+      'Social fund contribution cannot be negative.',
+    );
+  }
+
+  if (
+    !Number.isFinite(absenceFine) ||
+    absenceFine < 0
+  ) {
+    throw new Error(
+      'Absence fine cannot be negative.',
+    );
+  }
+
+  if (
+    !Number.isFinite(lateFine) ||
+    lateFine < 0
+  ) {
+    throw new Error(
+      'Late fine cannot be negative.',
+    );
+  }
+
+  if (
+    !Number.isFinite(nonSavingFine) ||
+    nonSavingFine < 0
+  ) {
+    throw new Error(
+      'Non-saving fine cannot be negative.',
+    );
+  }
+
+  if (!meetingFrequency) {
+    throw new Error(
+      'Meeting frequency is required.',
+    );
+  }
+
+  if (
+    !Number.isInteger(
+      cycleDurationMonths,
+    ) ||
+    cycleDurationMonths <= 0
+  ) {
+    throw new Error(
+      'Cycle duration must be greater than zero.',
+    );
+  }
+
+  if (
+    !Number.isInteger(
+      leadershipTermMonths,
+    ) ||
+    leadershipTermMonths <= 0
+  ) {
+    throw new Error(
+      'Leadership term must be greater than zero.',
+    );
+  }
+
+  const timestamp = now();
+
+  await db.runAsync(
+    `UPDATE vsla_setup_rules
+     SET
+       share_value = ?,
+       minimum_shares_per_meeting = ?,
+       maximum_shares_per_meeting = ?,
+       maximum_loan_multiple = ?,
+       loan_interest_percentage = ?,
+       loan_interest_period = ?,
+       maximum_loan_repayment_period = ?,
+       social_fund_contribution = ?,
+       absence_fine = ?,
+       late_fine = ?,
+       non_saving_fine = ?,
+       meeting_frequency = ?,
+       cycle_duration_months = ?,
+       leadership_term_months = ?,
+       share_out_enabled = ?,
+       updated_at = ?
+     WHERE group_id = ?`,
+    shareValue,
+    minimumShares,
+    maximumShares,
+    maximumLoanMultiple,
+    loanInterestPercentage,
+    loanInterestPeriod,
+    maximumLoanRepaymentPeriod,
+    socialFundContribution,
+    absenceFine,
+    lateFine,
+    nonSavingFine,
+    meetingFrequency,
+    cycleDurationMonths,
+    leadershipTermMonths,
+    shareOutEnabled,
+    timestamp,
+    groupId,
+  );
+
+  current =
+    await getVSLASetupRules(groupId);
+
+  if (!current) {
+    throw new Error(
+      'VSLA setup rules were updated but could not be loaded.',
+    );
+  }
+
+  return current;
+}
+
+/* ============================================================
+   MEMBERS
+   ============================================================ */
+
+export async function getMembersByGroupId(
+  groupId: number,
+): Promise<MemberRecord[]> {
+  const db = await getDatabase();
+
+  return db.getAllAsync<MemberRecord>(
+    `SELECT
+      id,
+      group_id,
+      member_number,
+      full_name,
+      gender,
+      age,
+      phone,
+      cell,
+      district,
+      photo_uri,
+      status,
+      created_at
+     FROM members
+     WHERE group_id = ?
+     AND status = 'active'
+     ORDER BY member_number ASC`,
+    groupId,
+  );
+}
+
+async function getNextMemberSequence(
+  db: SQLite.SQLiteDatabase,
+  groupId: number,
+): Promise<number> {
+  const members =
+    await db.getAllAsync<{
+      member_number: string;
+    }>(
+      `SELECT member_number
+       FROM members
+       WHERE group_id = ?`,
+      groupId,
+    );
+
+  const deleted =
+    await db.getAllAsync<{
+      member_number: string;
+    }>(
+      `SELECT member_number
+       FROM deleted_member_numbers
+       WHERE group_id = ?`,
+      groupId,
+    );
+
+  const used =
+    new Set<number>();
+
+  for (const item of [
+    ...members,
+    ...deleted,
+  ]) {
+    const match =
+      item.member_number.match(
+        /(\d{3})$/,
+      );
+
+    if (match) {
+      used.add(
+        Number(match[1]),
+      );
+    }
+  }
+
+  for (
+    let number = 1;
+    number <= 999;
+    number += 1
+  ) {
+    if (!used.has(number)) {
+      return number;
+    }
+  }
+
+  throw new Error(
+    'This group has reached the 999-member limit.',
+  );
+}
+
+function createMemberNumber(
+  groupNumber: number,
+  sequence: number,
+): string {
+  return `KYA${String(groupNumber).padStart(4, '0')}${String(sequence).padStart(3, '0')}`;
+}
+
+export async function registerMember(
+  groupId: number,
+  fullName: string,
+  gender = '',
+  age = 0,
+  phone = '',
+  cell = '',
+  district = '',
+  photoUri: string | null = null,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const name =
+    normalizeText(fullName);
+
+  if (!name) {
+    throw new Error(
+      'Full name is required.',
+    );
+  }
+
+  if (!normalizeText(gender)) {
+    throw new Error(
+      'Gender is required.',
+    );
+  }
+
+  if (
+    !Number.isFinite(age) ||
+    age <= 0
+  ) {
+    throw new Error(
+      'A valid age is required.',
+    );
+  }
+
+  if (!normalizeText(cell)) {
+    throw new Error(
+      'Cell is required.',
+    );
+  }
+
+  if (!normalizeText(district)) {
+    throw new Error(
+      'District is required.',
+    );
+  }
+
+  const group =
+    await getGroupById(groupId);
+
+  if (!group) {
+    throw new Error(
+      'Group not found.',
+    );
+  }
+
+  const sequence =
+    await getNextMemberSequence(
+      db,
+      groupId,
+    );
+
+  const memberNumber =
+    createMemberNumber(
+      group.group_number,
+      sequence,
+    );
+
+  const timestamp = now();
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO members (
+        group_id,
+        member_number,
+        full_name,
+        gender,
+        age,
+        phone,
+        cell,
+        district,
+        photo_uri,
+        role,
+        status,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'member', 'active', ?)`,
+      groupId,
+      memberNumber,
+      name,
+      normalizeText(gender),
+      age,
+      normalizeText(phone) || null,
+      normalizeText(cell),
+      normalizeText(district),
+      photoUri,
+      timestamp,
+    );
+
+  const memberId =
+    result.lastInsertRowId;
+
+  await db.runAsync(
+    `INSERT INTO member_next_of_kin (
+      member_id,
+      slot,
+      name,
+      phone,
+      gender,
+      benefit_received,
+      locked,
+      created_at,
+      updated_at
+    )
+    VALUES
+      (?, 1, NULL, NULL, NULL, 0, 0, ?, ?),
+      (?, 2, NULL, NULL, NULL, 0, 0, ?, ?)`,
+    memberId,
+    timestamp,
+    timestamp,
+    memberId,
+    timestamp,
+    timestamp,
+  );
+
+  const salt =
+    Crypto.randomUUID();
+
+  await db.runAsync(
+    `INSERT INTO member_credentials (
+      member_id,
+      salt,
+      passcode_hash,
+      phone_eligible,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, NULL, ?, ?, ?)`,
+    memberId,
+    salt,
+    normalizeText(phone)
+      ? 1
+      : 0,
+    timestamp,
+    timestamp,
+  );
+
+  await recordGroupActivity(
+    groupId,
+  );
+
   return memberId;
-};
-export const registerMember = createMember;
-export const getMembersByGroupId = async (groupId:number): Promise<MemberRecord[]> => { const database = await getDatabase(); return await database.getAllAsync('SELECT * FROM members WHERE group_id=? ORDER BY full_name ASC', [groupId]) as MemberRecord[]; };
-export const getMemberById = async (id:number): Promise<MemberRecord|null> => { const database = await getDatabase(); return await database.getFirstAsync('SELECT * FROM members WHERE id=?', [id]) as MemberRecord|null; };
+}
 
-export const updateNextOfKin = async (memberId:number, slot:1|2, data:{name:string; phone:string; gender:string;}): Promise<void> => {
-  const database = await getDatabase();
-  const existing = await database.getFirstAsync('SELECT * FROM next_of_kin WHERE member_id=? AND slot=?', [memberId, slot]) as any;
-  if(existing?.locked) throw new Error('Next of kin locked after benefit received');
-  await database.runAsync('UPDATE next_of_kin SET name=?, phone=?, gender=?, updated_at=CURRENT_TIMESTAMP WHERE member_id=? AND slot=?', [data.name, data.phone, data.gender, memberId, slot]);
-};
-export const getNextOfKinByMemberId = async (memberId:number): Promise<NextOfKinRecord[]> => { const database = await getDatabase(); return await database.getAllAsync('SELECT * FROM next_of_kin WHERE member_id=? ORDER BY slot', [memberId]) as NextOfKinRecord[]; };
+export async function updateMember(
+  memberId: number,
+  data: {
+    fullName?: string;
+    gender?: string;
+    age?: number;
+    phone?: string;
+    cell?: string;
+    district?: string;
+    photoUri?: string | null;
+  },
+): Promise<void> {
+  const db = await getDatabase();
 
-export const verifyGroupCanTransact = async (groupId:number): Promise<{ok:boolean; reason?:string}> => {
-  const status = await getExecutiveRequirementsStatus(groupId);
-  const database = await getDatabase();
-  const memberCount = await database.getFirstAsync('SELECT COUNT(*) as c FROM members WHERE group_id=?', [groupId]) as any;
+  const current =
+    await db.getFirstAsync<MemberRecord>(
+      `SELECT *
+       FROM members
+       WHERE id = ?
+       LIMIT 1`,
+      memberId,
+    );
+
+  if (!current) {
+    throw new Error(
+      'Member not found.',
+    );
+  }
+
+  const fullName =
+    data.fullName ??
+    current.full_name;
+
+  const gender =
+    data.gender ??
+    current.gender;
+
+  const age =
+    data.age ??
+    current.age;
+
+  const phone =
+    data.phone ??
+    current.phone ??
+    '';
+
+  const cell =
+    data.cell ??
+    current.cell;
+
+  const district =
+    data.district ??
+    current.district;
+
+  const photoUri =
+    data.photoUri === undefined
+      ? current.photo_uri
+      : data.photoUri;
+
+  if (!normalizeText(fullName)) {
+    throw new Error(
+      'Full name is required.',
+    );
+  }
+
+  if (!normalizeText(gender)) {
+    throw new Error(
+      'Gender is required.',
+    );
+  }
+
+  if (
+    !Number.isFinite(age) ||
+    age <= 0
+  ) {
+    throw new Error(
+      'A valid age is required.',
+    );
+  }
+
+  if (!normalizeText(cell)) {
+    throw new Error(
+      'Cell is required.',
+    );
+  }
+
+  if (!normalizeText(district)) {
+    throw new Error(
+      'District is required.',
+    );
+  }
+
+  await db.runAsync(
+    `UPDATE members
+     SET
+       full_name = ?,
+       gender = ?,
+       age = ?,
+       phone = ?,
+       cell = ?,
+       district = ?,
+       photo_uri = ?
+     WHERE id = ?`,
+    normalizeText(fullName),
+    normalizeText(gender),
+    age,
+    normalizeText(phone) || null,
+    normalizeText(cell),
+    normalizeText(district),
+    photoUri,
+    memberId,
+  );
+
+  const timestamp = now();
+
+  await db.runAsync(
+    `UPDATE member_credentials
+     SET
+       phone_eligible = ?,
+       updated_at = ?
+     WHERE member_id = ?`,
+    normalizeText(phone)
+      ? 1
+      : 0,
+    timestamp,
+    memberId,
+  );
+}
+
+export async function deleteMember(
+  memberId: number,
+  reason: string,
+): Promise<void> {
+  const db = await getDatabase();
+
+  const member =
+    await db.getFirstAsync<MemberRecord>(
+      `SELECT *
+       FROM members
+       WHERE id = ?
+       LIMIT 1`,
+      memberId,
+    );
+
+  if (!member) {
+    throw new Error(
+      'Member not found.',
+    );
+  }
+
+  if (!normalizeText(reason)) {
+    throw new Error(
+      'A reason is required when deleting a member.',
+    );
+  }
+
+  const timestamp = now();
+
+  await db.runAsync(
+    `UPDATE members
+     SET status = 'deleted'
+     WHERE id = ?`,
+    memberId,
+  );
+
+  await db.runAsync(
+    `INSERT INTO deleted_member_numbers (
+      group_id,
+      member_number,
+      deleted_at
+    )
+    VALUES (?, ?, ?)`,
+    member.group_id,
+    member.member_number,
+    timestamp,
+  );
+
+  await recordGroupActivity(
+    member.group_id,
+  );
+}
+
+/* ============================================================
+   NEXT OF KIN
+   ============================================================ */
+
+export async function getNextOfKin(
+  memberId: number,
+): Promise<NextOfKinRecord[]> {
+  const db = await getDatabase();
+
+  await applyDueNextOfKinChanges(db);
+  await applyDueNextOfKinBenefits(db);
+
+  return db.getAllAsync<NextOfKinRecord>(
+    `SELECT *
+     FROM member_next_of_kin
+     WHERE member_id = ?
+     ORDER BY slot ASC`,
+    memberId,
+  );
+}
+
+async function getKin(
+  db: SQLite.SQLiteDatabase,
+  memberId: number,
+  slot: number,
+): Promise<NextOfKinRecord | null> {
+  return db.getFirstAsync<NextOfKinRecord>(
+    `SELECT *
+     FROM member_next_of_kin
+     WHERE member_id = ?
+     AND slot = ?
+     LIMIT 1`,
+    memberId,
+    slot,
+  );
+}
+
+function validateKinSlot(
+  slot: number,
+): void {
+  if (
+    slot !== 1 &&
+    slot !== 2
+  ) {
+    throw new Error(
+      'Next-of-kin slot must be 1 or 2.',
+    );
+  }
+}
+
+async function assertNoPendingKinChange(
+  db: SQLite.SQLiteDatabase,
+  memberId: number,
+  slot: number,
+): Promise<void> {
+  const pending =
+    await db.getFirstAsync<{ id: number }>(
+      `SELECT id
+       FROM next_of_kin_change_history
+       WHERE member_id = ?
+       AND slot = ?
+       AND applied = 0
+       LIMIT 1`,
+      memberId,
+      slot,
+    );
+
+  if (pending) {
+    throw new Error(
+      'There is already a pending next-of-kin change for this slot.',
+    );
+  }
+}
+
+async function assertNoPendingKinBenefit(
+  db: SQLite.SQLiteDatabase,
+  memberId: number,
+  slot: number,
+): Promise<void> {
+  const pending =
+    await db.getFirstAsync<{ id: number }>(
+      `SELECT id
+       FROM next_of_kin_benefits
+       WHERE member_id = ?
+       AND slot = ?
+       AND status = 'pending'
+       LIMIT 1`,
+      memberId,
+      slot,
+    );
+
+  if (pending) {
+    throw new Error(
+      'This next-of-kin slot has a pending benefit and cannot be changed.',
+    );
+  }
+}
+
+export async function requestNextOfKinChange(
+  memberId: number,
+  slot: number,
+  name: string | null,
+  phone: string | null,
+  gender: string | null,
+  reason: string,
+  effectiveDays = 30,
+): Promise<number> {
+  const db = await getDatabase();
+
+  validateKinSlot(slot);
+
+  if (!normalizeText(reason)) {
+    throw new Error(
+      'A reason is required for every next-of-kin change.',
+    );
+  }
+
+  await applyDueNextOfKinChanges(db);
+  await applyDueNextOfKinBenefits(db);
+
+  const kin =
+    await getKin(
+      db,
+      memberId,
+      slot,
+    );
+
+  if (!kin) {
+    throw new Error(
+      'Next-of-kin slot not found.',
+    );
+  }
+
+  if (
+    kin.locked === 1 ||
+    kin.benefit_received === 1
+  ) {
+    throw new Error(
+      'This next-of-kin slot is locked because benefits have been received.',
+    );
+  }
+
+  await assertNoPendingKinChange(
+    db,
+    memberId,
+    slot,
+  );
+
+  await assertNoPendingKinBenefit(
+    db,
+    memberId,
+    slot,
+  );
+
+  const effectiveDate =
+    new Date();
+
+  effectiveDate.setDate(
+    effectiveDate.getDate() +
+      Math.max(
+        0,
+        effectiveDays,
+      ),
+  );
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO next_of_kin_change_history (
+        member_id,
+        slot,
+        action,
+        old_name,
+        old_phone,
+        old_gender,
+        new_name,
+        new_phone,
+        new_gender,
+        reason,
+        requested_at,
+        effective_at,
+        applied
+      )
+      VALUES (?, ?, 'update', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      memberId,
+      slot,
+      kin.name,
+      kin.phone,
+      kin.gender,
+      normalizeText(name) || null,
+      normalizeText(phone) || null,
+      normalizeText(gender) || null,
+      normalizeText(reason),
+      now(),
+      effectiveDate.toISOString(),
+    );
+
+  return result.lastInsertRowId;
+}
+
+export async function requestNextOfKinDeletion(
+  memberId: number,
+  slot: number,
+  reason: string,
+  effectiveDays = 30,
+): Promise<number> {
+  const db = await getDatabase();
+
+  validateKinSlot(slot);
+
+  if (!normalizeText(reason)) {
+    throw new Error(
+      'A reason is required when deleting a next of kin.',
+    );
+  }
+
+  await applyDueNextOfKinChanges(db);
+  await applyDueNextOfKinBenefits(db);
+
+  const kin =
+    await getKin(
+      db,
+      memberId,
+      slot,
+    );
+
+  if (!kin) {
+    throw new Error(
+      'Next-of-kin slot not found.',
+    );
+  }
+
+  if (
+    kin.locked === 1 ||
+    kin.benefit_received === 1
+  ) {
+    throw new Error(
+      'This next-of-kin slot is locked because benefits have been received.',
+    );
+  }
+
+  await assertNoPendingKinChange(
+    db,
+    memberId,
+    slot,
+  );
+
+  await assertNoPendingKinBenefit(
+    db,
+    memberId,
+    slot,
+  );
+
+  const effectiveDate =
+    new Date();
+
+  effectiveDate.setDate(
+    effectiveDate.getDate() +
+      Math.max(
+        0,
+        effectiveDays,
+      ),
+  );
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO next_of_kin_change_history (
+        member_id,
+        slot,
+        action,
+        old_name,
+        old_phone,
+        old_gender,
+        new_name,
+        new_phone,
+        new_gender,
+        reason,
+        requested_at,
+        effective_at,
+        applied
+      )
+      VALUES (?, ?, 'delete', ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, 0)`,
+      memberId,
+      slot,
+      kin.name,
+      kin.phone,
+      kin.gender,
+      normalizeText(reason),
+      now(),
+      effectiveDate.toISOString(),
+    );
+
+  return result.lastInsertRowId;
+}
+
+export async function recordNextOfKinBenefit(
+  memberId: number,
+  slot: number,
+  amount: number,
+  reason: string,
+  effectiveDays = 30,
+): Promise<number> {
+  const db = await getDatabase();
+
+  validateKinSlot(slot);
+
+  if (
+    !Number.isFinite(amount) ||
+    amount < 0
+  ) {
+    throw new Error(
+      'Benefit amount is invalid.',
+    );
+  }
+
+  if (!normalizeText(reason)) {
+    throw new Error(
+      'A reason is required for a benefit.',
+    );
+  }
+
+  await applyDueNextOfKinChanges(db);
+  await applyDueNextOfKinBenefits(db);
+
+  const kin =
+    await getKin(
+      db,
+      memberId,
+      slot,
+    );
+
+  if (!kin) {
+    throw new Error(
+      'Next-of-kin slot not found.',
+    );
+  }
+
+  if (
+    kin.locked === 1 ||
+    kin.benefit_received === 1
+  ) {
+    throw new Error(
+      'This next-of-kin slot has already received benefits and is locked.',
+    );
+  }
+
+  await assertNoPendingKinBenefit(
+    db,
+    memberId,
+    slot,
+  );
+
+  const effectiveDate =
+    new Date();
+
+  effectiveDate.setDate(
+    effectiveDate.getDate() +
+      Math.max(
+        0,
+        effectiveDays,
+      ),
+  );
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO next_of_kin_benefits (
+        member_id,
+        slot,
+        benefit_amount,
+        reason,
+        benefit_date,
+        effective_at,
+        status
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
+      memberId,
+      slot,
+      amount,
+      normalizeText(reason),
+      now(),
+      effectiveDate.toISOString(),
+    );
+
+  return result.lastInsertRowId;
+}
+
+/* ============================================================
+   FINANCIAL ACCOUNT SYSTEM
+   ============================================================ */
+
+export async function getFinancialAccounts(
+  groupId: number,
+): Promise<FinancialAccountRecord[]> {
+  const db = await getDatabase();
+
+  await ensureFinancialAccountsForGroup(
+    db,
+    groupId,
+  );
+
+  return db.getAllAsync<FinancialAccountRecord>(
+    `SELECT
+      id,
+      group_id,
+      account_type,
+      balance,
+      created_at,
+      updated_at
+     FROM financial_accounts
+     WHERE group_id = ?
+     ORDER BY
+       CASE account_type
+         WHEN 'savings' THEN 1
+         WHEN 'loan_fund' THEN 2
+         WHEN 'loan_repayment' THEN 3
+         WHEN 'social_fund' THEN 4
+         WHEN 'fines' THEN 5
+         WHEN 'external_fund' THEN 6
+         WHEN 'expenditure_fund' THEN 7
+         WHEN 'insurance_fund' THEN 8
+         ELSE 99
+       END`,
+    groupId,
+  );
+}
+
+export async function getFinancialAccount(
+  groupId: number,
+  accountType: FinancialAccountType,
+): Promise<FinancialAccountRecord | null> {
+  const db = await getDatabase();
+
+  await ensureFinancialAccountsForGroup(
+    db,
+    groupId,
+  );
+
+  return db.getFirstAsync<FinancialAccountRecord>(
+    `SELECT
+      id,
+      group_id,
+      account_type,
+      balance,
+      created_at,
+      updated_at
+     FROM financial_accounts
+     WHERE group_id = ?
+     AND account_type = ?
+     LIMIT 1`,
+    groupId,
+    accountType,
+  );
+}
+
+export async function recordFinancialIncome(
+  groupId: number,
+  accountType: FinancialAccountType,
+  amount: number,
+  reason: string,
+  memberId: number | null = null,
+  meetingId: number | null = null,
+  transactionType = 'income',
+): Promise<number> {
+  const db = await getDatabase();
+
+  if (
+    !Number.isFinite(amount) ||
+    amount <= 0
+  ) {
+    throw new Error(
+      'Financial amount must be greater than zero.',
+    );
+  }
+
+  if (!normalizeText(reason)) {
+    throw new Error(
+      'A reason is required for every financial transaction.',
+    );
+  }
+
+  await ensureFinancialAccountsForGroup(
+    db,
+    groupId,
+  );
+
+  const timestamp = now();
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO financial_transactions (
+        group_id,
+        account_type,
+        amount,
+        reason,
+        member_id,
+        meeting_id,
+        transaction_type,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      groupId,
+      accountType,
+      amount,
+      normalizeText(reason),
+      memberId,
+      meetingId,
+      normalizeText(transactionType),
+      timestamp,
+    );
+
+  await db.runAsync(
+    `UPDATE financial_accounts
+     SET
+       balance = balance + ?,
+       updated_at = ?
+     WHERE group_id = ?
+     AND account_type = ?`,
+    amount,
+    timestamp,
+    groupId,
+    accountType,
+  );
+
+  await recordGroupActivity(
+    groupId,
+  );
+
+  return result.lastInsertRowId;
+}
+
+export async function recordFinancialExpense(
+  groupId: number,
+  accountType: FinancialAccountType,
+  amount: number,
+  reason: string,
+  memberId: number | null = null,
+  meetingId: number | null = null,
+  transactionType = 'expenditure',
+): Promise<number> {
+  const db = await getDatabase();
+
+  if (
+    !Number.isFinite(amount) ||
+    amount <= 0
+  ) {
+    throw new Error(
+      'Expenditure amount must be greater than zero.',
+    );
+  }
+
+  if (!normalizeText(reason)) {
+    throw new Error(
+      'A reason is required for every expenditure.',
+    );
+  }
+
+  await ensureFinancialAccountsForGroup(
+    db,
+    groupId,
+  );
+
+  const negativeAmount =
+    -Math.abs(amount);
+
+  const timestamp = now();
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO financial_transactions (
+        group_id,
+        account_type,
+        amount,
+        reason,
+        member_id,
+        meeting_id,
+        transaction_type,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      groupId,
+      accountType,
+      negativeAmount,
+      normalizeText(reason),
+      memberId,
+      meetingId,
+      normalizeText(transactionType),
+      timestamp,
+    );
+
+  await db.runAsync(
+    `UPDATE financial_accounts
+     SET
+       balance = balance + ?,
+       updated_at = ?
+     WHERE group_id = ?
+     AND account_type = ?`,
+    negativeAmount,
+    timestamp,
+    groupId,
+    accountType,
+  );
+
+  await recordGroupActivity(
+    groupId,
+  );
+
+  return result.lastInsertRowId;
+}
+
+export async function recordSavings(
+  groupId: number,
+  memberId: number,
+  amount: number,
+  meetingId: number | null = null,
+): Promise<number> {
+  return recordFinancialIncome(
+    groupId,
+    'savings',
+    amount,
+    'Member savings contribution',
+    memberId,
+    meetingId,
+    'savings_contribution',
+  );
+}
+
+export async function recordLoanFund(
+  groupId: number,
+  amount: number,
+  reason: string,
+  meetingId: number | null = null,
+): Promise<number> {
+  return recordFinancialIncome(
+    groupId,
+    'loan_fund',
+    amount,
+    reason,
+    null,
+    meetingId,
+    'loan_fund',
+  );
+}
+
+export async function issueLoan(
+  groupId: number,
+  memberId: number,
+  amount: number,
+  reason = 'Loan issued to member',
+  meetingId: number | null = null,
+): Promise<number> {
+  const db = await getDatabase();
+
+  if (
+    !Number.isFinite(amount) ||
+    amount <= 0
+  ) {
+    throw new Error(
+      'Loan amount must be greater than zero.',
+    );
+  }
+
+  if (!normalizeText(reason)) {
+    throw new Error(
+      'A reason is required for every loan.',
+    );
+  }
+
+  const account =
+    await getFinancialAccount(
+      groupId,
+      'loan_fund',
+    );
+
+  if (!account) {
+    throw new Error(
+      'Loan Fund account was not found.',
+    );
+  }
+
+  if (account.balance < amount) {
+    throw new Error(
+      'Insufficient Loan Fund balance.',
+    );
+  }
+
+  const timestamp = now();
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO financial_transactions (
+        group_id,
+        account_type,
+        amount,
+        reason,
+        member_id,
+        meeting_id,
+        transaction_type,
+        created_at
+      )
+      VALUES (?, 'loan_fund', ?, ?, ?, ?, 'loan_issued', ?)`,
+      groupId,
+      -Math.abs(amount),
+      normalizeText(reason),
+      memberId,
+      meetingId,
+      timestamp,
+    );
+
+  await db.runAsync(
+    `UPDATE financial_accounts
+     SET
+       balance = balance - ?,
+       updated_at = ?
+     WHERE group_id = ?
+     AND account_type = 'loan_fund'`,
+    amount,
+    timestamp,
+    groupId,
+  );
+
+  await recordGroupActivity(
+    groupId,
+  );
+
+  return result.lastInsertRowId;
+}
+
+export async function recordLoanRepayment(
+  groupId: number,
+  memberId: number,
+  amount: number,
+  meetingId: number | null = null,
+  reason = 'Loan repayment',
+): Promise<number> {
+  return recordFinancialIncome(
+    groupId,
+    'loan_repayment',
+    amount,
+    reason,
+    memberId,
+    meetingId,
+    'loan_repayment',
+  );
+}
+
+export async function recordSocialFund(
+  groupId: number,
+  amount: number,
+  meetingId: number | null = null,
+  memberId: number | null = null,
+  reason = 'Social fund contribution',
+): Promise<number> {
+  return recordFinancialIncome(
+    groupId,
+    'social_fund',
+    amount,
+    reason,
+    memberId,
+    meetingId,
+    'social_fund_contribution',
+  );
+}
+
+export async function recordFine(
+  groupId: number,
+  amount: number,
+  reason: string,
+  memberId: number | null = null,
+  meetingId: number | null = null,
+): Promise<number> {
+  return recordFinancialIncome(
+    groupId,
+    'fines',
+    amount,
+    reason,
+    memberId,
+    meetingId,
+    'fine',
+  );
+}
+
+export async function recordExternalFund(
+  groupId: number,
+  amount: number,
+  reason: string,
+  meetingId: number | null = null,
+): Promise<number> {
+  return recordFinancialIncome(
+    groupId,
+    'external_fund',
+    amount,
+    reason,
+    null,
+    meetingId,
+    'external_fund',
+  );
+}
+
+export async function recordExpenditure(
+  groupId: number,
+  amount: number,
+  reason: string,
+  meetingId: number | null = null,
+): Promise<number> {
+  return recordFinancialExpense(
+    groupId,
+    'expenditure_fund',
+    amount,
+    reason,
+    null,
+    meetingId,
+    'expenditure',
+  );
+}
+
+export async function recordInsuranceContribution(
+  groupId: number,
+  memberId: number,
+  amount: number,
+  meetingId: number | null = null,
+): Promise<number> {
+  return recordFinancialIncome(
+    groupId,
+    'insurance_fund',
+    amount,
+    'Insurance contribution',
+    memberId,
+    meetingId,
+    'insurance_contribution',
+  );
+}
+
+export async function recordInsuranceBenefit(
+  groupId: number,
+  memberId: number,
+  amount: number,
+  reason: string,
+  meetingId: number | null = null,
+): Promise<number> {
+  const db = await getDatabase();
+
+  if (
+    !Number.isFinite(amount) ||
+    amount <= 0
+  ) {
+    throw new Error(
+      'Insurance benefit amount must be greater than zero.',
+    );
+  }
+
+  if (!normalizeText(reason)) {
+    throw new Error(
+      'A reason is required for every insurance benefit.',
+    );
+  }
+
+  const contribution =
+    await db.getFirstAsync<{
+      total: number;
+    }>(
+      `SELECT
+        COALESCE(
+          SUM(amount),
+          0
+        ) AS total
+       FROM financial_transactions
+       WHERE group_id = ?
+       AND account_type = 'insurance_fund'
+       AND member_id = ?
+       AND transaction_type = 'insurance_contribution'`,
+      groupId,
+      memberId,
+    );
+
+  if (
+    !contribution ||
+    contribution.total <= 0
+  ) {
+    throw new Error(
+      'This member is not insured and cannot receive an insurance benefit.',
+    );
+  }
+
+  const insuranceAccount =
+    await getFinancialAccount(
+      groupId,
+      'insurance_fund',
+    );
+
+  if (!insuranceAccount) {
+    throw new Error(
+      'Insurance Fund account was not found.',
+    );
+  }
+
+  if (
+    insuranceAccount.balance <
+    amount
+  ) {
+    throw new Error(
+      'Insufficient Insurance Fund balance.',
+    );
+  }
+
+  const timestamp = now();
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO financial_transactions (
+        group_id,
+        account_type,
+        amount,
+        reason,
+        member_id,
+        meeting_id,
+        transaction_type,
+        created_at
+      )
+      VALUES (?, 'insurance_fund', ?, ?, ?, ?, 'insurance_benefit', ?)`,
+      groupId,
+      -Math.abs(amount),
+      normalizeText(reason),
+      memberId,
+      meetingId,
+      timestamp,
+    );
+
+  await db.runAsync(
+    `UPDATE financial_accounts
+     SET
+       balance = balance - ?,
+       updated_at = ?
+     WHERE group_id = ?
+     AND account_type = 'insurance_fund'`,
+    amount,
+    timestamp,
+    groupId,
+  );
+
+  await recordGroupActivity(
+    groupId,
+  );
+
+  return result.lastInsertRowId;
+}
+
+export async function getFinancialSummary(
+  groupId: number,
+): Promise<FinancialSummary> {
+  const db = await getDatabase();
+
+  await ensureFinancialAccountsForGroup(
+    db,
+    groupId,
+  );
+
+  const rows =
+    await db.getAllAsync<{
+      account_type: string;
+      balance: number;
+    }>(
+      `SELECT
+        account_type,
+        balance
+       FROM financial_accounts
+       WHERE group_id = ?`,
+      groupId,
+    );
+
+  const balances: Record<
+    FinancialAccountType,
+    number
+  > = {
+    savings: 0,
+    loan_fund: 0,
+    loan_repayment: 0,
+    social_fund: 0,
+    fines: 0,
+    external_fund: 0,
+    expenditure_fund: 0,
+    insurance_fund: 0,
+  };
+
+  for (const row of rows) {
+    if (
+      isFinancialAccountType(
+        row.account_type,
+      )
+    ) {
+      balances[row.account_type] =
+        Number(row.balance) || 0;
+    }
+  }
+
+  const partial = {
+    savings: balances.savings,
+    loanFund: balances.loan_fund,
+    loanRepayment:
+      balances.loan_repayment,
+    socialFund:
+      balances.social_fund,
+    fines: balances.fines,
+    externalFund:
+      balances.external_fund,
+    expenditureFund:
+      balances.expenditure_fund,
+    insuranceFund:
+      balances.insurance_fund,
+  };
+
+  return {
+    ...partial,
+    fundBalance:
+      calculateFundBalance(
+        partial,
+      ),
+  };
+}
+
+export async function getFinancialTransactions(
+  groupId: number,
+): Promise<FinancialTransactionRecord[]> {
+  const db = await getDatabase();
+
+  return db.getAllAsync<FinancialTransactionRecord>(
+    `SELECT
+      id,
+      group_id,
+      account_type,
+      amount,
+      reason,
+      member_id,
+      meeting_id,
+      transaction_type,
+      created_at
+     FROM financial_transactions
+     WHERE group_id = ?
+     ORDER BY created_at DESC, id DESC`,
+    groupId,
+  );
+}
+
+export async function getFinancialTransactionsByAccou
