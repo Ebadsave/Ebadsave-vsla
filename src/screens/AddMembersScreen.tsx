@@ -1,12 +1,38 @@
 import React from 'react';
-import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import {
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 
 export default function AddMembersScreen() {
+  const handleAddMember = () => {
+    // Member registration will be connected to the database next.
+  };
+
   return (
     <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Members</Text>
+
+        <TouchableOpacity
+          style={styles.addButton}
+          onPress={handleAddMember}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.plus}>+</Text>
+          <Text style={styles.addButtonText}>Add Member</Text>
+        </TouchableOpacity>
+      </View>
+
       <View style={styles.content}>
-        <Text style={styles.title}>Add Members</Text>
-        <Text style={styles.subtitle}>Member registration will be added here.</Text>
+        <Text style={styles.emptyTitle}>No members yet</Text>
+
+        <Text style={styles.emptyText}>
+          Tap + Add Member to register a member.
+        </Text>
       </View>
     </SafeAreaView>
   );
@@ -17,21 +43,61 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#ffffff',
   },
-  content: {
-    flex: 1,
-    padding: 20,
-    justifyContent: 'center',
+
+  header: {
+    backgroundColor: '#16a34a',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+
+  title: {
+    color: '#ffffff',
+    fontSize: 22,
+    fontWeight: '700',
+  },
+
+  addButton: {
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flexDirection: 'row',
     alignItems: 'center',
   },
-  title: {
-    fontSize: 24,
-    fontWeight: '700',
+
+  plus: {
     color: '#16a34a',
+    fontSize: 22,
+    fontWeight: '700',
+    marginRight: 5,
   },
-  subtitle: {
-    marginTop: 10,
-    fontSize: 15,
-    color: '#374151',
+
+  addButtonText: {
+    color: '#16a34a',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+
+  content: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+
+  emptyTitle: {
+    fontSize: 19,
+    fontWeight: '700',
+    color: '#111827',
+  },
+
+  emptyText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#6b7280',
     textAlign: 'center',
   },
 });
