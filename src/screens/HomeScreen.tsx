@@ -9,15 +9,14 @@ import {
   View,
 } from 'react-native';
 
+import { useFocusEffect } from '@react-navigation/native';
+
 import {
   getAllGroups,
   getMembersByGroupId,
-  recordGroupActivity,
   GroupRecord,
   MemberRecord,
 } from '../database/database';
-
-import { useFocusEffect } from '@react-navigation/native';
 
 type HomeScreenProps = {
   navigation: any;
@@ -68,50 +67,40 @@ const summaryCards = [
   },
 ];
 
-export default function HomeScreen({
-  navigation,
-}: HomeScreenProps) {
-  const [activeGroup, setActiveGroup] =
-    useState<GroupRecord | null>(null);
-
-  const [executiveMemberId, setExecutiveMemberId] =
-    useState<number | null>(null);
+export default function HomeScreen({ navigation }: HomeScreenProps) {
+  const [activeGroup, setActiveGroup] = useState<GroupRecord | null>(null);
+  const [executiveMemberId, setExecutiveMemberId] = useState<number | null>(
+    null,
+  );
 
   const loadActiveGroup = useCallback(async () => {
     try {
       const groups = await getAllGroups();
 
       const activeGroups = groups.filter(
-        (group) =>
-          group.status.toLowerCase() === 'active',
+        (group) => group.status.toLowerCase() === 'active',
       );
 
-      if (activeGroups.length > 0) {
-        const group = activeGroups[0];
-
-        setActiveGroup(group);
-
-        const members =
-          await getMembersByGroupId(group.id);
-
-        const executive = members.find(
-          (member: MemberRecord) =>
-            member.role?.toLowerCase() ===
-            'executive',
-        );
-
-        setExecutiveMemberId(
-          executive ? executive.id : null,
-        );
-      } else {
+      if (activeGroups.length === 0) {
         setActiveGroup(null);
         setExecutiveMemberId(null);
+        return;
       }
-    } catch (error) {
-      console.error(
-        'Failed to load active group:',
-        error,
+
+      const group = activeGroups[0];
+
+      setActiveGroup(group);
+
+      const members = await getMembersByGroupId(group.id);
+
+      const executive = members.find(
+        (member: MemberRecord) =>
+          member.role?.toLowerCase() === 'executive',
       );
+
+      setExecutiveMemberId(executive ? executive.id : null);
+    } catch (error) {
+      console.error('Failed to load active group:', error);
 
       setActiveGroup(null);
       setExecutiveMemberId(null);
@@ -124,79 +113,162 @@ export default function HomeScreen({
     }, [loadActiveGroup]),
   );
 
-  /*
-   * Setup Rules does NOT require an executive member.
-   * A group can configure its VSLA rules before
-   * executives are assigned.
-   */
-  const handleSetupRules = () => {
+  const requireGroup = (): boolean => {
     if (!activeGroup) {
       Alert.alert(
         'No Active Group',
-        'Please register a group before opening Setup Rules.',
+        'Please register a group before continuing.',
       );
+      return false;
+    }
+
+    return true;
+  };
+
+  const requireExecutive = (): boolean => {
+    if (!requireGroup()) {
+      return false;
+    }
+
+    if (!executiveMemberId) {
+      Alert.alert(
+        'Executive Required',
+        'Please assign an executive member before using this function.',
+      );
+      return false;
+    }
+
+    return true;
+  };
+
+  const handleSetupRules = () => {
+    if (!requireGroup()) {
       return;
     }
 
     navigation.navigate('SetupRules', {
-      groupId: activeGroup.id,
+      groupId: activeGroup!.id,
     });
   };
 
-  /*
-   * New Meeting still records activity for the
-   * currently active group.
-   */
-  const handleNewMeeting = async () => {
-    try {
-      await loadActiveGroup();
-
-      const groups = await getAllGroups();
-
-      const activeGroups = groups.filter(
-        (group) =>
-          group.status.toLowerCase() === 'active',
-      );
-
-      if (activeGroups.length === 0) {
-        Alert.alert(
-          'No Active Group',
-          'Please register a group before starting a meeting.',
-        );
-        return;
-      }
-
-      const groupToUse = activeGroups[0];
-
-      await recordGroupActivity(groupToUse.id);
-
-      const updatedGroups = await getAllGroups();
-
-      const updatedGroup = updatedGroups.find(
-        (group) => group.id === groupToUse.id,
-      );
-
-      if (updatedGroup) {
-        setActiveGroup(updatedGroup);
-      } else {
-        setActiveGroup(groupToUse);
-      }
-
-      Alert.alert(
-        'Meeting Started',
-        `${groupToUse.group_name} (KYA ${groupToUse.group_number}) activity has been recorded.`,
-      );
-    } catch (error) {
-      console.error(
-        'Failed to record meeting activity:',
-        error,
-      );
-
-      Alert.alert(
-        'Error',
-        'The meeting activity could not be recorded. Please try again.',
-      );
+  const handleAddMembers = () => {
+    if (!requireGroup()) {
+      return;
     }
+
+    navigation.navigate('AddMembers', {
+      groupId: activeGroup!.id,
+    });
+  };
+
+  const handleNewMeeting = () => {
+    if (!requireExecutive()) {
+      return;
+    }
+
+    navigation.navigate('NewMeeting', {
+      groupId: activeGroup!.id,
+      executiveMemberId: executiveMemberId!,
+    });
+  };
+
+  const handleSavings = () => {
+    if (!requireExecutive()) {
+      return;
+    }
+
+    navigation.navigate('Savings', {
+      groupId: activeGroup!.id,
+      executiveMemberId: executiveMemberId!,
+    });
+  };
+
+  const handleLoanDisbursement = () => {
+    if (!requireExecutive()) {
+      return;
+    }
+
+    navigation.navigate('LoanDisbursement', {
+      groupId: activeGroup!.id,
+      executiveMemberId: executiveMemberId!,
+    });
+  };
+
+  const handleFines = () => {
+    if (!requireExecutive()) {
+      return;
+    }
+
+    navigation.navigate('Fines', {
+      groupId: activeGroup!.id,
+      executiveMemberId: executiveMemberId!,
+    });
+  };
+
+  const handleInsurance = () => {
+    if (!requireExecutive()) {
+      return;
+    }
+
+    navigation.navigate('Insurance', {
+      groupId: activeGroup!.id,
+      executiveMemberId: executiveMemberId!,
+    });
+  };
+
+  const handleExternalFunds = () => {
+    if (!requireExecutive()) {
+      return;
+    }
+
+    navigation.navigate('ExternalFunds', {
+      groupId: activeGroup!.id,
+      executiveMemberId: executiveMemberId!,
+    });
+  };
+
+  const handleRepayment = () => {
+    if (!requireExecutive()) {
+      return;
+    }
+
+    navigation.navigate('Repayment', {
+      groupId: activeGroup!.id,
+      executiveMemberId: executiveMemberId!,
+    });
+  };
+
+  const handleLoans = () => {
+    if (!requireExecutive()) {
+      return;
+    }
+
+    navigation.navigate('Loans', {
+      groupId: activeGroup!.id,
+      executiveMemberId: executiveMemberId!,
+    });
+  };
+
+  const handleMiscellaneousExpense = () => {
+    if (!requireExecutive()) {
+      return;
+    }
+
+    navigation.navigate('MiscellaneousExpense', {
+      groupId: activeGroup!.id,
+      executiveMemberId: executiveMemberId!,
+    });
+  };
+
+  const handleExpenditure = () => {
+    if (!requireExecutive()) {
+      return;
+    }
+
+    navigation.navigate('Expenditure', {
+      groupId: activeGroup!.id,
+      executiveMemberId: executiveMemberId!,
+    });
   };
 
   return (
@@ -208,10 +280,7 @@ export default function HomeScreen({
           </View>
 
           <View style={styles.titleContainer}>
-            <Text style={styles.appName}>
-              Ebadsave VSLA
-            </Text>
-
+            <Text style={styles.appName}>Ebadsave VSLA</Text>
             <Text style={styles.tagline}>
               save together,grow together
             </Text>
@@ -220,25 +289,19 @@ export default function HomeScreen({
 
         <View style={styles.headerButtons}>
           <TouchableOpacity
-            style={styles.constitutionButton}
-            onPress={() =>
-              navigation.navigate('Constitution')
-            }
+            style={styles.headerButton}
+            onPress={() => navigation.navigate('Constitution')}
             activeOpacity={0.8}
           >
-            <Text style={styles.constitutionText}>
-              Constitution
-            </Text>
+            <Text style={styles.headerButtonText}>Constitution</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.setupRulesButton}
+            style={styles.headerButton}
             onPress={handleSetupRules}
             activeOpacity={0.8}
           >
-            <Text style={styles.setupRulesText}>
-              Setup Rules
-            </Text>
+            <Text style={styles.headerButtonText}>Setup Rules</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -249,16 +312,12 @@ export default function HomeScreen({
       >
         <View style={styles.cardsGrid}>
           {summaryCards.map((card) => (
-            <View
-              key={card.title}
-              style={styles.card}
-            >
+            <View key={card.title} style={styles.card}>
               <View
                 style={[
                   styles.iconCircle,
                   {
-                    backgroundColor:
-                      card.iconBackground,
+                    backgroundColor: card.iconBackground,
                   },
                 ]}
               >
@@ -274,42 +333,118 @@ export default function HomeScreen({
                 </Text>
               </View>
 
-              <Text style={styles.cardTitle}>
-                {card.title}
-              </Text>
-
-              <Text style={styles.cardValue}>
-                {card.value}
-              </Text>
+              <Text style={styles.cardTitle}>{card.title}</Text>
+              <Text style={styles.cardValue}>{card.value}</Text>
             </View>
           ))}
         </View>
 
         <View style={styles.activityContainer}>
-          <Text style={styles.sectionTitle}>
-            Recent Activity
-          </Text>
+          <Text style={styles.sectionTitle}>Recent Activity</Text>
 
           <View style={styles.emptyActivity}>
-            <Text style={styles.emptyIcon}>
-              —
-            </Text>
-
-            <Text style={styles.emptyText}>
-              No transactions yet
-            </Text>
+            <Text style={styles.emptyIcon}>—</Text>
+            <Text style={styles.emptyText}>No transactions yet</Text>
           </View>
         </View>
 
-        <TouchableOpacity
-          style={styles.meetingButton}
-          onPress={handleNewMeeting}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.meetingButtonText}>
-            New Meeting
-          </Text>
-        </TouchableOpacity>
+        <View style={styles.navigationSection}>
+          <Text style={styles.sectionTitle}>Group Management</Text>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleAddMembers}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.actionButtonText}>Add Members</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleNewMeeting}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.actionButtonText}>New Meeting</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.navigationSection}>
+          <Text style={styles.sectionTitle}>Financial Actions</Text>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleSavings}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.actionButtonText}>Savings</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleLoanDisbursement}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.actionButtonText}>Loan Disbursement</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleFines}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.actionButtonText}>Fines</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleInsurance}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.actionButtonText}>Insurance</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleExternalFunds}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.actionButtonText}>External Funds</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleRepayment}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.actionButtonText}>Loan Repayment</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleLoans}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.actionButtonText}>Loans</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleMiscellaneousExpense}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.actionButtonText}>
+              Miscellaneous Expense
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleExpenditure}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.actionButtonText}>Expenditure</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -323,17 +458,14 @@ const styles = StyleSheet.create({
 
   header: {
     backgroundColor: '#16a34a',
-    paddingHorizontal: 15,
-    paddingVertical: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 14,
   },
 
   headerInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    flex: 1,
   },
 
   logo: {
@@ -341,69 +473,54 @@ const styles = StyleSheet.create({
     height: 48,
     borderRadius: 24,
     backgroundColor: '#ffffff',
-    alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 11,
+    alignItems: 'center',
   },
 
   logoText: {
-    color: '#16a34a',
     fontSize: 26,
-    fontWeight: '900',
+    fontWeight: '800',
+    color: '#16a34a',
   },
 
   titleContainer: {
-    flex: 1,
+    marginLeft: 12,
   },
 
   appName: {
-    color: '#ffffff',
     fontSize: 20,
-    fontWeight: '800',
+    fontWeight: '700',
+    color: '#ffffff',
   },
 
   tagline: {
-    color: '#ffffff',
-    fontSize: 12,
     marginTop: 2,
+    fontSize: 12,
+    color: '#ffffff',
   },
 
   headerButtons: {
-    alignItems: 'flex-end',
+    flexDirection: 'row',
+    marginTop: 12,
+    gap: 8,
   },
 
-  constitutionButton: {
+  headerButton: {
     backgroundColor: '#ffffff',
-    borderRadius: 8,
-    paddingHorizontal: 9,
+    paddingHorizontal: 12,
     paddingVertical: 8,
-    marginLeft: 8,
-  },
-
-  constitutionText: {
-    color: '#16a34a',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-
-  setupRulesButton: {
-    backgroundColor: '#ffffff',
     borderRadius: 8,
-    paddingHorizontal: 9,
-    paddingVertical: 8,
-    marginLeft: 8,
-    marginTop: 6,
   },
 
-  setupRulesText: {
+  headerButtonText: {
     color: '#16a34a',
-    fontSize: 12,
-    fontWeight: '800',
+    fontSize: 13,
+    fontWeight: '700',
   },
 
   content: {
     padding: 16,
-    paddingBottom: 30,
+    paddingBottom: 32,
   },
 
   cardsGrid: {
@@ -416,85 +533,85 @@ const styles = StyleSheet.create({
     width: '48%',
     backgroundColor: '#ffffff',
     borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
     borderWidth: 1,
     borderColor: '#e5e7eb',
-    padding: 14,
-    marginBottom: 14,
-    elevation: 2,
   },
 
   iconCircle: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: 'center',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     justifyContent: 'center',
+    alignItems: 'center',
     marginBottom: 10,
   },
 
   iconText: {
-    fontSize: 18,
-    fontWeight: '900',
+    fontSize: 17,
+    fontWeight: '800',
   },
 
   cardTitle: {
-    color: '#4b5563',
     fontSize: 13,
-    fontWeight: '600',
+    color: '#374151',
   },
 
   cardValue: {
-    color: '#111827',
-    fontSize: 17,
-    fontWeight: '800',
     marginTop: 4,
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111827',
   },
 
   activityContainer: {
-    marginTop: 5,
+    marginTop: 8,
   },
 
   sectionTitle: {
-    color: '#111827',
     fontSize: 18,
-    fontWeight: '800',
+    fontWeight: '700',
+    color: '#111827',
     marginBottom: 10,
   },
 
   emptyActivity: {
-    height: 125,
-    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#e5e7eb',
-    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    paddingVertical: 28,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
   emptyIcon: {
+    fontSize: 24,
     color: '#9ca3af',
-    fontSize: 28,
-    fontWeight: '300',
-    marginBottom: 6,
   },
 
   emptyText: {
-    color: '#6b7280',
+    marginTop: 8,
     fontSize: 14,
+    color: '#6b7280',
   },
 
-  meetingButton: {
-    width: '100%',
+  navigationSection: {
+    marginTop: 22,
+  },
+
+  actionButton: {
     backgroundColor: '#16a34a',
     borderRadius: 10,
-    paddingVertical: 15,
-    alignItems: 'center',
-    marginTop: 20,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 10,
   },
 
-  meetingButtonText: {
+  actionButtonText: {
     color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '800',
+    fontSize: 15,
+    fontWeight: '700',
+    textAlign: 'center',
   },
 });
