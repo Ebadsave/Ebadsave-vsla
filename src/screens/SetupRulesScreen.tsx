@@ -19,14 +19,13 @@ import {
   VSLASetupRuleUpdates,
 } from '../database/database';
 
-type RootStackParamList = {
-  Home: undefined;
-  Constitution: undefined;
-  SetupRules: {
-    groupId: number;
-    executiveMemberId: number;
-  };
-};
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../../App';
+
+type Props = NativeStackScreenProps<
+  RootStackParamList,
+  'SetupRules'
+>;
 
 type Props = NativeStackScreenProps<
   RootStackParamList,
