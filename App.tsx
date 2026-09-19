@@ -1,8 +1,6 @@
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import {
-  createNativeStackNavigator,
-} from '@react-navigation/native-stack';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import HomeScreen from './src/screens/HomeScreen';
 import ConstitutionScreen from './src/screens/ConstitutionScreen';
@@ -15,7 +13,7 @@ import LoanDisbursementScreen from './src/screens/LoanDisbursementScreen';
 import FinesScreen from './src/screens/FinesScreen';
 import InsuranceScreen from './src/screens/InsuranceScreen';
 import ExternalFundsScreen from './src/screens/ExternalFundsScreen';
-import LoanRepaymentScreen from './src/screens/RepaymentScreen';
+import LoanRepaymentScreen from './src/screens/LoanRepaymentScreen';
 import LoansScreen from './src/screens/LoansScreen';
 import MiscellaneousExpenseScreen from './src/screens/MiscellaneousExpenseScreen';
 import ExpenditureScreen from './src/screens/ExpenditureScreen';
@@ -147,7 +145,7 @@ export default function App() {
 
         <Stack.Screen
           name="Repayment"
-          component={RepaymentScreen}
+          component={LoanRepaymentScreen}
         />
 
         <Stack.Screen
@@ -167,4 +165,4 @@ export default function App() {
       </Stack.Navigator>
     </NavigationContainer>
   );
-  }
+}
