@@ -1,82 +1,90 @@
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import {
+  createNativeStackNavigator,
+} from '@react-navigation/native-stack';
 
 import HomeScreen from './src/screens/HomeScreen';
 import ConstitutionScreen from './src/screens/ConstitutionScreen';
 import SetupRulesScreen from './src/screens/SetupRulesScreen';
 
+import AddMembersScreen from './src/screens/AddMembersScreen';
+import NewMeetingScreen from './src/screens/NewMeetingScreen';
+import SavingsScreen from './src/screens/SavingsScreen';
+import LoanDisbursementScreen from './src/screens/LoanDisbursementScreen';
+import FinesScreen from './src/screens/FinesScreen';
+import InsuranceScreen from './src/screens/InsuranceScreen';
+import ExternalFundsScreen from './src/screens/ExternalFundsScreen';
+import LoanRepaymentScreen from './src/screens/RepaymentScreen';
+import LoansScreen from './src/screens/LoansScreen';
+import MiscellaneousExpenseScreen from './src/screens/MiscellaneousExpenseScreen';
+import ExpenditureScreen from './src/screens/ExpenditureScreen';
+
 export type RootStackParamList = {
   Home: undefined;
+
   Constitution: undefined;
+
   SetupRules: {
     groupId: number;
   };
 
-  AddMembers: undefined;
-  NewMeeting: undefined;
-  Savings: undefined;
-  LoanDisbursement: undefined;
-  FinesInsurance: undefined;
-  Loans: undefined;
+  AddMembers: {
+    groupId: number;
+  };
+
+  NewMeeting: {
+    groupId: number;
+    executiveMemberId: number;
+  };
+
+  Savings: {
+    groupId: number;
+    executiveMemberId: number;
+  };
+
+  LoanDisbursement: {
+    groupId: number;
+    executiveMemberId: number;
+  };
+
+  Fines: {
+    groupId: number;
+    executiveMemberId: number;
+  };
+
+  Insurance: {
+    groupId: number;
+    executiveMemberId: number;
+  };
+
+  ExternalFunds: {
+    groupId: number;
+    executiveMemberId: number;
+  };
+
+  Repayment: {
+    groupId: number;
+    executiveMemberId: number;
+  };
+
+  Loans: {
+    groupId: number;
+    executiveMemberId: number;
+  };
+
+  MiscellaneousExpense: {
+    groupId: number;
+    executiveMemberId: number;
+  };
+
+  Expenditure: {
+    groupId: number;
+    executiveMemberId: number;
+  };
 };
 
-const Stack =
-  createNativeStackNavigator<RootStackParamList>();
-
-function PlaceholderScreen({
-  route,
-  navigation,
-}: any) {
-  return (
-    <View
-      style={{
-        flex: 1,
-        backgroundColor: '#f9fafb',
-        padding: 20,
-        justifyContent: 'center',
-      }}
-    >
-      <Text
-        style={{
-          fontSize: 24,
-          fontWeight: '700',
-          color: '#166534',
-          textAlign: 'center',
-          marginBottom: 20,
-        }}
-      >
-        {route.name}
-      </Text>
-
-      <TouchableOpacity
-        onPress={() => navigation.goBack()}
-        style={{
-          backgroundColor: '#16a34a',
-          paddingVertical: 15,
-          borderRadius: 10,
-        }}
-      >
-        <Text
-          style={{
-            color: '#ffffff',
-            textAlign: 'center',
-            fontSize: 16,
-            fontWeight: '700',
-          }}
-        >
-          Back to Home
-        </Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-import {
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function App() {
   return (
@@ -104,52 +112,59 @@ export default function App() {
 
         <Stack.Screen
           name="AddMembers"
-        >
-          {(props) => (
-            <PlaceholderScreen {...props} />
-          )}
-        </Stack.Screen>
+          component={AddMembersScreen}
+        />
 
         <Stack.Screen
           name="NewMeeting"
-        >
-          {(props) => (
-            <PlaceholderScreen {...props} />
-          )}
-        </Stack.Screen>
+          component={NewMeetingScreen}
+        />
 
         <Stack.Screen
           name="Savings"
-        >
-          {(props) => (
-            <PlaceholderScreen {...props} />
-          )}
-        </Stack.Screen>
+          component={SavingsScreen}
+        />
 
         <Stack.Screen
           name="LoanDisbursement"
-        >
-          {(props) => (
-            <PlaceholderScreen {...props} />
-          )}
-        </Stack.Screen>
+          component={LoanDisbursementScreen}
+        />
 
         <Stack.Screen
-          name="FinesInsurance"
-        >
-          {(props) => (
-            <PlaceholderScreen {...props} />
-          )}
-        </Stack.Screen>
+          name="Fines"
+          component={FinesScreen}
+        />
+
+        <Stack.Screen
+          name="Insurance"
+          component={InsuranceScreen}
+        />
+
+        <Stack.Screen
+          name="ExternalFunds"
+          component={ExternalFundsScreen}
+        />
+
+        <Stack.Screen
+          name="Repayment"
+          component={RepaymentScreen}
+        />
 
         <Stack.Screen
           name="Loans"
-        >
-          {(props) => (
-            <PlaceholderScreen {...props} />
-          )}
-        </Stack.Screen>
+          component={LoansScreen}
+        />
+
+        <Stack.Screen
+          name="MiscellaneousExpense"
+          component={MiscellaneousExpenseScreen}
+        />
+
+        <Stack.Screen
+          name="Expenditure"
+          component={ExpenditureScreen}
+        />
       </Stack.Navigator>
     </NavigationContainer>
   );
-}
+  }
