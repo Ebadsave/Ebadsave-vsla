@@ -1,8 +1,6 @@
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import {
-  createNativeStackNavigator,
-} from '@react-navigation/native-stack';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import HomeScreen from './src/screens/HomeScreen';
 import ConstitutionScreen from './src/screens/ConstitutionScreen';
@@ -13,12 +11,10 @@ export type RootStackParamList = {
   Constitution: undefined;
   SetupRules: {
     groupId: number;
-    executiveMemberId: number;
   };
 };
 
-const Stack =
-  createNativeStackNavigator<RootStackParamList>();
+const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function App() {
   return (
