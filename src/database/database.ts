@@ -51,10 +51,6 @@ export type GroupRuleRecord = {
   updated_at: string;
 };
 
-/* ============================================================
-   VSLA SETUP RULES
-   ============================================================ */
-
 export type VSLASetupRuleRecord = {
   id: number;
   group_id: number;
@@ -140,6 +136,35 @@ export type FinancialSummary = {
   expenditureFund: number;
   insuranceFund: number;
   fundBalance: number;
+};
+
+/* ============================================================
+   MEETING TYPES
+   ============================================================ */
+
+export type GroupMeetingRecord = {
+  id: number;
+  group_id: number;
+  meeting_date: string;
+  opened_at: string | null;
+  closed_at: string | null;
+  status: string;
+  created_at: string;
+  summary_approved: number;
+  summary_approved_by: number | null;
+  summary_approved_at: string | null;
+};
+
+export type MeetingSummaryRecord = {
+  meeting_id: number;
+  meeting_date: string;
+  opened_at: string | null;
+  closed_at: string | null;
+  status: string;
+  total_savings: number;
+  loan_fund: number;
+  group_fund: number;
+  summary_approved: number;
 };
 
 /* ============================================================
@@ -258,16 +283,6 @@ function isFinancialAccountType(
     value as FinancialAccountType,
   );
 }
-
-const FUND_BALANCE_ACCOUNTS: FinancialAccountType[] = [
-  'savings',
-  'loan_fund',
-  'loan_repayment',
-  'social_fund',
-  'fines',
-  'external_fund',
-  'expenditure_fund',
-];
 
 function calculateFundBalance(
   summary: Omit<FinancialSummary, 'fundBalance'>,
@@ -689,6 +704,9 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       closed_at TEXT,
       status TEXT NOT NULL DEFAULT 'open',
       created_at TEXT NOT NULL,
+      summary_approved INTEGER NOT NULL DEFAULT 0,
+      summary_approved_by INTEGER,
+      summary_approved_at TEXT,
       FOREIGN KEY (group_id) REFERENCES groups(id)
     );
 
@@ -886,6 +904,27 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
     'members',
     'role',
     "TEXT NOT NULL DEFAULT 'member'",
+  );
+
+  await addColumnIfMissing(
+    db,
+    'group_meetings',
+    'summary_approved',
+    'INTEGER NOT NULL DEFAULT 0',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'group_meetings',
+    'summary_approved_by',
+    'INTEGER',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'group_meetings',
+    'summary_approved_at',
+    'TEXT',
   );
 
   await ensureFinancialAccountsForAllGroups(db);
@@ -1654,6 +1693,7 @@ export async function getMembersByGroupId(
       cell,
       district,
       photo_uri,
+      role,
       status,
       created_at
      FROM members
@@ -3060,21 +3100,20 @@ export async function getFinancialSummary(
   }
 
   const partial = {
-  savings: balances.savings,
-  loanFund: balances.loan_fund,
-  loanRepayment: balances.loan_repayment,
-  socialFund: balances.social_fund,
-  fines: balances.fines,
-  externalFund: balances.external_fund,
-  expenditureFund: balances.expenditure_fund,
-  insuranceFund: balances.insurance_fund,
-};
+    savings: balances.savings,
+    loanFund: balances.loan_fund,
+    loanRepayment: balances.loan_repayment,
+    socialFund: balances.social_fund,
+    fines: balances.fines,
+    externalFund: balances.external_fund,
+    expenditureFund: balances.expenditure_fund,
+    insuranceFund: balances.insurance_fund,
+  };
 
-return {
-  ...partial,
-  fundBalance: calculateFundBalance(partial),
-};
-
+  return {
+    ...partial,
+    fundBalance: calculateFundBalance(partial),
+  };
 }
 
 export async function getFinancialTransactions(
@@ -3092,12 +3131,11 @@ export async function getFinancialTransactions(
       member_id,
       meeting_id,
       transaction_type,
-      transaction_date,
       created_at
      FROM financial_transactions
      WHERE group_id = ?
      ORDER BY created_at DESC, id DESC`,
-    [groupId],
+    groupId,
   );
 }
 
@@ -3117,12 +3155,293 @@ export async function getFinancialTransactionsByAccount(
       member_id,
       meeting_id,
       transaction_type,
-      transaction_date,
       created_at
      FROM financial_transactions
      WHERE group_id = ?
        AND account_type = ?
      ORDER BY created_at DESC, id DESC`,
-    [groupId, accountType],
+    groupId,
+    accountType,
   );
-    }
+}
+
+/* ============================================================
+   MEETINGS
+   ============================================================ */
+
+/**
+ * Get the currently open meeting for a group.
+ */
+export async function getOpenMeeting(
+  groupId: number,
+): Promise<GroupMeetingRecord | null> {
+  const db = await getDatabase();
+
+  return db.getFirstAsync<GroupMeetingRecord>(
+    `SELECT
+      id,
+      group_id,
+      meeting_date,
+      opened_at,
+      closed_at,
+      status,
+      created_at,
+      summary_approved,
+      summary_approved_by,
+      summary_approved_at
+     FROM group_meetings
+     WHERE group_id = ?
+     AND status = 'open'
+     ORDER BY id DESC
+     LIMIT 1`,
+    groupId,
+  );
+}
+
+/**
+ * Get the most recently concluded meeting.
+ */
+export async function getLastConcludedMeeting(
+  groupId: number,
+): Promise<GroupMeetingRecord | null> {
+  const db = await getDatabase();
+
+  return db.getFirstAsync<GroupMeetingRecord>(
+    `SELECT
+      id,
+      group_id,
+      meeting_date,
+      opened_at,
+      closed_at,
+      status,
+      created_at,
+      summary_approved,
+      summary_approved_by,
+      summary_approved_at
+     FROM group_meetings
+     WHERE group_id = ?
+     AND status = 'closed'
+     ORDER BY id DESC
+     LIMIT 1`,
+    groupId,
+  );
+}
+
+/**
+ * Get the recorded summary of a concluded meeting.
+ */
+export async function getMeetingSummary(
+  meetingId: number,
+): Promise<MeetingSummaryRecord | null> {
+  const db = await getDatabase();
+
+  return db.getFirstAsync<MeetingSummaryRecord>(
+    `SELECT
+      gm.id AS meeting_id,
+      gm.meeting_date,
+      gm.opened_at,
+      gm.closed_at,
+      gm.status,
+      COALESCE(mc.total_savings, 0) AS total_savings,
+      COALESCE(mc.loan_fund, 0) AS loan_fund,
+      COALESCE(mc.group_fund, 0) AS group_fund,
+      gm.summary_approved
+     FROM group_meetings gm
+     LEFT JOIN meeting_closures mc
+       ON mc.meeting_id = gm.id
+     WHERE gm.id = ?
+     ORDER BY mc.id DESC
+     LIMIT 1`,
+    meetingId,
+  );
+}
+
+/**
+ * Approve the summary of a concluded meeting.
+ */
+export async function approveMeetingSummary(
+  meetingId: number,
+  executiveMemberId: number,
+): Promise<void> {
+  const db = await getDatabase();
+
+  const meeting =
+    await db.getFirstAsync<{
+      id: number;
+      group_id: number;
+      status: string;
+    }>(
+      `SELECT
+        id,
+        group_id,
+        status
+       FROM group_meetings
+       WHERE id = ?
+       LIMIT 1`,
+      meetingId,
+    );
+
+  if (!meeting) {
+    throw new Error(
+      'Meeting not found.',
+    );
+  }
+
+  if (meeting.status !== 'closed') {
+    throw new Error(
+      'Only a concluded meeting can have its summary approved.',
+    );
+  }
+
+  const executive =
+    await db.getFirstAsync<{
+      id: number;
+      role: string;
+      status: string;
+    }>(
+      `SELECT
+        id,
+        role,
+        status
+       FROM members
+       WHERE id = ?
+       AND group_id = ?
+       LIMIT 1`,
+      executiveMemberId,
+      meeting.group_id,
+    );
+
+  if (!executive) {
+    throw new Error(
+      'Executive member was not found in this group.',
+    );
+  }
+
+  if (
+    executive.status !== 'active' ||
+    executive.role.toLowerCase() !== 'executive'
+  ) {
+    throw new Error(
+      'Only an active executive can approve the meeting summary.',
+    );
+  }
+
+  const timestamp = now();
+
+  await db.runAsync(
+    `UPDATE group_meetings
+     SET
+       summary_approved = 1,
+       summary_approved_by = ?,
+       summary_approved_at = ?
+     WHERE id = ?`,
+    executiveMemberId,
+    timestamp,
+    meetingId,
+  );
+}
+
+/**
+ * Start a new meeting.
+ *
+ * Rules:
+ * - The group must exist.
+ * - The supplied member must be an active executive.
+ * - Another meeting cannot already be open.
+ * - If a previous meeting exists, its summary must be approved.
+ */
+export async function startNewMeeting(
+  groupId: number,
+  executiveMemberId: number,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const group =
+    await getGroupById(groupId);
+
+  if (!group) {
+    throw new Error(
+      'Group not found.',
+    );
+  }
+
+  const executive =
+    await db.getFirstAsync<{
+      id: number;
+      role: string;
+      status: string;
+    }>(
+      `SELECT
+        id,
+        role,
+        status
+       FROM members
+       WHERE id = ?
+       AND group_id = ?
+       LIMIT 1`,
+      executiveMemberId,
+      groupId,
+    );
+
+  if (!executive) {
+    throw new Error(
+      'Executive member was not found in this group.',
+    );
+  }
+
+  if (
+    executive.status !== 'active' ||
+    executive.role.toLowerCase() !== 'executive'
+  ) {
+    throw new Error(
+      'Only an active executive can start a meeting.',
+    );
+  }
+
+  const openMeeting =
+    await getOpenMeeting(groupId);
+
+  if (openMeeting) {
+    throw new Error(
+      'A meeting is already open for this group. Close the current meeting before starting another one.',
+    );
+  }
+
+  const previousMeeting =
+    await getLastConcludedMeeting(groupId);
+
+  if (
+    previousMeeting &&
+    previousMeeting.summary_approved !== 1
+  ) {
+    throw new Error(
+      'The previous meeting summary must be approved before a new meeting can start.',
+    );
+  }
+
+  const timestamp = now();
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO group_meetings (
+        group_id,
+        meeting_date,
+        opened_at,
+        closed_at,
+        status,
+        created_at,
+        summary_approved
+      )
+      VALUES (?, ?, ?, NULL, 'open', ?, 0)`,
+      groupId,
+      timestamp,
+      timestamp,
+      timestamp,
+    );
+
+  await recordGroupActivity(
+    groupId,
+  );
+
+  return result.lastInsertRowId;
+  }
