@@ -15,7 +15,7 @@ import { RootStackParamList } from '../../App';
 import {
   getGroupById,
   getOpenMeeting,
-  getPreviousConcludedMeeting,
+  getLastConcludedMeeting,,
   startNewMeeting,
   closeMeeting,
 } from '../database/database';
@@ -56,7 +56,7 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
       const currentOpenMeeting = await getOpenMeeting(groupId);
       setOpenMeeting(currentOpenMeeting);
 
-      const previous = await getPreviousConcludedMeeting(groupId);
+      const previous = await getLastConcludedMeeting(groupId);
       setPreviousMeeting(previous as PreviousMeeting | null);
     } catch (error) {
       Alert.alert(
