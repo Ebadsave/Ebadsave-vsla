@@ -15,7 +15,7 @@ import { RootStackParamList } from '../../App';
 import {
   getGroupById,
   getOpenMeeting,
-  getLastConcludedMeeting,,
+  getLastConcludedMeeting,
   startNewMeeting,
   closeMeeting,
 } from '../database/database';
