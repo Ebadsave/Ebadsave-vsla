@@ -122,7 +122,10 @@ export type FinancialTransactionRecord = {
   reason: string;
   member_id: number | null;
   meeting_id: number | null;
+  collection_id?: number | null;
   transaction_type: string;
+  reversed_transaction_id?: number | null;
+  reversed?: number;
   created_at: string;
 };
 
@@ -138,6 +141,63 @@ export type FinancialSummary = {
   fundBalance: number;
 };
 
+export type FinancialCollectionRecord = {
+  id: number;
+  group_id: number;
+  meeting_id: number | null;
+  member_id: number | null;
+  total_amount: number;
+  status: string;
+  confirmation_code: string;
+  created_at: string;
+  confirmed_at: string | null;
+};
+
+export type FinancialCollectionItem = {
+  id: number;
+  collection_id: number;
+  account_type: FinancialAccountType;
+  amount: number;
+  reason: string;
+  transaction_id: number | null;
+};
+
+export type MemberPassbookRecord = {
+  id: number;
+  group_id: number;
+  member_id: number;
+  meeting_id: number | null;
+  transaction_id: number | null;
+  entry_type: string;
+  amount: number;
+  balance_after: number;
+  description: string;
+  created_at: string;
+};
+
+export type MemberStatementRecord = {
+  id: number;
+  meeting_id: number;
+  member_id: number;
+  individual_total_savings: number;
+  individual_loan_balance: number;
+  individual_loan_due_date: string | null;
+  created_at: string;
+};
+
+export type ReceiptRecord = {
+  id: number;
+  group_id: number;
+  member_id: number | null;
+  meeting_id: number | null;
+  collection_id: number | null;
+  transaction_id: number | null;
+  receipt_number: string;
+  amount: number;
+  description: string;
+  created_at: string;
+};
+
 /* ============================================================
    MEETING TYPES
    ============================================================ */
@@ -145,6 +205,8 @@ export type FinancialSummary = {
 export type GroupMeetingRecord = {
   id: number;
   group_id: number;
+  meeting_number: number;
+  cycle_number: number;
   meeting_date: string;
   opened_at: string | null;
   closed_at: string | null;
@@ -153,10 +215,16 @@ export type GroupMeetingRecord = {
   summary_approved: number;
   summary_approved_by: number | null;
   summary_approved_at: string | null;
+  previous_meeting_reviewed: number;
+  previous_meeting_editable: number;
+  loan_fund_at_start: number;
+  insurance_fund_at_start: number;
 };
 
 export type MeetingSummaryRecord = {
   meeting_id: number;
+  meeting_number: number;
+  cycle_number: number;
   meeting_date: string;
   opened_at: string | null;
   closed_at: string | null;
@@ -164,7 +232,20 @@ export type MeetingSummaryRecord = {
   total_savings: number;
   loan_fund: number;
   group_fund: number;
+  insurance_fund: number;
   summary_approved: number;
+};
+
+export type MeetingAuditRecord = {
+  id: number;
+  group_id: number;
+  cycle_number: number;
+  meeting_id: number;
+  meeting_number: number;
+  action: string;
+  actor_member_id: number | null;
+  details: string;
+  created_at: string;
 };
 
 /* ============================================================
@@ -230,11 +311,9 @@ function parseGroupNumber(
 
   const numeric = Number(text);
 
-  if (Number.isFinite(numeric)) {
-    return numeric;
-  }
-
-  return 0;
+  return Number.isFinite(numeric)
+    ? numeric
+    : 0;
 }
 
 const GROUP_SELECT = `
@@ -313,11 +392,11 @@ async function addColumnIfMissing(
       `PRAGMA table_info(${table});`,
     );
 
-  const exists = columns.some(
-    (item) => item.name === column,
-  );
-
-  if (!exists) {
+  if (
+    !columns.some(
+      (item) => item.name === column,
+    )
+  ) {
     await db.execAsync(
       `ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`,
     );
@@ -334,9 +413,7 @@ async function ensureFinancialAccountsForGroup(
 ): Promise<void> {
   const timestamp = now();
 
-  for (
-    const accountType of FINANCIAL_ACCOUNT_TYPES
-  ) {
+  for (const accountType of FINANCIAL_ACCOUNT_TYPES) {
     await db.runAsync(
       `INSERT OR IGNORE INTO financial_accounts (
         group_id,
@@ -371,7 +448,7 @@ async function ensureFinancialAccountsForAllGroups(
 }
 
 /* ============================================================
-   VSLA DEFAULT RULES
+   DEFAULT VSLA RULES
    ============================================================ */
 
 async function createDefaultVSLASetupRules(
@@ -402,24 +479,8 @@ async function createDefaultVSLASetupRules(
       updated_at
     )
     VALUES (
-      ?,
-      1000,
-      1,
-      5,
-      3,
-      5,
-      'per month',
-      12,
-      0,
-      0,
-      0,
-      0,
-      'weekly',
-      12,
-      12,
-      1,
-      ?,
-      ?
+      ?, 1000, 1, 5, 3, 5, 'per month', 12,
+      0, 0, 0, 0, 'weekly', 12, 12, 1, ?, ?
     )`,
     groupId,
     timestamp,
@@ -465,7 +526,6 @@ async function applyDueNextOfKinChanges(
       new_name: string | null;
       new_phone: string | null;
       new_gender: string | null;
-      effective_at: string;
     }>(
       `SELECT
         id,
@@ -474,8 +534,7 @@ async function applyDueNextOfKinChanges(
         action,
         new_name,
         new_phone,
-        new_gender,
-        effective_at
+        new_gender
        FROM next_of_kin_change_history
        WHERE applied = 0
        AND effective_at <= ?
@@ -535,10 +594,7 @@ async function applyDueNextOfKinBenefits(
       member_id: number;
       slot: number;
     }>(
-      `SELECT
-        id,
-        member_id,
-        slot
+      `SELECT id, member_id, slot
        FROM next_of_kin_benefits
        WHERE status = 'pending'
        AND effective_at <= ?
@@ -699,6 +755,8 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
     CREATE TABLE IF NOT EXISTS group_meetings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       group_id INTEGER NOT NULL,
+      meeting_number INTEGER NOT NULL,
+      cycle_number INTEGER NOT NULL DEFAULT 1,
       meeting_date TEXT NOT NULL,
       opened_at TEXT,
       closed_at TEXT,
@@ -707,6 +765,11 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       summary_approved INTEGER NOT NULL DEFAULT 0,
       summary_approved_by INTEGER,
       summary_approved_at TEXT,
+      previous_meeting_reviewed INTEGER NOT NULL DEFAULT 0,
+      previous_meeting_editable INTEGER NOT NULL DEFAULT 0,
+      loan_fund_at_start REAL NOT NULL DEFAULT 0,
+      insurance_fund_at_start REAL NOT NULL DEFAULT 0,
+      UNIQUE(group_id, meeting_number),
       FOREIGN KEY (group_id) REFERENCES groups(id)
     );
 
@@ -769,6 +832,7 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       total_savings REAL NOT NULL DEFAULT 0,
       loan_fund REAL NOT NULL DEFAULT 0,
       group_fund REAL NOT NULL DEFAULT 0,
+      insurance_fund REAL NOT NULL DEFAULT 0,
       FOREIGN KEY (meeting_id) REFERENCES group_meetings(id)
     );
 
@@ -783,6 +847,32 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       FOREIGN KEY (group_id) REFERENCES groups(id)
     );
 
+    CREATE TABLE IF NOT EXISTS financial_collections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      meeting_id INTEGER,
+      member_id INTEGER,
+      total_amount REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      confirmation_code TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      confirmed_at TEXT,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
+      FOREIGN KEY (member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS financial_collection_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      collection_id INTEGER NOT NULL,
+      account_type TEXT NOT NULL,
+      amount REAL NOT NULL,
+      reason TEXT NOT NULL,
+      transaction_id INTEGER,
+      FOREIGN KEY (collection_id) REFERENCES financial_collections(id),
+      FOREIGN KEY (transaction_id) REFERENCES financial_transactions(id)
+    );
+
     CREATE TABLE IF NOT EXISTS financial_transactions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       group_id INTEGER NOT NULL,
@@ -791,21 +881,47 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       reason TEXT NOT NULL,
       member_id INTEGER,
       meeting_id INTEGER,
+      collection_id INTEGER,
       transaction_type TEXT NOT NULL,
+      reversed_transaction_id INTEGER,
+      reversed INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       FOREIGN KEY (group_id) REFERENCES groups(id),
       FOREIGN KEY (member_id) REFERENCES members(id),
       FOREIGN KEY (meeting_id) REFERENCES group_meetings(id)
     );
 
-    CREATE INDEX IF NOT EXISTS idx_financial_accounts_group
-      ON financial_accounts(group_id);
+    CREATE TABLE IF NOT EXISTS financial_transaction_reversals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      original_transaction_id INTEGER NOT NULL UNIQUE,
+      reversal_transaction_id INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      reversed_by INTEGER,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (original_transaction_id)
+        REFERENCES financial_transactions(id),
+      FOREIGN KEY (reversal_transaction_id)
+        REFERENCES financial_transactions(id),
+      FOREIGN KEY (reversed_by)
+        REFERENCES members(id)
+    );
 
-    CREATE INDEX IF NOT EXISTS idx_financial_transactions_group
-      ON financial_transactions(group_id);
-
-    CREATE INDEX IF NOT EXISTS idx_financial_transactions_account
-      ON financial_transactions(group_id, account_type);
+    CREATE TABLE IF NOT EXISTS member_passbook_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      member_id INTEGER NOT NULL,
+      meeting_id INTEGER,
+      transaction_id INTEGER,
+      entry_type TEXT NOT NULL,
+      amount REAL NOT NULL DEFAULT 0,
+      balance_after REAL NOT NULL DEFAULT 0,
+      description TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (member_id) REFERENCES members(id),
+      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
+      FOREIGN KEY (transaction_id) REFERENCES financial_transactions(id)
+    );
 
     CREATE TABLE IF NOT EXISTS member_statement_records (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -815,8 +931,27 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       individual_loan_balance REAL NOT NULL DEFAULT 0,
       individual_loan_due_date TEXT,
       created_at TEXT NOT NULL,
+      UNIQUE(meeting_id, member_id),
       FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
       FOREIGN KEY (member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS receipts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      member_id INTEGER,
+      meeting_id INTEGER,
+      collection_id INTEGER,
+      transaction_id INTEGER,
+      receipt_number TEXT NOT NULL UNIQUE,
+      amount REAL NOT NULL,
+      description TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (member_id) REFERENCES members(id),
+      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
+      FOREIGN KEY (collection_id) REFERENCES financial_collections(id),
+      FOREIGN KEY (transaction_id) REFERENCES financial_transactions(id)
     );
 
     CREATE TABLE IF NOT EXISTS notification_queue (
@@ -829,6 +964,9 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       message TEXT NOT NULL,
       created_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at TEXT,
+      fallback_used INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (group_id) REFERENCES groups(id),
       FOREIGN KEY (member_id) REFERENCES members(id)
     );
@@ -839,7 +977,23 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       channel TEXT NOT NULL,
       delivered_at TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
+      error_message TEXT,
       FOREIGN KEY (notification_id) REFERENCES notification_queue(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS meeting_audit_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      cycle_number INTEGER NOT NULL,
+      meeting_id INTEGER NOT NULL,
+      meeting_number INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      actor_member_id INTEGER,
+      details TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
+      FOREIGN KEY (actor_member_id) REFERENCES members(id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_members_group
@@ -862,7 +1016,32 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
 
     CREATE INDEX IF NOT EXISTS idx_notifications_status
       ON notification_queue(status);
+
+    CREATE INDEX IF NOT EXISTS idx_financial_accounts_group
+      ON financial_accounts(group_id);
+
+    CREATE INDEX IF NOT EXISTS idx_financial_transactions_group
+      ON financial_transactions(group_id);
+
+    CREATE INDEX IF NOT EXISTS idx_financial_transactions_account
+      ON financial_transactions(group_id, account_type);
+
+    CREATE INDEX IF NOT EXISTS idx_financial_transactions_member
+      ON financial_transactions(member_id);
+
+    CREATE INDEX IF NOT EXISTS idx_passbook_member
+      ON member_passbook_records(member_id);
+
+    CREATE INDEX IF NOT EXISTS idx_meeting_audit_group
+      ON meeting_audit_records(group_id, meeting_number);
+
+    CREATE INDEX IF NOT EXISTS idx_meeting_audit_cycle
+      ON meeting_audit_records(group_id, cycle_number);
   `);
+
+  /* ==========================================================
+     EXISTING DATABASE MIGRATIONS
+     ========================================================== */
 
   await addColumnIfMissing(
     db,
@@ -909,6 +1088,20 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   await addColumnIfMissing(
     db,
     'group_meetings',
+    'meeting_number',
+    'INTEGER NOT NULL DEFAULT 1',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'group_meetings',
+    'cycle_number',
+    'INTEGER NOT NULL DEFAULT 1',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'group_meetings',
     'summary_approved',
     'INTEGER NOT NULL DEFAULT 0',
   );
@@ -925,6 +1118,62 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
     'group_meetings',
     'summary_approved_at',
     'TEXT',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'group_meetings',
+    'previous_meeting_reviewed',
+    'INTEGER NOT NULL DEFAULT 0',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'group_meetings',
+    'previous_meeting_editable',
+    'INTEGER NOT NULL DEFAULT 0',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'group_meetings',
+    'loan_fund_at_start',
+    'REAL NOT NULL DEFAULT 0',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'group_meetings',
+    'insurance_fund_at_start',
+    'REAL NOT NULL DEFAULT 0',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'meeting_closures',
+    'insurance_fund',
+    'REAL NOT NULL DEFAULT 0',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'financial_transactions',
+    'collection_id',
+    'INTEGER',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'financial_transactions',
+    'reversed_transaction_id',
+    'INTEGER',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'financial_transactions',
+    'reversed',
+    'INTEGER NOT NULL DEFAULT 0',
   );
 
   await ensureFinancialAccountsForAllGroups(db);
@@ -944,6 +1193,38 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   await refreshGroupDormancy(db);
   await applyDueNextOfKinChanges(db);
   await applyDueNextOfKinBenefits(db);
+
+  /*
+   * Existing meetings from an older database did not have
+   * meeting numbers. Give them permanent sequential numbers.
+   */
+  for (const group of groups) {
+    const meetings =
+      await db.getAllAsync<{
+        id: number;
+        meeting_number: number;
+      }>(
+        `SELECT id, meeting_number
+         FROM group_meetings
+         WHERE group_id = ?
+         ORDER BY id ASC`,
+        group.id,
+      );
+
+    let number = 1;
+
+    for (const meeting of meetings) {
+      await db.runAsync(
+        `UPDATE group_meetings
+         SET meeting_number = ?
+         WHERE id = ?`,
+        number,
+        meeting.id,
+      );
+
+      number += 1;
+    }
+  }
 
   return db;
 }
@@ -1002,8 +1283,7 @@ async function findNextAvailableGroupNumber(
        WHERE status = 'active'`,
     );
 
-  const activeNumbers =
-    new Set<number>();
+  const activeNumbers = new Set<number>();
 
   for (const group of groups) {
     const number =
@@ -1051,21 +1331,15 @@ export async function createGroup(
     normalizeText(country);
 
   if (!cleanName) {
-    throw new Error(
-      'Group name is required.',
-    );
+    throw new Error('Group name is required.');
   }
 
   if (!cleanDistrict) {
-    throw new Error(
-      'District is required.',
-    );
+    throw new Error('District is required.');
   }
 
   if (!cleanCountry) {
-    throw new Error(
-      'Country is required.',
-    );
+    throw new Error('Country is required.');
   }
 
   const groupNumber =
@@ -1185,30 +1459,22 @@ export async function updateGroup(
     normalizeText(country);
 
   if (!cleanName) {
-    throw new Error(
-      'Group name is required.',
-    );
+    throw new Error('Group name is required.');
   }
 
   if (!cleanDistrict) {
-    throw new Error(
-      'District is required.',
-    );
+    throw new Error('District is required.');
   }
 
   if (!cleanCountry) {
-    throw new Error(
-      'Country is required.',
-    );
+    throw new Error('Country is required.');
   }
 
   const existingGroup =
     await getGroupById(groupId);
 
   if (!existingGroup) {
-    throw new Error(
-      'Group not found.',
-    );
+    throw new Error('Group not found.');
   }
 
   const timestamp = now();
@@ -1408,9 +1674,7 @@ export async function updateVSLASetupRules(
     await getGroupById(groupId);
 
   if (!group) {
-    throw new Error(
-      'Group not found.',
-    );
+    throw new Error('Group not found.');
   }
 
   let current =
@@ -1728,8 +1992,7 @@ async function getNextMemberSequence(
       groupId,
     );
 
-  const used =
-    new Set<number>();
+  const used = new Set<number>();
 
   for (const item of [
     ...members,
@@ -1741,9 +2004,7 @@ async function getNextMemberSequence(
       );
 
     if (match) {
-      used.add(
-        Number(match[1]),
-      );
+      used.add(Number(match[1]));
     }
   }
 
@@ -1785,45 +2046,33 @@ export async function registerMember(
     normalizeText(fullName);
 
   if (!name) {
-    throw new Error(
-      'Full name is required.',
-    );
+    throw new Error('Full name is required.');
   }
 
   if (!normalizeText(gender)) {
-    throw new Error(
-      'Gender is required.',
-    );
+    throw new Error('Gender is required.');
   }
 
   if (
     !Number.isFinite(age) ||
     age <= 0
   ) {
-    throw new Error(
-      'A valid age is required.',
-    );
+    throw new Error('A valid age is required.');
   }
 
   if (!normalizeText(cell)) {
-    throw new Error(
-      'Cell is required.',
-    );
+    throw new Error('Cell is required.');
   }
 
   if (!normalizeText(district)) {
-    throw new Error(
-      'District is required.',
-    );
+    throw new Error('District is required.');
   }
 
   const group =
     await getGroupById(groupId);
 
   if (!group) {
-    throw new Error(
-      'Group not found.',
-    );
+    throw new Error('Group not found.');
   }
 
   const sequence =
@@ -1910,16 +2159,12 @@ export async function registerMember(
     VALUES (?, ?, NULL, ?, ?, ?)`,
     memberId,
     salt,
-    normalizeText(phone)
-      ? 1
-      : 0,
+    normalizeText(phone) ? 1 : 0,
     timestamp,
     timestamp,
   );
 
-  await recordGroupActivity(
-    groupId,
-  );
+  await recordGroupActivity(groupId);
 
   return memberId;
 }
@@ -1948,22 +2193,17 @@ export async function updateMember(
     );
 
   if (!current) {
-    throw new Error(
-      'Member not found.',
-    );
+    throw new Error('Member not found.');
   }
 
   const fullName =
-    data.fullName ??
-    current.full_name;
+    data.fullName ?? current.full_name;
 
   const gender =
-    data.gender ??
-    current.gender;
+    data.gender ?? current.gender;
 
   const age =
-    data.age ??
-    current.age;
+    data.age ?? current.age;
 
   const phone =
     data.phone ??
@@ -1971,12 +2211,10 @@ export async function updateMember(
     '';
 
   const cell =
-    data.cell ??
-    current.cell;
+    data.cell ?? current.cell;
 
   const district =
-    data.district ??
-    current.district;
+    data.district ?? current.district;
 
   const photoUri =
     data.photoUri === undefined
@@ -1984,36 +2222,26 @@ export async function updateMember(
       : data.photoUri;
 
   if (!normalizeText(fullName)) {
-    throw new Error(
-      'Full name is required.',
-    );
+    throw new Error('Full name is required.');
   }
 
   if (!normalizeText(gender)) {
-    throw new Error(
-      'Gender is required.',
-    );
+    throw new Error('Gender is required.');
   }
 
   if (
     !Number.isFinite(age) ||
     age <= 0
   ) {
-    throw new Error(
-      'A valid age is required.',
-    );
+    throw new Error('A valid age is required.');
   }
 
   if (!normalizeText(cell)) {
-    throw new Error(
-      'Cell is required.',
-    );
+    throw new Error('Cell is required.');
   }
 
   if (!normalizeText(district)) {
-    throw new Error(
-      'District is required.',
-    );
+    throw new Error('District is required.');
   }
 
   await db.runAsync(
@@ -2037,18 +2265,14 @@ export async function updateMember(
     memberId,
   );
 
-  const timestamp = now();
-
   await db.runAsync(
     `UPDATE member_credentials
      SET
        phone_eligible = ?,
        updated_at = ?
      WHERE member_id = ?`,
-    normalizeText(phone)
-      ? 1
-      : 0,
-    timestamp,
+    normalizeText(phone) ? 1 : 0,
+    now(),
     memberId,
   );
 }
@@ -2069,9 +2293,7 @@ export async function deleteMember(
     );
 
   if (!member) {
-    throw new Error(
-      'Member not found.',
-    );
+    throw new Error('Member not found.');
   }
 
   if (!normalizeText(reason)) {
@@ -2146,10 +2368,7 @@ async function getKin(
 function validateKinSlot(
   slot: number,
 ): void {
-  if (
-    slot !== 1 &&
-    slot !== 2
-  ) {
+  if (slot !== 1 && slot !== 2) {
     throw new Error(
       'Next-of-kin slot must be 1 or 2.',
     );
@@ -2227,11 +2446,7 @@ export async function requestNextOfKinChange(
   await applyDueNextOfKinBenefits(db);
 
   const kin =
-    await getKin(
-      db,
-      memberId,
-      slot,
-    );
+    await getKin(db, memberId, slot);
 
   if (!kin) {
     throw new Error(
@@ -2265,10 +2480,7 @@ export async function requestNextOfKinChange(
 
   effectiveDate.setDate(
     effectiveDate.getDate() +
-      Math.max(
-        0,
-        effectiveDays,
-      ),
+      Math.max(0, effectiveDays),
   );
 
   const result =
@@ -2325,11 +2537,7 @@ export async function requestNextOfKinDeletion(
   await applyDueNextOfKinBenefits(db);
 
   const kin =
-    await getKin(
-      db,
-      memberId,
-      slot,
-    );
+    await getKin(db, memberId, slot);
 
   if (!kin) {
     throw new Error(
@@ -2363,10 +2571,7 @@ export async function requestNextOfKinDeletion(
 
   effectiveDate.setDate(
     effectiveDate.getDate() +
-      Math.max(
-        0,
-        effectiveDays,
-      ),
+      Math.max(0, effectiveDays),
   );
 
   const result =
@@ -2430,11 +2635,7 @@ export async function recordNextOfKinBenefit(
   await applyDueNextOfKinBenefits(db);
 
   const kin =
-    await getKin(
-      db,
-      memberId,
-      slot,
-    );
+    await getKin(db, memberId, slot);
 
   if (!kin) {
     throw new Error(
@@ -2462,10 +2663,7 @@ export async function recordNextOfKinBenefit(
 
   effectiveDate.setDate(
     effectiveDate.getDate() +
-      Math.max(
-        0,
-        effectiveDays,
-      ),
+      Math.max(0, effectiveDays),
   );
 
   const result =
@@ -2492,7 +2690,7 @@ export async function recordNextOfKinBenefit(
 }
 
 /* ============================================================
-   FINANCIAL ACCOUNT SYSTEM
+   FINANCIAL ACCOUNTS
    ============================================================ */
 
 export async function getFinancialAccounts(
@@ -2543,13 +2741,7 @@ export async function getFinancialAccount(
   );
 
   return db.getFirstAsync<FinancialAccountRecord>(
-    `SELECT
-      id,
-      group_id,
-      account_type,
-      balance,
-      created_at,
-      updated_at
+    `SELECT *
      FROM financial_accounts
      WHERE group_id = ?
      AND account_type = ?
@@ -2559,6 +2751,79 @@ export async function getFinancialAccount(
   );
 }
 
+/* ============================================================
+   PASSBOOK HELPER
+   ============================================================ */
+
+async function addPassbookEntry(
+  db: SQLite.SQLiteDatabase,
+  groupId: number,
+  memberId: number,
+  meetingId: number | null,
+  transactionId: number | null,
+  entryType: string,
+  amount: number,
+  description: string,
+): Promise<void> {
+  const previous =
+    await db.getFirstAsync<{
+      balance: number;
+    }>(
+      `SELECT balance_after AS balance
+       FROM member_passbook_records
+       WHERE member_id = ?
+       ORDER BY id DESC
+       LIMIT 1`,
+      memberId,
+    );
+
+  const balanceAfter =
+    (previous?.balance ?? 0) +
+    amount;
+
+  await db.runAsync(
+    `INSERT INTO member_passbook_records (
+      group_id,
+      member_id,
+      meeting_id,
+      transaction_id,
+      entry_type,
+      amount,
+      balance_after,
+      description,
+      created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    groupId,
+    memberId,
+    meetingId,
+    transactionId,
+    entryType,
+    amount,
+    balanceAfter,
+    description,
+    now(),
+  );
+}
+
+export async function getMemberPassbook(
+  memberId: number,
+): Promise<MemberPassbookRecord[]> {
+  const db = await getDatabase();
+
+  return db.getAllAsync<MemberPassbookRecord>(
+    `SELECT *
+     FROM member_passbook_records
+     WHERE member_id = ?
+     ORDER BY id ASC`,
+    memberId,
+  );
+}
+
+/* ============================================================
+   FINANCIAL TRANSACTIONS
+   ============================================================ */
+
 export async function recordFinancialIncome(
   groupId: number,
   accountType: FinancialAccountType,
@@ -2567,6 +2832,7 @@ export async function recordFinancialIncome(
   memberId: number | null = null,
   meetingId: number | null = null,
   transactionType = 'income',
+  collectionId: number | null = null,
 ): Promise<number> {
   const db = await getDatabase();
 
@@ -2601,19 +2867,26 @@ export async function recordFinancialIncome(
         reason,
         member_id,
         meeting_id,
+        collection_id,
         transaction_type,
+        reversed_transaction_id,
+        reversed,
         created_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?)`,
       groupId,
       accountType,
       amount,
       normalizeText(reason),
       memberId,
       meetingId,
+      collectionId,
       normalizeText(transactionType),
       timestamp,
     );
+
+  const transactionId =
+    result.lastInsertRowId;
 
   await db.runAsync(
     `UPDATE financial_accounts
@@ -2628,11 +2901,22 @@ export async function recordFinancialIncome(
     accountType,
   );
 
-  await recordGroupActivity(
-    groupId,
-  );
+  if (memberId !== null) {
+    await addPassbookEntry(
+      db,
+      groupId,
+      memberId,
+      meetingId,
+      transactionId,
+      transactionType,
+      amount,
+      reason,
+    );
+  }
 
-  return result.lastInsertRowId;
+  await recordGroupActivity(groupId);
+
+  return transactionId;
 }
 
 export async function recordFinancialExpense(
@@ -2643,6 +2927,7 @@ export async function recordFinancialExpense(
   memberId: number | null = null,
   meetingId: number | null = null,
   transactionType = 'expenditure',
+  collectionId: number | null = null,
 ): Promise<number> {
   const db = await getDatabase();
 
@@ -2680,19 +2965,26 @@ export async function recordFinancialExpense(
         reason,
         member_id,
         meeting_id,
+        collection_id,
         transaction_type,
+        reversed_transaction_id,
+        reversed,
         created_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?)`,
       groupId,
       accountType,
       negativeAmount,
       normalizeText(reason),
       memberId,
       meetingId,
+      collectionId,
       normalizeText(transactionType),
       timestamp,
     );
+
+  const transactionId =
+    result.lastInsertRowId;
 
   await db.runAsync(
     `UPDATE financial_accounts
@@ -2707,12 +2999,197 @@ export async function recordFinancialExpense(
     accountType,
   );
 
-  await recordGroupActivity(
-    groupId,
+  if (memberId !== null) {
+    await addPassbookEntry(
+      db,
+      groupId,
+      memberId,
+      meetingId,
+      transactionId,
+      transactionType,
+      negativeAmount,
+      reason,
+    );
+  }
+
+  await recordGroupActivity(groupId);
+
+  return transactionId;
+}
+
+/* ============================================================
+   FINANCIAL COLLECTION
+   ============================================================ */
+
+export async function createFinancialCollection(
+  groupId: number,
+  memberId: number | null,
+  meetingId: number | null,
+  payments: Array<{
+    accountType: FinancialAccountType;
+    amount: number;
+    reason?: string;
+  }>,
+): Promise<FinancialCollectionRecord> {
+  const db = await getDatabase();
+
+  if (payments.length === 0) {
+    throw new Error(
+      'At least one payment is required.',
+    );
+  }
+
+  for (const payment of payments) {
+    if (
+      !isFinancialAccountType(
+        payment.accountType,
+      )
+    ) {
+      throw new Error(
+        'Invalid financial account type.',
+      );
+    }
+
+    if (
+      !Number.isFinite(payment.amount) ||
+      payment.amount <= 0
+    ) {
+      throw new Error(
+        'Every payment amount must be greater than zero.',
+      );
+    }
+  }
+
+  const totalAmount =
+    payments.reduce(
+      (total, payment) =>
+        total + payment.amount,
+      0,
+    );
+
+  const confirmationCode =
+    Crypto.randomUUID()
+      .replace(/-/g, '')
+      .slice(0, 10)
+      .toUpperCase();
+
+  const timestamp = now();
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO financial_collections (
+        group_id,
+        meeting_id,
+        member_id,
+        total_amount,
+        status,
+        confirmation_code,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, 'confirmed', ?, ?)`,
+      groupId,
+      meetingId,
+      memberId,
+      totalAmount,
+      confirmationCode,
+      timestamp,
+    );
+
+  const collectionId =
+    result.lastInsertRowId;
+
+  for (const payment of payments) {
+    const reason =
+      normalizeText(payment.reason) ||
+      payment.accountType;
+
+    const transactionId =
+      await recordFinancialIncome(
+        groupId,
+        payment.accountType,
+        payment.amount,
+        reason,
+        memberId,
+        meetingId,
+        payment.accountType === 'insurance_fund'
+          ? 'insurance_contribution'
+          : `${payment.accountType}_collection`,
+        collectionId,
+      );
+
+    await db.runAsync(
+      `INSERT INTO financial_collection_items (
+        collection_id,
+        account_type,
+        amount,
+        reason,
+        transaction_id
+      )
+      VALUES (?, ?, ?, ?, ?)`,
+      collectionId,
+      payment.accountType,
+      payment.amount,
+      reason,
+      transactionId,
+    );
+  }
+
+  await db.runAsync(
+    `UPDATE financial_collections
+     SET confirmed_at = ?
+     WHERE id = ?`,
+    timestamp,
+    collectionId,
   );
 
-  return result.lastInsertRowId;
+  const collection =
+    await db.getFirstAsync<FinancialCollectionRecord>(
+      `SELECT *
+       FROM financial_collections
+       WHERE id = ?`,
+      collectionId,
+    );
+
+  if (!collection) {
+    throw new Error(
+      'Financial collection could not be loaded.',
+    );
+  }
+
+  return collection;
 }
+
+export async function getFinancialCollection(
+  collectionId: number,
+): Promise<FinancialCollectionRecord | null> {
+  const db = await getDatabase();
+
+  return db.getFirstAsync<FinancialCollectionRecord>(
+    `SELECT *
+     FROM financial_collections
+     WHERE id = ?
+     LIMIT 1`,
+    collectionId,
+  );
+}
+
+export async function getFinancialCollectionItems(
+  collectionId: number,
+): Promise<FinancialCollectionItem[]> {
+  const db = await getDatabase();
+
+  return db.getAllAsync<FinancialCollectionItem>(
+    `SELECT *
+     FROM financial_collection_items
+     WHERE collection_id = ?
+     ORDER BY id ASC`,
+    collectionId,
+  );
+}
+
+/* ============================================================
+   BASIC FINANCIAL OPERATIONS
+   ============================================================ */
 
 export async function recordSavings(
   groupId: number,
@@ -2754,6 +3231,7 @@ export async function issueLoan(
   amount: number,
   reason = 'Loan issued to member',
   meetingId: number | null = null,
+  dueDate: string | null = null,
 ): Promise<number> {
   const db = await getDatabase();
 
@@ -2763,12 +3241,6 @@ export async function issueLoan(
   ) {
     throw new Error(
       'Loan amount must be greater than zero.',
-    );
-  }
-
-  if (!normalizeText(reason)) {
-    throw new Error(
-      'A reason is required for every loan.',
     );
   }
 
@@ -2813,6 +3285,9 @@ export async function issueLoan(
       timestamp,
     );
 
+  const transactionId =
+    result.lastInsertRowId;
+
   await db.runAsync(
     `UPDATE financial_accounts
      SET
@@ -2825,11 +3300,31 @@ export async function issueLoan(
     groupId,
   );
 
-  await recordGroupActivity(
+  await addPassbookEntry(
+    db,
     groupId,
+    memberId,
+    meetingId,
+    transactionId,
+    'loan_issued',
+    amount,
+    reason,
   );
 
-  return result.lastInsertRowId;
+  if (dueDate) {
+    await db.runAsync(
+      `UPDATE loan_records
+       SET due_date = ?
+       WHERE member_id = ?
+       AND status = 'active'`,
+      dueDate,
+      memberId,
+    ).catch(() => {});
+  }
+
+  await recordGroupActivity(groupId);
+
+  return transactionId;
 }
 
 export async function recordLoanRepayment(
@@ -2965,16 +3460,13 @@ export async function recordInsuranceBenefit(
     await db.getFirstAsync<{
       total: number;
     }>(
-      `SELECT
-        COALESCE(
-          SUM(amount),
-          0
-        ) AS total
+      `SELECT COALESCE(SUM(amount), 0) AS total
        FROM financial_transactions
        WHERE group_id = ?
        AND account_type = 'insurance_fund'
        AND member_id = ?
-       AND transaction_type = 'insurance_contribution'`,
+       AND transaction_type = 'insurance_contribution'
+       AND reversed = 0`,
       groupId,
       memberId,
     );
@@ -3000,18 +3492,79 @@ export async function recordInsuranceBenefit(
     );
   }
 
-  if (
-    insuranceAccount.balance <
-    amount
-  ) {
+  if (insuranceAccount.balance < amount) {
     throw new Error(
       'Insufficient Insurance Fund balance.',
     );
   }
 
+  return recordFinancialExpense(
+    groupId,
+    'insurance_fund',
+    amount,
+    reason,
+    memberId,
+    meetingId,
+    'insurance_benefit',
+  );
+}
+
+/* ============================================================
+   TRANSACTION REVERSAL
+   ============================================================ */
+
+export async function reverseFinancialTransaction(
+  transactionId: number,
+  reason: string,
+  reversedByMemberId: number | null = null,
+): Promise<number> {
+  const db = await getDatabase();
+
+  if (!normalizeText(reason)) {
+    throw new Error(
+      'A reason is required to reverse a transaction.',
+    );
+  }
+
+  const original =
+    await db.getFirstAsync<FinancialTransactionRecord>(
+      `SELECT *
+       FROM financial_transactions
+       WHERE id = ?
+       LIMIT 1`,
+      transactionId,
+    );
+
+  if (!original) {
+    throw new Error(
+      'Financial transaction not found.',
+    );
+  }
+
+  if (original.reversed === 1) {
+    throw new Error(
+      'This transaction has already been reversed.',
+    );
+  }
+
+  const existing =
+    await db.getFirstAsync<{ id: number }>(
+      `SELECT id
+       FROM financial_transaction_reversals
+       WHERE original_transaction_id = ?
+       LIMIT 1`,
+      transactionId,
+    );
+
+  if (existing) {
+    throw new Error(
+      'This transaction already has a reversal.',
+    );
+  }
+
   const timestamp = now();
 
-  const result =
+  const reversal =
     await db.runAsync(
       `INSERT INTO financial_transactions (
         group_id,
@@ -3020,36 +3573,86 @@ export async function recordInsuranceBenefit(
         reason,
         member_id,
         meeting_id,
+        collection_id,
         transaction_type,
+        reversed_transaction_id,
+        reversed,
         created_at
       )
-      VALUES (?, 'insurance_fund', ?, ?, ?, ?, 'insurance_benefit', ?)`,
-      groupId,
-      -Math.abs(amount),
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'reversal', ?, 0, ?)`,
+      original.group_id,
+      original.account_type,
+      -original.amount,
       normalizeText(reason),
-      memberId,
-      meetingId,
+      original.member_id,
+      original.meeting_id,
+      original.collection_id ?? null,
+      transactionId,
       timestamp,
     );
+
+  const reversalId =
+    reversal.lastInsertRowId;
 
   await db.runAsync(
     `UPDATE financial_accounts
      SET
-       balance = balance - ?,
+       balance = balance + ?,
        updated_at = ?
      WHERE group_id = ?
-     AND account_type = 'insurance_fund'`,
-    amount,
+     AND account_type = ?`,
+    -original.amount,
     timestamp,
-    groupId,
+    original.group_id,
+    original.account_type,
   );
+
+  await db.runAsync(
+    `UPDATE financial_transactions
+     SET reversed = 1
+     WHERE id = ?`,
+    transactionId,
+  );
+
+  await db.runAsync(
+    `INSERT INTO financial_transaction_reversals (
+      original_transaction_id,
+      reversal_transaction_id,
+      reason,
+      reversed_by,
+      created_at
+    )
+    VALUES (?, ?, ?, ?, ?)`,
+    transactionId,
+    reversalId,
+    normalizeText(reason),
+    reversedByMemberId,
+    timestamp,
+  );
+
+  if (original.member_id !== null) {
+    await addPassbookEntry(
+      db,
+      original.group_id,
+      original.member_id,
+      original.meeting_id,
+      reversalId,
+      'reversal',
+      -original.amount,
+      reason,
+    );
+  }
 
   await recordGroupActivity(
-    groupId,
+    original.group_id,
   );
 
-  return result.lastInsertRowId;
+  return reversalId;
 }
+
+/* ============================================================
+   FINANCIAL SUMMARY / TRANSACTIONS
+   ============================================================ */
 
 export async function getFinancialSummary(
   groupId: number,
@@ -3066,9 +3669,7 @@ export async function getFinancialSummary(
       account_type: string;
       balance: number;
     }>(
-      `SELECT
-        account_type,
-        balance
+      `SELECT account_type, balance
        FROM financial_accounts
        WHERE group_id = ?`,
       groupId,
@@ -3112,7 +3713,8 @@ export async function getFinancialSummary(
 
   return {
     ...partial,
-    fundBalance: calculateFundBalance(partial),
+    fundBalance:
+      calculateFundBalance(partial),
   };
 }
 
@@ -3122,16 +3724,7 @@ export async function getFinancialTransactions(
   const db = await getDatabase();
 
   return db.getAllAsync<FinancialTransactionRecord>(
-    `SELECT
-      id,
-      group_id,
-      account_type,
-      amount,
-      reason,
-      member_id,
-      meeting_id,
-      transaction_type,
-      created_at
+    `SELECT *
      FROM financial_transactions
      WHERE group_id = ?
      ORDER BY created_at DESC, id DESC`,
@@ -3146,19 +3739,10 @@ export async function getFinancialTransactionsByAccount(
   const db = await getDatabase();
 
   return db.getAllAsync<FinancialTransactionRecord>(
-    `SELECT
-      id,
-      group_id,
-      account_type,
-      amount,
-      reason,
-      member_id,
-      meeting_id,
-      transaction_type,
-      created_at
+    `SELECT *
      FROM financial_transactions
      WHERE group_id = ?
-       AND account_type = ?
+     AND account_type = ?
      ORDER BY created_at DESC, id DESC`,
     groupId,
     accountType,
@@ -3166,70 +3750,362 @@ export async function getFinancialTransactionsByAccount(
 }
 
 /* ============================================================
+   RECEIPTS
+   ============================================================ */
+
+export async function createReceipt(
+  groupId: number,
+  memberId: number | null,
+  meetingId: number | null,
+  collectionId: number | null,
+  transactionId: number | null,
+  amount: number,
+  description: string,
+): Promise<ReceiptRecord> {
+  const db = await getDatabase();
+
+  if (
+    !Number.isFinite(amount) ||
+    amount <= 0
+  ) {
+    throw new Error(
+      'Receipt amount must be greater than zero.',
+    );
+  }
+
+  if (!normalizeText(description)) {
+    throw new Error(
+      'Receipt description is required.',
+    );
+  }
+
+  const receiptNumber =
+    `KYA-R-${Date.now()}-${Math.floor(
+      Math.random() * 1000,
+    )}`;
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO receipts (
+        group_id,
+        member_id,
+        meeting_id,
+        collection_id,
+        transaction_id,
+        receipt_number,
+        amount,
+        description,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      groupId,
+      memberId,
+      meetingId,
+      collectionId,
+      transactionId,
+      receiptNumber,
+      amount,
+      normalizeText(description),
+      now(),
+    );
+
+  const receipt =
+    await db.getFirstAsync<ReceiptRecord>(
+      `SELECT *
+       FROM receipts
+       WHERE id = ?`,
+      result.lastInsertRowId,
+    );
+
+  if (!receipt) {
+    throw new Error(
+      'Receipt could not be created.',
+    );
+  }
+
+  return receipt;
+}
+
+export async function getReceipt(
+  receiptId: number,
+): Promise<ReceiptRecord | null> {
+  const db = await getDatabase();
+
+  return db.getFirstAsync<ReceiptRecord>(
+    `SELECT *
+     FROM receipts
+     WHERE id = ?
+     LIMIT 1`,
+    receiptId,
+  );
+}
+
+/* ============================================================
+   NOTIFICATIONS / FALLBACK
+   ============================================================ */
+
+export async function queueNotification(
+  groupId: number,
+  memberId: number | null,
+  notificationType: string,
+  title: string,
+  message: string,
+  priority = 'normal',
+): Promise<number> {
+  const db = await getDatabase();
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO notification_queue (
+        group_id,
+        member_id,
+        notification_type,
+        priority,
+        title,
+        message,
+        created_at,
+        status,
+        attempts,
+        fallback_used
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, 0)`,
+      groupId,
+      memberId,
+      notificationType,
+      priority,
+      normalizeText(title),
+      normalizeText(message),
+      now(),
+    );
+
+  return result.lastInsertRowId;
+}
+
+export async function markNotificationDelivered(
+  notificationId: number,
+  channel: string,
+): Promise<void> {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `INSERT INTO notification_delivery (
+      notification_id,
+      channel,
+      delivered_at,
+      status
+    )
+    VALUES (?, ?, ?, 'delivered')`,
+    notificationId,
+    channel,
+    now(),
+  );
+
+  await db.runAsync(
+    `UPDATE notification_queue
+     SET status = 'delivered'
+     WHERE id = ?`,
+    notificationId,
+  );
+}
+
+export async function markNotificationFailed(
+  notificationId: number,
+  channel: string,
+  errorMessage = '',
+): Promise<void> {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `INSERT INTO notification_delivery (
+      notification_id,
+      channel,
+      delivered_at,
+      status,
+      error_message
+    )
+    VALUES (?, ?, NULL, 'failed', ?)`,
+    notificationId,
+    channel,
+    errorMessage,
+  );
+
+  await db.runAsync(
+    `UPDATE notification_queue
+     SET
+       attempts = attempts + 1,
+       last_attempt_at = ?,
+       status = 'fallback'
+     WHERE id = ?`,
+    now(),
+    notificationId,
+  );
+
+  await db.runAsync(
+    `UPDATE notification_queue
+     SET fallback_used = 1
+     WHERE id = ?`,
+    notificationId,
+  );
+}
+
+export async function getPendingNotifications(
+  groupId: number,
+): Promise<any[]> {
+  const db = await getDatabase();
+
+  return db.getAllAsync(
+    `SELECT *
+     FROM notification_queue
+     WHERE group_id = ?
+     AND status IN ('pending', 'fallback')
+     ORDER BY
+       CASE priority
+         WHEN 'high' THEN 1
+         WHEN 'normal' THEN 2
+         ELSE 3
+       END,
+       id ASC`,
+    groupId,
+  );
+}
+
+/* ============================================================
+   MEETING HELPERS
+   ============================================================ */
+
+async function getNextMeetingNumber(
+  db: SQLite.SQLiteDatabase,
+  groupId: number,
+): Promise<number> {
+  const row =
+    await db.getFirstAsync<{
+      maximum: number | null;
+    }>(
+      `SELECT MAX(meeting_number) AS maximum
+       FROM group_meetings
+       WHERE group_id = ?`,
+      groupId,
+    );
+
+  return (row?.maximum ?? 0) + 1;
+}
+
+async function getCycleNumberForMeeting(
+  db: SQLite.SQLiteDatabase,
+  groupId: number,
+  meetingNumber: number,
+): Promise<number> {
+  const rules =
+    await getVSLASetupRules(groupId);
+
+  const meetingsPerCycle =
+    Math.max(
+      1,
+      rules?.meeting_frequency
+        ?.toLowerCase()
+        .includes('monthly')
+        ? 12
+        : rules?.meeting_frequency
+            ?.toLowerCase()
+            .includes('weekly')
+          ? 52
+          : 1,
+    );
+
+  return (
+    Math.floor(
+      (meetingNumber - 1) /
+        meetingsPerCycle,
+    ) + 1
+  );
+}
+
+async function addMeetingAudit(
+  db: SQLite.SQLiteDatabase,
+  groupId: number,
+  meetingId: number,
+  meetingNumber: number,
+  cycleNumber: number,
+  action: string,
+  actorMemberId: number | null,
+  details = '',
+): Promise<void> {
+  await db.runAsync(
+    `INSERT INTO meeting_audit_records (
+      group_id,
+      cycle_number,
+      meeting_id,
+      meeting_number,
+      action,
+      actor_member_id,
+      details,
+      created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    groupId,
+    cycleNumber,
+    meetingId,
+    meetingNumber,
+    action,
+    actorMemberId,
+    normalizeText(details),
+    now(),
+  );
+}
+
+/* ============================================================
    MEETINGS
    ============================================================ */
 
-/**
- * Get the currently open meeting for a group.
- */
 export async function getOpenMeeting(
   groupId: number,
 ): Promise<GroupMeetingRecord | null> {
   const db = await getDatabase();
 
   return db.getFirstAsync<GroupMeetingRecord>(
-    `SELECT
-      id,
-      group_id,
-      meeting_date,
-      opened_at,
-      closed_at,
-      status,
-      created_at,
-      summary_approved,
-      summary_approved_by,
-      summary_approved_at
+    `SELECT *
      FROM group_meetings
      WHERE group_id = ?
      AND status = 'open'
-     ORDER BY id DESC
+     ORDER BY meeting_number DESC
      LIMIT 1`,
     groupId,
   );
 }
 
-/**
- * Get the most recently concluded meeting.
- */
 export async function getLastConcludedMeeting(
   groupId: number,
 ): Promise<GroupMeetingRecord | null> {
   const db = await getDatabase();
 
   return db.getFirstAsync<GroupMeetingRecord>(
-    `SELECT
-      id,
-      group_id,
-      meeting_date,
-      opened_at,
-      closed_at,
-      status,
-      created_at,
-      summary_approved,
-      summary_approved_by,
-      summary_approved_at
+    `SELECT *
      FROM group_meetings
      WHERE group_id = ?
      AND status = 'closed'
-     ORDER BY id DESC
+     ORDER BY meeting_number DESC
      LIMIT 1`,
     groupId,
   );
 }
 
-/**
- * Get the recorded summary of a concluded meeting.
- */
+export async function getMeetingByNumber(
+  groupId: number,
+  meetingNumber: number,
+): Promise<GroupMeetingRecord | null> {
+  const db = await getDatabase();
+
+  return db.getFirstAsync<GroupMeetingRecord>(
+    `SELECT *
+     FROM group_meetings
+     WHERE group_id = ?
+     AND meeting_number = ?
+     LIMIT 1`,
+    groupId,
+    meetingNumber,
+  );
+}
+
 export async function getMeetingSummary(
   meetingId: number,
 ): Promise<MeetingSummaryRecord | null> {
@@ -3238,13 +4114,20 @@ export async function getMeetingSummary(
   return db.getFirstAsync<MeetingSummaryRecord>(
     `SELECT
       gm.id AS meeting_id,
+      gm.meeting_number,
+      gm.cycle_number,
       gm.meeting_date,
       gm.opened_at,
       gm.closed_at,
       gm.status,
-      COALESCE(mc.total_savings, 0) AS total_savings,
-      COALESCE(mc.loan_fund, 0) AS loan_fund,
-      COALESCE(mc.group_fund, 0) AS group_fund,
+      COALESCE(mc.total_savings, 0)
+        AS total_savings,
+      COALESCE(mc.loan_fund, 0)
+        AS loan_fund,
+      COALESCE(mc.group_fund, 0)
+        AS group_fund,
+      COALESCE(mc.insurance_fund, 0)
+        AS insurance_fund,
       gm.summary_approved
      FROM group_meetings gm
      LEFT JOIN meeting_closures mc
@@ -3256,25 +4139,46 @@ export async function getMeetingSummary(
   );
 }
 
-/**
- * Approve the summary of a concluded meeting.
- */
-export async function approveMeetingSummary(
+/* ============================================================
+   PREVIOUS MEETING REVIEW
+   ============================================================ */
+
+export async function getPreviousMeetingReviewMode(
+  groupId: number,
+): Promise<{
+  meeting: GroupMeetingRecord | null;
+  mode: 'none' | 'read_only' | 'read_edit';
+}> {
+  const db = await getDatabase();
+
+  const meeting =
+    await getLastConcludedMeeting(groupId);
+
+  if (!meeting) {
+    return {
+      meeting: null,
+      mode: 'none',
+    };
+  }
+
+  return {
+    meeting,
+    mode:
+      meeting.previous_meeting_editable === 1
+        ? 'read_edit'
+        : 'read_only',
+  };
+}
+
+export async function markPreviousMeetingReviewed(
   meetingId: number,
-  executiveMemberId: number,
+  editable = true,
 ): Promise<void> {
   const db = await getDatabase();
 
   const meeting =
-    await db.getFirstAsync<{
-      id: number;
-      group_id: number;
-      status: string;
-    }>(
-      `SELECT
-        id,
-        group_id,
-        status
+    await db.getFirstAsync<GroupMeetingRecord>(
+      `SELECT *
        FROM group_meetings
        WHERE id = ?
        LIMIT 1`,
@@ -3282,9 +4186,62 @@ export async function approveMeetingSummary(
     );
 
   if (!meeting) {
+    throw new Error('Meeting not found.');
+  }
+
+  if (meeting.status !== 'closed') {
     throw new Error(
-      'Meeting not found.',
+      'Only a concluded meeting can be reviewed.',
     );
+  }
+
+  await db.runAsync(
+    `UPDATE group_meetings
+     SET
+       previous_meeting_reviewed = 1,
+       previous_meeting_editable = ?
+     WHERE id = ?`,
+    editable ? 1 : 0,
+    meetingId,
+  );
+}
+
+export async function lockPreviousMeetingForNewMeeting(
+  meetingId: number,
+): Promise<void> {
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `UPDATE group_meetings
+     SET
+       previous_meeting_editable = 0
+     WHERE id = ?
+     AND status = 'closed'`,
+    meetingId,
+  );
+}
+
+/* ============================================================
+   APPROVE MEETING SUMMARY
+   ============================================================ */
+
+export async function approveMeetingSummary(
+  meetingId: number,
+  executiveMemberId: number,
+): Promise<void> {
+  const db = await getDatabase();
+
+  const meeting =
+    await db.getFirstAsync<GroupMeetingRecord>(
+      `SELECT *
+       FROM group_meetings
+       WHERE id = ?
+       LIMIT 1`,
+      meetingId,
+    );
+
+  if (!meeting) {
+    throw new Error('Meeting not found.');
   }
 
   if (meeting.status !== 'closed') {
@@ -3299,10 +4256,7 @@ export async function approveMeetingSummary(
       role: string;
       status: string;
     }>(
-      `SELECT
-        id,
-        role,
-        status
+      `SELECT id, role, status
        FROM members
        WHERE id = ?
        AND group_id = ?
@@ -3319,7 +4273,8 @@ export async function approveMeetingSummary(
 
   if (
     executive.status !== 'active' ||
-    executive.role.toLowerCase() !== 'executive'
+    executive.role.toLowerCase() !==
+      'executive'
   ) {
     throw new Error(
       'Only an active executive can approve the meeting summary.',
@@ -3339,17 +4294,22 @@ export async function approveMeetingSummary(
     timestamp,
     meetingId,
   );
+
+  await addMeetingAudit(
+    db,
+    meeting.group_id,
+    meeting.id,
+    meeting.meeting_number,
+    meeting.cycle_number,
+    'summary_approved',
+    executiveMemberId,
+  );
 }
 
-/**
- * Start a new meeting.
- *
- * Rules:
- * - The group must exist.
- * - The supplied member must be an active executive.
- * - Another meeting cannot already be open.
- * - If a previous meeting exists, its summary must be approved.
- */
+/* ============================================================
+   START NEW MEETING
+   ============================================================ */
+
 export async function startNewMeeting(
   groupId: number,
   executiveMemberId: number,
@@ -3360,9 +4320,7 @@ export async function startNewMeeting(
     await getGroupById(groupId);
 
   if (!group) {
-    throw new Error(
-      'Group not found.',
-    );
+    throw new Error('Group not found.');
   }
 
   const executive =
@@ -3371,10 +4329,7 @@ export async function startNewMeeting(
       role: string;
       status: string;
     }>(
-      `SELECT
-        id,
-        role,
-        status
+      `SELECT id, role, status
        FROM members
        WHERE id = ?
        AND group_id = ?
@@ -3391,7 +4346,8 @@ export async function startNewMeeting(
 
   if (
     executive.status !== 'active' ||
-    executive.role.toLowerCase() !== 'executive'
+    executive.role.toLowerCase() !==
+      'executive'
   ) {
     throw new Error(
       'Only an active executive can start a meeting.',
@@ -3403,7 +4359,7 @@ export async function startNewMeeting(
 
   if (openMeeting) {
     throw new Error(
-      'A meeting is already open for this group. Close the current meeting before starting another one.',
+      'A meeting is already open for this group.',
     );
   }
 
@@ -3419,29 +4375,511 @@ export async function startNewMeeting(
     );
   }
 
+  /*
+   * The old meeting becomes permanently read-only once
+   * the new meeting starts.
+   */
+  if (previousMeeting) {
+    await lockPreviousMeetingForNewMeeting(
+      previousMeeting.id,
+    );
+  }
+
+  const meetingNumber =
+    await getNextMeetingNumber(
+      db,
+      groupId,
+    );
+
+  const cycleNumber =
+    await getCycleNumberForMeeting(
+      db,
+      groupId,
+      meetingNumber,
+    );
+
+  const loanFund =
+    await getFinancialAccount(
+      groupId,
+      'loan_fund',
+    );
+
+  const insuranceFund =
+    await getFinancialAccount(
+      groupId,
+      'insurance_fund',
+    );
+
   const timestamp = now();
 
   const result =
     await db.runAsync(
       `INSERT INTO group_meetings (
         group_id,
+        meeting_number,
+        cycle_number,
         meeting_date,
         opened_at,
         closed_at,
         status,
         created_at,
-        summary_approved
+        summary_approved,
+        previous_meeting_reviewed,
+        previous_meeting_editable,
+        loan_fund_at_start,
+        insurance_fund_at_start
       )
-      VALUES (?, ?, ?, NULL, 'open', ?, 0)`,
+      VALUES (?, ?, ?, ?, ?, NULL, 'open', ?, 0, ?, 0, ?, ?)`,
       groupId,
+      meetingNumber,
+      cycleNumber,
       timestamp,
       timestamp,
       timestamp,
+      previousMeeting ? 1 : 0,
+      loanFund?.balance ?? 0,
+      insuranceFund?.balance ?? 0,
     );
 
-  await recordGroupActivity(
+  const meetingId =
+    result.lastInsertRowId;
+
+  await recordGroupActivity(groupId);
+
+  await addMeetingAudit(
+    db,
     groupId,
+    meetingId,
+    meetingNumber,
+    cycleNumber,
+    'meeting_started',
+    executiveMemberId,
+    `Loan Fund at start: ${loanFund?.balance ?? 0}; Insurance Fund at start: ${insuranceFund?.balance ?? 0}`,
   );
 
+  /*
+   * Pre-App authorization is intentionally NOT repeated here.
+   * The existing app-access authorization remains a separate
+   * process and is not part of starting every meeting.
+   */
+
+  return meetingId;
+}
+
+/* ============================================================
+   MEETING FUND SNAPSHOT
+   ============================================================ */
+
+export async function getMeetingStartingFunds(
+  meetingId: number,
+): Promise<{
+  loanFund: number;
+  insuranceFund: number;
+}> {
+  const db = await getDatabase();
+
+  const meeting =
+    await db.getFirstAsync<{
+      loan_fund_at_start: number;
+      insurance_fund_at_start: number;
+    }>(
+      `SELECT
+        loan_fund_at_start,
+        insurance_fund_at_start
+       FROM group_meetings
+       WHERE id = ?
+       LIMIT 1`,
+      meetingId,
+    );
+
+  if (!meeting) {
+    throw new Error('Meeting not found.');
+  }
+
+  return {
+    loanFund:
+      Number(
+        meeting.loan_fund_at_start,
+      ) || 0,
+    insuranceFund:
+      Number(
+        meeting.insurance_fund_at_start,
+      ) || 0,
+  };
+}
+
+/* ============================================================
+   MEMBER INDIVIDUAL STATEMENTS
+   ============================================================ */
+
+export async function createMemberStatement(
+  meetingId: number,
+  memberId: number,
+  totalSavings: number,
+  loanBalance: number,
+  loanDueDate: string | null,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const meeting =
+    await db.getFirstAsync<{
+      id: number;
+      group_id: number;
+    }>(
+      `SELECT id, group_id
+       FROM group_meetings
+       WHERE id = ?
+       LIMIT 1`,
+      meetingId,
+    );
+
+  if (!meeting) {
+    throw new Error('Meeting not found.');
+  }
+
+  const existing =
+    await db.getFirstAsync<{
+      id: number;
+    }>(
+      `SELECT id
+       FROM member_statement_records
+       WHERE meeting_id = ?
+       AND member_id = ?
+       LIMIT 1`,
+      meetingId,
+      memberId,
+    );
+
+  if (existing) {
+    await db.runAsync(
+      `UPDATE member_statement_records
+       SET
+         individual_total_savings = ?,
+         individual_loan_balance = ?,
+         individual_loan_due_date = ?,
+         created_at = ?
+       WHERE id = ?`,
+      totalSavings,
+      loanBalance,
+      loanDueDate,
+      now(),
+      existing.id,
+    );
+
+    return existing.id;
+  }
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO member_statement_records (
+        meeting_id,
+        member_id,
+        individual_total_savings,
+        individual_loan_balance,
+        individual_loan_due_date,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?)`,
+      meetingId,
+      memberId,
+      totalSavings,
+      loanBalance,
+      loanDueDate,
+      now(),
+    );
+
   return result.lastInsertRowId;
+}
+
+export async function getMemberStatement(
+  meetingId: number,
+  memberId: number,
+): Promise<MemberStatementRecord | null> {
+  const db = await getDatabase();
+
+  return db.getFirstAsync<MemberStatementRecord>(
+    `SELECT *
+     FROM member_statement_records
+     WHERE meeting_id = ?
+     AND member_id = ?
+     LIMIT 1`,
+    meetingId,
+    memberId,
+  );
+}
+
+export async function getMeetingMemberStatements(
+  meetingId: number,
+): Promise<MemberStatementRecord[]> {
+  const db = await getDatabase();
+
+  return db.getAllAsync<MemberStatementRecord>(
+    `SELECT *
+     FROM member_statement_records
+     WHERE meeting_id = ?
+     ORDER BY member_id ASC`,
+    meetingId,
+  );
+}
+
+/* ============================================================
+   MEETING CLOSURE
+   ============================================================ */
+
+export async function closeMeeting(
+  meetingId: number,
+  executiveMemberId: number,
+): Promise<void> {
+  const db = await getDatabase();
+
+  const meeting =
+    await db.getFirstAsync<GroupMeetingRecord>(
+      `SELECT *
+       FROM group_meetings
+       WHERE id = ?
+       LIMIT 1`,
+      meetingId,
+    );
+
+  if (!meeting) {
+    throw new Error('Meeting not found.');
+  }
+
+  if (meeting.status !== 'open') {
+    throw new Error(
+      'Only an open meeting can be closed.',
+    );
+  }
+
+  const executive =
+    await db.getFirstAsync<{
+      id: number;
+      role: string;
+      status: string;
+    }>(
+      `SELECT id, role, status
+       FROM members
+       WHERE id = ?
+       AND group_id = ?
+       LIMIT 1`,
+      executiveMemberId,
+      meeting.group_id,
+    );
+
+  if (
+    !executive ||
+    executive.status !== 'active' ||
+    executive.role.toLowerCase() !==
+      'executive'
+  ) {
+    throw new Error(
+      'Only an active executive can close the meeting.',
+    );
+  }
+
+  const summary =
+    await getFinancialSummary(
+      meeting.group_id,
+    );
+
+  const timestamp = now();
+
+  await db.runAsync(
+    `INSERT INTO meeting_closures (
+      meeting_id,
+      closed_at,
+      total_savings,
+      loan_fund,
+      group_fund,
+      insurance_fund
+    )
+    VALUES (?, ?, ?, ?, ?, ?)`,
+    meetingId,
+    timestamp,
+    summary.savings,
+    summary.loanFund,
+    summary.fundBalance,
+    summary.insuranceFund,
+  );
+
+  await db.runAsync(
+    `UPDATE group_meetings
+     SET
+       status = 'closed',
+       closed_at = ?,
+       previous_meeting_editable = 1
+     WHERE id = ?`,
+    timestamp,
+    meetingId,
+  );
+
+  await addMeetingAudit(
+    db,
+    meeting.group_id,
+    meeting.id,
+    meeting.meeting_number,
+    meeting.cycle_number,
+    'meeting_closed',
+    executiveMemberId,
+  );
+
+  await recordGroupActivity(
+    meeting.group_id,
+  );
+}
+
+/* ============================================================
+   MEETING AUDIT
+   ============================================================ */
+
+export async function getMeetingAuditRecords(
+  groupId: number,
+): Promise<MeetingAuditRecord[]> {
+  const db = await getDatabase();
+
+  return db.getAllAsync<MeetingAuditRecord>(
+    `SELECT *
+     FROM meeting_audit_records
+     WHERE group_id = ?
+     ORDER BY meeting_number ASC, id ASC`,
+    groupId,
+  );
+}
+
+export async function getMeetingAuditForCycle(
+  groupId: number,
+  cycleNumber: number,
+): Promise<MeetingAuditRecord[]> {
+  const db = await getDatabase();
+
+  return db.getAllAsync<MeetingAuditRecord>(
+    `SELECT *
+     FROM meeting_audit_records
+     WHERE group_id = ?
+     AND cycle_number = ?
+     ORDER BY meeting_number ASC, id ASC`,
+    groupId,
+    cycleNumber,
+  );
+}
+
+export async function getAllMeetings(
+  groupId: number,
+): Promise<GroupMeetingRecord[]> {
+  const db = await getDatabase();
+
+  return db.getAllAsync<GroupMeetingRecord>(
+    `SELECT *
+     FROM group_meetings
+     WHERE group_id = ?
+     ORDER BY meeting_number ASC`,
+    groupId,
+  );
+}
+
+/* ============================================================
+   PRE-APP AUTHORIZATION
+   ============================================================ */
+
+export async function createAppAccessSession(
+  groupId: number,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const existing =
+    await db.getFirstAsync<{
+      id: number;
+    }>(
+      `SELECT id
+       FROM app_access_sessions
+       WHERE group_id = ?
+       AND status = 'open'
+       ORDER BY id DESC
+       LIMIT 1`,
+      groupId,
+    );
+
+  if (existing) {
+    return existing.id;
+  }
+
+  const result =
+    await db.runAsync(
+      `INSERT INTO app_access_sessions (
+        group_id,
+        meeting_id,
+        opened_at,
+        status
+      )
+      VALUES (?, NULL, ?, 'open')`,
+      groupId,
+      now(),
+    );
+
+  return result.lastInsertRowId;
+}
+
+export async function addAppAccessAuthorizer(
+  sessionId: number,
+  memberId: number,
+  authorizerRole: string,
+): Promise<void> {
+  const db = await getDatabase();
+
+  if (!normalizeText(authorizerRole)) {
+    throw new Error(
+      'Authorizer role is required.',
+    );
+  }
+
+  await db.runAsync(
+    `INSERT OR IGNORE INTO app_access_authorizers (
+      session_id,
+      member_id,
+      authorizer_role,
+      authorized_at
+    )
+    VALUES (?, ?, ?, ?)`,
+    sessionId,
+    memberId,
+    normalizeText(authorizerRole),
+    now(),
+  );
+}
+
+export async function isPreAppAuthorized(
+  sessionId: number,
+): Promise<boolean> {
+  const db = await getDatabase();
+
+  const rows =
+    await db.getAllAsync<{
+      authorizer_role: string;
+    }>(
+      `SELECT authorizer_role
+       FROM app_access_authorizers
+       WHERE session_id = ?`,
+      sessionId,
+    );
+
+  const executives =
+    rows.filter(
+      (row) =>
+        row.authorizer_role
+          .toLowerCase()
+          .includes('executive'),
+    ).length;
+
+  const ordinary =
+    rows.filter(
+      (row) =>
+        row.authorizer_role
+          .toLowerCase()
+          .includes('member') ||
+        row.authorizer_role
+          .toLowerCase()
+          .includes('ordinary'),
+    ).length;
+
+  return executives >= 2 && ordinary >= 1;
   }
