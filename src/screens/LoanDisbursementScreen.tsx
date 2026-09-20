@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import {
   getFinancialSummary,
-  getMembersByGroup,
+  getMembersByGroupId,
   issueLoan,
 } from '../database/database';
 
@@ -36,7 +36,9 @@ export default function LoanDisbursementScreen({ route }: Props) {
 
   const [loanFund, setLoanFund] = useState(0);
   const [members, setMembers] = useState<Member[]>([]);
-  const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
+  const [selectedMemberId, setSelectedMemberId] = useState<number | null>(
+    null,
+  );
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('Loan issued to member');
   const [loading, setLoading] = useState(false);
@@ -48,7 +50,7 @@ export default function LoanDisbursementScreen({ route }: Props) {
       const summary = await getFinancialSummary(groupId);
       setLoanFund(summary.loanFund ?? 0);
 
-      const groupMembers = await getMembersByGroup(groupId);
+      const groupMembers = await getMembersByGroupId(groupId);
 
       setMembers(
         groupMembers.filter(
@@ -57,6 +59,11 @@ export default function LoanDisbursementScreen({ route }: Props) {
       );
     } catch (error) {
       console.error('Failed to load loan data:', error);
+
+      Alert.alert(
+        'Error',
+        'Unable to load loan data.',
+      );
     }
   };
 
@@ -70,7 +77,7 @@ export default function LoanDisbursementScreen({ route }: Props) {
       return;
     }
 
-    if (!selectedMemberId) {
+    if (selectedMemberId === null) {
       Alert.alert('Select Member', 'Please select a member.');
       return;
     }
@@ -129,13 +136,18 @@ export default function LoanDisbursementScreen({ route }: Props) {
         <Text style={styles.title}>Loan Disbursement</Text>
 
         <View style={styles.balanceCard}>
-          <Text style={styles.balanceLabel}>Available Loan Fund</Text>
+          <Text style={styles.balanceLabel}>
+            Available Loan Fund
+          </Text>
+
           <Text style={styles.balance}>
             UGX {loanFund.toLocaleString()}
           </Text>
         </View>
 
-        <Text style={styles.sectionTitle}>Select Member</Text>
+        <Text style={styles.sectionTitle}>
+          Select Member
+        </Text>
 
         {members.map((member) => (
           <TouchableOpacity
@@ -146,17 +158,21 @@ export default function LoanDisbursementScreen({ route }: Props) {
                 styles.selectedMember,
             ]}
             onPress={() => setSelectedMemberId(member.id)}
+            disabled={loading}
           >
             <Text style={styles.memberNumber}>
               {member.member_number}
             </Text>
+
             <Text style={styles.memberName}>
               {member.full_name}
             </Text>
           </TouchableOpacity>
         ))}
 
-        <Text style={styles.sectionTitle}>Loan Amount</Text>
+        <Text style={styles.sectionTitle}>
+          Loan Amount
+        </Text>
 
         <TextInput
           style={styles.input}
@@ -165,9 +181,12 @@ export default function LoanDisbursementScreen({ route }: Props) {
           keyboardType="numeric"
           placeholder="Enter loan amount"
           placeholderTextColor="#6b7280"
+          editable={!loading}
         />
 
-        <Text style={styles.sectionTitle}>Reason</Text>
+        <Text style={styles.sectionTitle}>
+          Reason
+        </Text>
 
         <TextInput
           style={styles.input}
@@ -175,6 +194,7 @@ export default function LoanDisbursementScreen({ route }: Props) {
           onChangeText={setReason}
           placeholder="Loan reason"
           placeholderTextColor="#6b7280"
+          editable={!loading}
         />
 
         <TouchableOpacity
@@ -186,7 +206,9 @@ export default function LoanDisbursementScreen({ route }: Props) {
           disabled={loading}
         >
           <Text style={styles.buttonText}>
-            {loading ? 'Processing...' : 'Disburse Loan'}
+            {loading
+              ? 'Processing...'
+              : 'Disburse Loan'}
           </Text>
         </TouchableOpacity>
       </View>
