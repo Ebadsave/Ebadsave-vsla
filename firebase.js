@@ -1,272 +1,109 @@
 // firebase.js
-// Firebase v10 CDN modular
-// No npm install required.
+// Firebase Firestore REST sync
+// Local SQLite remains the primary offline database.
 
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+const PROJECT_ID = 'onesandfourhole';
 
-import {
-  getFirestore,
-  collection,
-  addDoc,
-  getDocs,
-  query,
-  where,
-  orderBy,
-} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+const BASE_URL =
+  `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}` +
+  `/databases/(default)/documents`;
 
-
-const firebaseConfig = {
-  apiKey: "AIzaSyDrk67oB4evXnQZzaIrUDtVAnztwnMOI8c",
-  authDomain: "onesandfourhole.firebaseapp.com",
-  projectId: "onesandfourhole",
-  storageBucket: "onesandfourhole.firebasestorage.app",
-  messagingSenderId: "664954049701",
-  appId: "1:664954049701:web:936279db435c1f0c59a94c"
-};
-
-
-// ============================================================
-// FIREBASE INITIALIZATION
-// ============================================================
-
-const app = initializeApp(firebaseConfig);
-
-export const db = getFirestore(app);
-
-
-// ============================================================
-// GROUPS
-// ============================================================
-
-export async function createGroup(data) {
-  return await addDoc(collection(db, "groups"), {
-    ...data,
-    created_at: new Date(),
+async function uploadDocument(collectionName, data) {
+  const response = await fetch(`${BASE_URL}/${collectionName}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      fields: toFirestoreFields({
+        ...data,
+        synced_at: new Date(),
+      }),
+    }),
   });
+
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      result?.error?.message ||
+        `Failed to sync ${collectionName}`,
+    );
+  }
+
+  return result;
 }
 
+function toFirestoreFields(data) {
+  const fields = {};
 
-export async function getGroups() {
-  const snapshot = await getDocs(
-    query(
-      collection(db, "groups"),
-      orderBy("created_at", "desc")
-    )
-  );
+  for (const key in data) {
+    const value = data[key];
 
-  return snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-  }));
+    if (value === null || value === undefined) {
+      fields[key] = { nullValue: null };
+    } else if (value instanceof Date) {
+      fields[key] = {
+        timestampValue: value.toISOString(),
+      };
+    } else if (typeof value === 'string') {
+      fields[key] = { stringValue: value };
+    } else if (typeof value === 'number') {
+      fields[key] = Number.isInteger(value)
+        ? { integerValue: String(value) }
+        : { doubleValue: value };
+    } else if (typeof value === 'boolean') {
+      fields[key] = { booleanValue: value };
+    } else {
+      fields[key] = {
+        stringValue: JSON.stringify(value),
+      };
+    }
+  }
+
+  return fields;
 }
 
-
-// ============================================================
-// MEMBERS
-// ============================================================
-
-export async function createMember(data) {
-  return await addDoc(collection(db, "members"), {
-    ...data,
-    created_at: new Date(),
-  });
+export async function syncGroup(data) {
+  return uploadDocument('groups', data);
 }
 
-
-export async function getMembersByGroup(groupId) {
-  const snapshot = await getDocs(
-    query(
-      collection(db, "members"),
-      where("group_id", "==", groupId)
-    )
-  );
-
-  return snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-  }));
+export async function syncMember(data) {
+  return uploadDocument('members', data);
 }
 
-
-// ============================================================
-// MEETINGS
-// ============================================================
-
-export async function createMeeting(data) {
-  return await addDoc(collection(db, "meetings"), {
-    ...data,
-    created_at: new Date(),
-  });
+export async function syncMeeting(data) {
+  return uploadDocument('meetings', data);
 }
 
-
-// ============================================================
-// SAVINGS
-// ============================================================
-
-export async function addSaving(data) {
-  return await addDoc(collection(db, "savings"), {
-    ...data,
-    created_at: new Date(),
-  });
+export async function syncSaving(data) {
+  return uploadDocument('savings', data);
 }
 
-
-// ============================================================
-// LOANS
-// ============================================================
-
-export async function addLoan(data) {
-  return await addDoc(collection(db, "loans"), {
-    ...data,
-    created_at: new Date(),
-  });
+export async function syncLoan(data) {
+  return uploadDocument('loans', data);
 }
 
-
-// ============================================================
-// LOAN REPAYMENTS
-// ============================================================
-
-export async function addLoanRepayment(data) {
-  return await addDoc(collection(db, "loan_repayment"), {
-    ...data,
-    created_at: new Date(),
-  });
+export async function syncLoanRepayment(data) {
+  return uploadDocument('loan_repayment', data);
 }
 
-
-// ============================================================
-// FINES
-// ============================================================
-
-export async function addFine(data) {
-  return await addDoc(collection(db, "fines"), {
-    ...data,
-    created_at: new Date(),
-  });
+export async function syncFine(data) {
+  return uploadDocument('fines', data);
 }
 
-
-// ============================================================
-// INSURANCE
-// ============================================================
-
-export async function addInsurance(data) {
-  return await addDoc(collection(db, "insurance"), {
-    ...data,
-    created_at: new Date(),
-  });
+export async function syncInsurance(data) {
+  return uploadDocument('insurance', data);
 }
 
-
-// ============================================================
-// INSURANCE PAYOUT
-// ============================================================
-
-export async function addInsurancePayout(data) {
-  return await addDoc(collection(db, "insurance_payout"), {
-    ...data,
-    created_at: new Date(),
-  });
+export async function syncInsurancePayout(data) {
+  return uploadDocument('insurance_payout', data);
 }
 
-
-// ============================================================
-// EXTERNAL FUNDS
-// ============================================================
-
-export async function addExternalFunds(data) {
-  return await addDoc(collection(db, "external_funds"), {
-    ...data,
-    created_at: new Date(),
-  });
+export async function syncExternalFunds(data) {
+  return uploadDocument('external_funds', data);
 }
 
-
-// ============================================================
-// NEXT OF KIN
-// ============================================================
-
-export async function addNextOfKin(data) {
-  return await addDoc(collection(db, "next_of_kin"), {
-    ...data,
-    created_at: new Date(),
-  });
-}
-
-
-// ============================================================
-// GET SAVINGS BY MEETING
-// ============================================================
-
-export async function getSavingsByMeeting(meetingId) {
-  const snapshot = await getDocs(
-    query(
-      collection(db, "savings"),
-      where("meeting_id", "==", meetingId)
-    )
-  );
-
-  return snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-  }));
-}
-
-
-// ============================================================
-// GET LOANS BY MEMBER
-// ============================================================
-
-export async function getLoansByMember(memberId) {
-  const snapshot = await getDocs(
-    query(
-      collection(db, "loans"),
-      where("member_id", "==", memberId)
-    )
-  );
-
-  return snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-  }));
-}
-
-
-// ============================================================
-// GET FINES BY MEETING
-// ============================================================
-
-export async function getFinesByMeeting(meetingId) {
-  const snapshot = await getDocs(
-    query(
-      collection(db, "fines"),
-      where("meeting_id", "==", meetingId)
-    )
-  );
-
-  return snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-  }));
-}
-
-
-// ============================================================
-// GET INSURANCE BY GROUP
-// ============================================================
-
-export async function getInsuranceByGroup(groupId) {
-  const snapshot = await getDocs(
-    query(
-      collection(db, "insurance"),
-      where("group_id", "==", groupId)
-    )
-  );
-
-  return snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-  }));
-}
+export async function syncNextOfKin(data) {
+  return uploadDocument('next_of_kin', data);
+    }
