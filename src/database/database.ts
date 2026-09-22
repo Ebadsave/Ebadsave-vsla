@@ -111,7 +111,27 @@ export type VSLASetupRuleRecord = {
   created_at: string;
   updated_at: string;
 };
+export async function getMemberSavings(
+  groupId: number,
+  memberId: number,
+): Promise<number> {
+  const db = await getDatabase();
 
+  const result =
+    await db.getFirstAsync<{ total: number }>(
+      `SELECT COALESCE(SUM(amount), 0) AS total
+       FROM financial_transactions
+       WHERE group_id = ?
+       AND member_id = ?
+       AND account_type = 'savings'
+       AND transaction_type = 'savings_contribution'
+       AND reversed = 0`,
+      groupId,
+      memberId,
+    );
+
+  return result?.total ?? 0;
+}
 export type VSLASetupRuleUpdates = {
   shareValue?: number;
   minimumSharesPerMeeting?: number;
