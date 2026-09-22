@@ -12,36 +12,60 @@ import {
 import { recordExpenditure } from '../database/database';
 
 type ExpenditureScreenProps = {
-  groupId: number;
-  meetingId?: number | null;
+  route: {
+    params?: {
+      groupId?: number;
+      meetingId?: number | null;
+      executiveMemberId?: number | null;
+    };
+  };
 };
 
 export default function ExpenditureScreen({
-  groupId,
-  meetingId = null,
+  route,
 }: ExpenditureScreenProps) {
+  const groupId = route.params?.groupId ?? null;
+  const meetingId = route.params?.meetingId ?? null;
+
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
+    if (!groupId) {
+      Alert.alert(
+        'No Active Group',
+        'Please register or select an active group before recording an expenditure.',
+      );
+      return;
+    }
+
     const trimmedAmount = amount.trim();
     const trimmedReason = reason.trim();
 
     if (!trimmedAmount) {
-      Alert.alert('Missing amount', 'Please enter the expenditure amount.');
+      Alert.alert(
+        'Missing amount',
+        'Please enter the expenditure amount.',
+      );
       return;
     }
 
     const numericAmount = Number(trimmedAmount);
 
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
-      Alert.alert('Invalid amount', 'Please enter a valid amount greater than 0.');
+      Alert.alert(
+        'Invalid amount',
+        'Please enter a valid amount greater than 0.',
+      );
       return;
     }
 
     if (!trimmedReason) {
-      Alert.alert('Missing reason', 'Please enter the reason for the expenditure.');
+      Alert.alert(
+        'Missing reason',
+        'Please enter the reason for the expenditure.',
+      );
       return;
     }
 
@@ -79,7 +103,12 @@ export default function ExpenditureScreen({
       <View style={styles.content}>
         <Text style={styles.title}>Expenditure</Text>
 
+        <Text style={styles.groupText}>
+          Group: KYA {groupId ?? '—'}
+        </Text>
+
         <Text style={styles.label}>Amount (UGX)</Text>
+
         <TextInput
           style={styles.input}
           value={amount}
@@ -90,6 +119,7 @@ export default function ExpenditureScreen({
         />
 
         <Text style={styles.label}>Reason</Text>
+
         <TextInput
           style={[styles.input, styles.reasonInput]}
           value={reason}
@@ -103,6 +133,7 @@ export default function ExpenditureScreen({
           style={[styles.button, saving && styles.buttonDisabled]}
           onPress={handleSave}
           disabled={saving}
+          activeOpacity={0.8}
         >
           <Text style={styles.buttonText}>
             {saving ? 'Saving...' : 'Record Expenditure'}
@@ -118,22 +149,32 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#ffffff',
   },
+
   content: {
     flex: 1,
     padding: 20,
   },
+
   title: {
     fontSize: 24,
     fontWeight: '700',
     color: '#16a34a',
+    marginBottom: 8,
+  },
+
+  groupText: {
+    fontSize: 14,
+    color: '#6b7280',
     marginBottom: 25,
   },
+
   label: {
     fontSize: 15,
     fontWeight: '600',
     color: '#374151',
     marginBottom: 8,
   },
+
   input: {
     borderWidth: 1,
     borderColor: '#d1d5db',
@@ -145,10 +186,12 @@ const styles = StyleSheet.create({
     color: '#111827',
     backgroundColor: '#ffffff',
   },
+
   reasonInput: {
     minHeight: 100,
     textAlignVertical: 'top',
   },
+
   button: {
     backgroundColor: '#16a34a',
     borderRadius: 8,
@@ -156,9 +199,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 5,
   },
+
   buttonDisabled: {
     opacity: 0.6,
   },
+
   buttonText: {
     color: '#ffffff',
     fontSize: 16,
