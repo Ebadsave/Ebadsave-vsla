@@ -1,16 +1,410 @@
-import React from 'react';
-import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import {
+  Alert,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 
-export default function LoanRepaymentScreen() {
+import {
+  getMembersByGroupId,
+  recordLoanRepayment,
+} from '../database/database';
+
+type Props = {
+  route?: {
+    params?: {
+      groupId?: number;
+      meetingId?: number | null;
+    };
+  };
+};
+
+type Member = {
+  id: number;
+  member_number: string;
+  full_name: string;
+  status: string;
+};
+
+export default function LoanRepaymentScreen({
+  route,
+}: Props) {
+  const groupId = route?.params?.groupId;
+  const meetingId =
+    route?.params?.meetingId ?? null;
+
+  const [members, setMembers] = useState<Member[]>(
+    [],
+  );
+  const [selectedMemberId, setSelectedMemberId] =
+    useState<number | null>(null);
+
+  const [loanBalance, setLoanBalance] =
+    useState(0);
+
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState(
+    'Loan repayment',
+  );
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const selectedMember = members.find(
+    (member) =>
+      member.id === selectedMemberId,
+  );
+
+  const loadMembers = async () => {
+    if (!groupId) return;
+
+    try {
+      const groupMembers =
+        await getMembersByGroupId(groupId);
+
+      setMembers(
+        groupMembers.filter(
+          (member) =>
+            member.status === 'active',
+        ),
+      );
+    } catch (error) {
+      console.error(
+        'Failed to load members:',
+        error,
+      );
+
+      Alert.alert(
+        'Error',
+        'Unable to load members.',
+      );
+    }
+  };
+
+  const loadLoanBalance = async (
+    memberId: number,
+  ) => {
+    if (!groupId) return;
+
+    try {
+      /*
+       * Loan balance:
+       * Total loan issued
+       * minus
+       * total loan repayments
+       */
+      // The calculation will be connected
+      // to database.ts in the next step.
+      setLoanBalance(0);
+    } catch (error) {
+      console.error(
+        'Failed to load loan balance:',
+        error,
+      );
+
+      setLoanBalance(0);
+
+      Alert.alert(
+        'Error',
+        'Unable to load loan balance.',
+      );
+    }
+  };
+
+  useEffect(() => {
+    loadMembers();
+  }, [groupId]);
+
+  const handleMemberSelect = async (
+    memberId: number,
+  ) => {
+    if (loading) return;
+
+    setSelectedMemberId(memberId);
+    setAmount('');
+
+    await loadLoanBalance(memberId);
+  };
+
+  const handleRepayment = () => {
+    if (!groupId) {
+      Alert.alert(
+        'Error',
+        'Group was not found.',
+      );
+      return;
+    }
+
+    if (selectedMemberId === null) {
+      Alert.alert(
+        'Select Member',
+        'Please select a member.',
+      );
+      return;
+    }
+
+    if (loanBalance <= 0) {
+      Alert.alert(
+        'No Outstanding Loan',
+        'This member has no outstanding loan balance.',
+      );
+      return;
+    }
+
+    const repaymentAmount = Number(
+      amount.replace(/,/g, ''),
+    );
+
+    if (
+      !Number.isFinite(repaymentAmount) ||
+      repaymentAmount <= 0
+    ) {
+      Alert.alert(
+        'Invalid Amount',
+        'Enter a valid repayment amount.',
+      );
+      return;
+    }
+
+    if (
+      repaymentAmount > loanBalance
+    ) {
+      Alert.alert(
+        'Amount Too High',
+        `Outstanding loan balance: UGX ${loanBalance.toLocaleString()}`,
+      );
+      return;
+    }
+
+    Alert.alert(
+      'Confirm Repayment',
+      `Member: ${selectedMember?.full_name}\n\nOutstanding loan: UGX ${loanBalance.toLocaleString()}\nRepayment: UGX ${repaymentAmount.toLocaleString()}\nRemaining balance: UGX ${(loanBalance - repaymentAmount).toLocaleString()}`,
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Confirm',
+          onPress: () =>
+            confirmRepayment(
+              repaymentAmount,
+            ),
+        },
+      ],
+    );
+  };
+
+  const confirmRepayment = async (
+    repaymentAmount: number,
+  ) => {
+    if (
+      !groupId ||
+      selectedMemberId === null
+    ) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      await recordLoanRepayment(
+        groupId,
+        selectedMemberId,
+        repaymentAmount,
+        meetingId,
+        reason.trim() ||
+          'Loan repayment',
+      );
+
+      const remaining =
+        loanBalance - repaymentAmount;
+
+      Alert.alert(
+        'Success',
+        `Repayment of UGX ${repaymentAmount.toLocaleString()} recorded.\n\nRemaining loan balance: UGX ${remaining.toLocaleString()}`,
+      );
+
+      setAmount('');
+      setReason('Loan repayment');
+
+      await loadLoanBalance(
+        selectedMemberId,
+      );
+    } catch (error) {
+      Alert.alert(
+        'Repayment Failed',
+        error instanceof Error
+          ? error.message
+          : 'Unable to record repayment.',
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const filteredMembers =
+    members.filter((member) => {
+      const searchText =
+        search.trim().toLowerCase();
+
+      if (!searchText) return true;
+
+      return (
+        member.full_name
+          .toLowerCase()
+          .includes(searchText) ||
+        member.member_number
+          .toLowerCase()
+          .includes(searchText)
+      );
+    });
+
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
-        <Text style={styles.title}>Loan Repayment</Text>
-
-        <Text style={styles.subtitle}>
-          Loan repayment functions will be added here.
+      <ScrollView
+        contentContainerStyle={
+          styles.content
+        }
+        keyboardShouldPersistTaps="handled"
+      >
+        <Text style={styles.title}>
+          Loan Repayment
         </Text>
-      </View>
+
+        <Text style={styles.sectionTitle}>
+          Select Member
+        </Text>
+
+        <TextInput
+          style={styles.input}
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Search member name or number"
+          placeholderTextColor="#6b7280"
+          editable={!loading}
+        />
+
+        {filteredMembers.length === 0 ? (
+          <Text style={styles.emptyText}>
+            No active members found.
+          </Text>
+        ) : (
+          filteredMembers.map(
+            (member) => (
+              <TouchableOpacity
+                key={member.id}
+                style={[
+                  styles.memberButton,
+                  selectedMemberId ===
+                    member.id &&
+                    styles.selectedMember,
+                ]}
+                onPress={() =>
+                  handleMemberSelect(
+                    member.id,
+                  )
+                }
+                disabled={loading}
+              >
+                <Text
+                  style={
+                    styles.memberNumber
+                  }
+                >
+                  {member.member_number}
+                </Text>
+
+                <Text
+                  style={styles.memberName}
+                >
+                  {member.full_name}
+                </Text>
+              </TouchableOpacity>
+            ),
+          )
+        )}
+
+        {selectedMember && (
+          <View style={styles.balanceCard}>
+            <Text style={styles.balanceLabel}>
+              Outstanding Loan
+            </Text>
+
+            <Text style={styles.balance}>
+              UGX{' '}
+              {loanBalance.toLocaleString()}
+            </Text>
+
+            <Text style={styles.memberText}>
+              {selectedMember.member_number}
+            </Text>
+
+            <Text style={styles.memberText}>
+              {selectedMember.full_name}
+            </Text>
+          </View>
+        )}
+
+        <Text style={styles.sectionTitle}>
+          Repayment Amount
+        </Text>
+
+        <TextInput
+          style={styles.input}
+          value={amount}
+          onChangeText={(text) =>
+            setAmount(
+              text.replace(
+                /[^0-9.]/g,
+                '',
+              ),
+            )
+          }
+          keyboardType="numeric"
+          placeholder="Enter repayment amount"
+          placeholderTextColor="#6b7280"
+          editable={!loading}
+        />
+
+        <Text style={styles.sectionTitle}>
+          Reason
+        </Text>
+
+        <TextInput
+          style={styles.input}
+          value={reason}
+          onChangeText={setReason}
+          placeholder="Repayment reason"
+          placeholderTextColor="#6b7280"
+          editable={!loading}
+        />
+
+        <TouchableOpacity
+          style={[
+            styles.repayButton,
+            (loading ||
+              selectedMemberId ===
+                null) &&
+              styles.disabledButton,
+          ]}
+          onPress={handleRepayment}
+          disabled={
+            loading ||
+            selectedMemberId === null
+          }
+        >
+          <Text style={styles.buttonText}>
+            {loading
+              ? 'Processing...'
+              : 'Record Repayment'}
+          </Text>
+        </TouchableOpacity>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -22,22 +416,110 @@ const styles = StyleSheet.create({
   },
 
   content: {
-    flex: 1,
-    padding: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
+    padding: 16,
+    paddingBottom: 40,
   },
 
   title: {
     fontSize: 24,
     fontWeight: '700',
+    color: '#166534',
+    marginBottom: 16,
+  },
+
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#166534',
+    marginTop: 12,
+    marginBottom: 8,
+  },
+
+  input: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#111827',
+    backgroundColor: '#ffffff',
+  },
+
+  memberButton: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 8,
+    backgroundColor: '#ffffff',
+  },
+
+  selectedMember: {
+    borderColor: '#16a34a',
+    backgroundColor: '#f0fdf4',
+  },
+
+  memberNumber: {
+    fontSize: 13,
+    fontWeight: '700',
     color: '#16a34a',
   },
 
-  subtitle: {
-    marginTop: 10,
-    fontSize: 15,
+  memberName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111827',
+    marginTop: 3,
+  },
+
+  balanceCard: {
+    backgroundColor: '#f0fdf4',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 12,
+  },
+
+  balanceLabel: {
+    fontSize: 14,
     color: '#374151',
+  },
+
+  balance: {
+    fontSize: 26,
+    fontWeight: '700',
+    color: '#16a34a',
+    marginTop: 4,
+    marginBottom: 8,
+  },
+
+  memberText: {
+    fontSize: 14,
+    color: '#374151',
+    marginTop: 2,
+  },
+
+  emptyText: {
     textAlign: 'center',
+    color: '#6b7280',
+    padding: 20,
+  },
+
+  repayButton: {
+    backgroundColor: '#16a34a',
+    borderRadius: 10,
+    paddingVertical: 15,
+    alignItems: 'center',
+    marginTop: 24,
+  },
+
+  disabledButton: {
+    opacity: 0.5,
+  },
+
+  buttonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '700',
   },
 });
