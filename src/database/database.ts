@@ -989,21 +989,22 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       FOREIGN KEY (notification_id) REFERENCES notification_queue(id)
     );
 
-    CREATE TABLE IF NOT EXISTS meeting_audit_records (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      group_id INTEGER NOT NULL,
-      cycle_number INTEGER NOT NULL,
-      meeting_id INTEGER NOT NULL,
-      meeting_number INTEGER NOT NULL,
-      action TEXT NOT NULL,
-      actor_member_id INTEGER,
-      details TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (group_id) REFERENCES groups(id),
-      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
-      FOREIGN KEY (actor_member_id) REFERENCES members(id)
-    );
-await db.execAsync(`
+    await db.execAsync(`
+  CREATE TABLE IF NOT EXISTS meeting_audit_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    cycle_number INTEGER NOT NULL,
+    meeting_id INTEGER NOT NULL,
+    meeting_number INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    actor_member_id INTEGER,
+    details TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (group_id) REFERENCES groups(id),
+    FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
+    FOREIGN KEY (actor_member_id) REFERENCES members(id)
+  );
+
   CREATE TABLE IF NOT EXISTS sync_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     collection_name TEXT NOT NULL,
