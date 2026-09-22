@@ -24,12 +24,12 @@ type Member = {
 };
 
 type Kin = {
-  slot: number;
-  name: string;
+  slot: number;null
+  name: string;null
   phone?: string | null;
   gender?: string | null;
-  benefit_received?: number;
-  locked?: number;
+  benefit_received?: number;null
+  locked?: number;null
 };
 
 type MemberWithKin = Member & {
