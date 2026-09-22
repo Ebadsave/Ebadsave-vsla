@@ -77,8 +77,8 @@ export type RootStackParamList = {
   };
 
   Expenditure: {
-    groupId: number;
-    executiveMemberId: number;
+  groupId: number;
+  meetingId: number;
   };
 };
 
