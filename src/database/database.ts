@@ -913,7 +913,71 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       FOREIGN KEY (reversed_by)
         REFERENCES members(id)
     );
+    CREATE TABLE IF NOT EXISTS receipts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      meeting_id INTEGER,
+      member_id INTEGER,
+      receipt_number TEXT NOT NULL,
+      receipt_type TEXT NOT NULL,
+      amount REAL NOT NULL DEFAULT 0,
+      details TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
+      FOREIGN KEY (member_id) REFERENCES members(id)
+    );
 
+    CREATE TABLE IF NOT EXISTS notification_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      member_id INTEGER,
+      notification_type TEXT NOT NULL,
+      priority TEXT NOT NULL DEFAULT 'normal',
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at TEXT,
+      fallback_used INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS notification_delivery (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      notification_id INTEGER NOT NULL,
+      channel TEXT NOT NULL,
+      delivered_at TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      error_message TEXT,
+      FOREIGN KEY (notification_id) REFERENCES notification_queue(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS meeting_audit_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      cycle_number INTEGER NOT NULL,
+      meeting_id INTEGER NOT NULL,
+      meeting_number INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      actor_member_id INTEGER,
+      details TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
+      FOREIGN KEY (actor_member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      collection_name TEXT NOT NULL,
+      record_id TEXT NOT NULL,
+      data_json TEXT NOT NULL,
+      synced INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS member_passbook_records (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       group_id INTEGER NOT NULL,
@@ -944,76 +1008,8 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       FOREIGN KEY (member_id) REFERENCES members(id)
     );
 
-    CREATE TABLE IF NOT EXISTS receipts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      group_id INTEGER NOT NULL,
-      member_id INTEGER,
-      meeting_id INTEGER,
-      collection_id INTEGER,
-      transaction_id INTEGER,
-      receipt_number TEXT NOT NULL UNIQUE,
-      amount REAL NOT NULL,
-      description TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (group_id) REFERENCES groups(id),
-      FOREIGN KEY (member_id) REFERENCES members(id),
-      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
-      FOREIGN KEY (collection_id) REFERENCES financial_collections(id),
-      FOREIGN KEY (transaction_id) REFERENCES financial_transactions(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS notification_queue (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      group_id INTEGER NOT NULL,
-      member_id INTEGER,
-      notification_type TEXT NOT NULL,
-      priority TEXT NOT NULL DEFAULT 'normal',
-      title TEXT NOT NULL,
-      message TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
-      attempts INTEGER NOT NULL DEFAULT 0,
-      last_attempt_at TEXT,
-      fallback_used INTEGER NOT NULL DEFAULT 0,
-      FOREIGN KEY (group_id) REFERENCES groups(id),
-      FOREIGN KEY (member_id) REFERENCES members(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS notification_delivery (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      notification_id INTEGER NOT NULL,
-      channel TEXT NOT NULL,
-      delivered_at TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',
-      error_message TEXT,
-      FOREIGN KEY (notification_id) REFERENCES notification_queue(id)
-    );
-
-    await db.execAsync(`
-  CREATE TABLE IF NOT EXISTS meeting_audit_records (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id INTEGER NOT NULL,
-    cycle_number INTEGER NOT NULL,
-    meeting_id INTEGER NOT NULL,
-    meeting_number INTEGER NOT NULL,
-    action TEXT NOT NULL,
-    actor_member_id INTEGER,
-    details TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (group_id) REFERENCES groups(id),
-    FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
-    FOREIGN KEY (actor_member_id) REFERENCES members(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS sync_queue (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    collection_name TEXT NOT NULL,
-    record_id TEXT NOT NULL,
-    data_json TEXT NOT NULL,
-    synced INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
-  );
-`);
+    
+      
 
     CREATE INDEX IF NOT EXISTS idx_members_group
       ON members(group_id);
