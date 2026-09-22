@@ -1,6 +1,7 @@
 // firebase.js
 // Firebase Firestore REST sync
-// Local SQLite remains the primary offline database.
+// SQLite remains the primary offline database.
+// No Firebase npm package is required.
 
 const PROJECT_ID = 'onesandfourhole';
 
@@ -8,32 +9,9 @@ const BASE_URL =
   `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}` +
   `/databases/(default)/documents`;
 
-async function uploadDocument(collectionName, data) {
-  const response = await fetch(`${BASE_URL}/${collectionName}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      fields: toFirestoreFields({
-        ...data,
-        synced_at: new Date(),
-      }),
-    }),
-  });
-
-  const result = await response.json();
-
-  if (!response.ok) {
-    throw new Error(
-      result?.error?.message ||
-        `Failed to sync ${collectionName}`,
-    );
-  }
-
-  return result;
-}
-
+/**
+ * Convert normal JavaScript values to Firestore REST fields.
+ */
 function toFirestoreFields(data) {
   const fields = {};
 
@@ -47,13 +25,17 @@ function toFirestoreFields(data) {
         timestampValue: value.toISOString(),
       };
     } else if (typeof value === 'string') {
-      fields[key] = { stringValue: value };
+      fields[key] = {
+        stringValue: value,
+      };
     } else if (typeof value === 'number') {
       fields[key] = Number.isInteger(value)
         ? { integerValue: String(value) }
         : { doubleValue: value };
     } else if (typeof value === 'boolean') {
-      fields[key] = { booleanValue: value };
+      fields[key] = {
+        booleanValue: value,
+      };
     } else {
       fields[key] = {
         stringValue: JSON.stringify(value),
@@ -63,6 +45,57 @@ function toFirestoreFields(data) {
 
   return fields;
 }
+
+/**
+ * Upload one document to Firestore.
+ */
+async function uploadDocument(collectionName, data) {
+  const response = await fetch(
+    `${BASE_URL}/${collectionName}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        fields: toFirestoreFields({
+          ...data,
+          synced_at: new Date(),
+        }),
+      }),
+    },
+  );
+
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      result?.error?.message ||
+        `Failed to sync ${collectionName}`,
+    );
+  }
+
+  return result;
+}
+
+/**
+ * Check whether Firebase/Internet is reachable.
+ */
+export async function isFirebaseAvailable() {
+  try {
+    const response = await fetch(BASE_URL, {
+      method: 'GET',
+    });
+
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Sync functions.
+ */
 
 export async function syncGroup(data) {
   return uploadDocument('groups', data);
@@ -106,4 +139,4 @@ export async function syncExternalFunds(data) {
 
 export async function syncNextOfKin(data) {
   return uploadDocument('next_of_kin', data);
-    }
+          }
