@@ -90,6 +90,14 @@ export type VSLASetupRuleUpdates = {
   leadershipTermMonths?: number;
   shareOutEnabled?: boolean | number;
 };
+export type SyncQueueRecord = {
+  id: number;
+  collection_name: string;
+  record_id: string;
+  data_json: string;
+  synced: number;
+  created_at: string;
+};
 
 /* ============================================================
    FINANCIAL TYPES
@@ -995,6 +1003,16 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
       FOREIGN KEY (actor_member_id) REFERENCES members(id)
     );
+await db.execAsync(`
+  CREATE TABLE IF NOT EXISTS sync_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    collection_name TEXT NOT NULL,
+    record_id TEXT NOT NULL,
+    data_json TEXT NOT NULL,
+    synced INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+`);
 
     CREATE INDEX IF NOT EXISTS idx_members_group
       ON members(group_id);
