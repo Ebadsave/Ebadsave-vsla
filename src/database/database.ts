@@ -1806,6 +1806,13 @@ export async function updateVSLASetupRules(
     data.nonSavingFine ??
     current.non_saving_fine;
 
+  const nonLoanRepayment =
+    data.nonLoanRepaymen ??
+    current.non_loan_repayment_fine;
+  const monInsuranceContribution =
+    data.nonInsurancecontribution ??
+    current.non_insurance;
+  
   const meetingFrequency =
     normalizeText(
       data.meetingFrequency ??
