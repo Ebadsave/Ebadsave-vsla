@@ -538,6 +538,7 @@ async function createDefaultVSLASetupRules(
       absence_fine,
       late_fine,
       non_saving_fine,
+      non_insurance_conribution,
       meeting_frequency,
       cycle_duration_months,
       leadership_term_months,
@@ -546,8 +547,7 @@ async function createDefaultVSLASetupRules(
       updated_at
     )
     VALUES (
-      ?, 1000, 1, 5, 3, 5, 'per month', 12,
-      0, 0, 0, 0, 'weekly', 12, 12, 1, ?, ?
+      0, 0, 0, 0, 0, 'weekly', 12, 12, 1, ?, ?
     )`,
     groupId,
     timestamp,
@@ -1980,6 +1980,7 @@ export async function updateVSLASetupRules(
        social_fund_contribution = ?,
        absence_fine = ?,
        late_fine = ?,
+       non_insurance_contribution = ?,
        non_saving_fine = ?,
        meeting_frequency = ?,
        cycle_duration_months = ?,
@@ -1987,6 +1988,12 @@ export async function updateVSLASetupRules(
        share_out_enabled = ?,
        updated_at = ?
      WHERE group_id = ?`,
+    absence_fine REAL NOT NULL DEFAULT 0,
+late_fine REAL NOT NULL DEFAULT 0,
+non_saving_fine REAL NOT NULL DEFAULT 0,
+non_loan_repayment_fine REAL NOT NULL DEFAULT 0,
+non_insurance_contribution REAL NOT NULL DEFAULT 0,
+meeting_frequency TEXT NOT NULL DEFAULT 'weekly',
     shareValue,
     minimumShares,
     maximumShares,
@@ -1998,6 +2005,8 @@ export async function updateVSLASetupRules(
     absenceFine,
     lateFine,
     nonSavingFine,
+    noninsurancefine,
+    nonloanrepaymentfine,
     meetingFrequency,
     cycleDurationMonths,
     leadershipTermMonths,
