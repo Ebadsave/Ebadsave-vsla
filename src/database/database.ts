@@ -1807,11 +1807,11 @@ export async function updateVSLASetupRules(
     current.non_saving_fine;
 
   const nonLoanRepayment =
-    data.nonLoanRepaymen ??
+    data.nonLoanRepayment ??
     current.non_loan_repayment_fine;
   
   const nonInsuranceContribution =
-    data.nonInsurancecontribution ??
+    data.nonInsuranceContribution ??
     current.non_insurancecontribution;
   
   const meetingFrequency =
@@ -1937,6 +1937,15 @@ export async function updateVSLASetupRules(
     );
   }
 
+  if (
+  !Number.isFinite(nonLoanRepaymentFine) ||
+  nonLoanRepaymentFine < 0
+) {
+  throw new Error(
+    'Non-loan repayment fine cannot be negative.',
+  );
+}
+  
   if (!meetingFrequency) {
     throw new Error(
       'Meeting frequency is required.',
@@ -1982,6 +1991,7 @@ export async function updateVSLASetupRules(
        late_fine = ?,
        non_insurance_contribution = ?,
        non_saving_fine = ?,
+       non_loan_repayment_fine = ?,
        meeting_frequency = ?,
        cycle_duration_months = ?,
        leadership_term_months = ?,
