@@ -1938,7 +1938,7 @@ export async function updateVSLASetupRules(
     );
   }
 
-  if (
+if (
   !Number.isFinite(nonLoanRepaymentFine) ||
   nonLoanRepaymentFine < 0
 ) {
@@ -1949,19 +1949,19 @@ export async function updateVSLASetupRules(
   
   if (
     !Number.isFinite(nonInsuranceContribution) ||
-    nonSavingFine < 0
+    non-insurance contribution < 0
   ) {
     throw new Error(
-      'Non-insirance contribution cannot be negative.',
+      'Non-insurance contribution cannot be negative.',
     );
 }
   
  if(
-  !Number.meetingFrequency) {
+  !meetingFrequency) {
     throw new Error(
       'Meeting frequency is required.',
     );
-  }
+}
 
   if (
     !Number.isInteger(
