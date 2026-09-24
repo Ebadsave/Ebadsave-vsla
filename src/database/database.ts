@@ -104,8 +104,8 @@ export type VSLASetupRuleRecord = {
   absence_fine: number;
   late_fine: number;
   non_saving_fine: number;
-  nn-loan-repayment-fine:number;
-  non-insurance-contribution:number;
+  nn-loan-repayment-fine: number;
+  non-insurance-contribution: number;
   meeting_frequency: string;
   cycle_duration_months: number;
   leadership_term_months: number;
@@ -146,8 +146,8 @@ export type VSLASetupRuleUpdates = {
   absenceFine?: number;
   lateFine?: number;
   nonSavingFine?: number;
-  nonLoanRepaymentFine?:number;
-  nonInsuranceContribution?:number
+  nonLoanRepaymentFine?: number;
+  nonInsuranceContribution?: number
   meetingFrequencyuency?: string;
   cycleDurationMonths?: number;
   leadershipTermMonths?: number;
@@ -162,25 +162,6 @@ export type SyncQueueRecord = {
   created_at: string;
 };
 
-type VSLASetupRuleUpdates = {
-  shareValue?: number;
-  minimumSharesPerMeeting?: number;
-  maximumSharesPerMeeting?: number;
-  maximumLoanMultiple?: number;
-  loanInterestPercentage?: number;
-  loanInterestPeriod?: string;
-  maximumLoanRepaymentPeriod?: number;
-  socialFundContribution?: number;
-  absenceFine?: number;
-  lateFine?: number;
-  nonSavingFine?: number;
-  nonLoanRepaymentFine?: number;
-  nonInsuranceContribution?: number;
-  meetingFrequency?: string;
-  cycleDurationMonths?: number;
-  leadershipTermMonths?: number;
-  shareOutEnabled?: boolean;
-};
 /* ============================================================
    FINANCIAL TYPES
    ============================================================ */
