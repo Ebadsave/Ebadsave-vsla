@@ -104,6 +104,8 @@ export type VSLASetupRuleRecord = {
   absence_fine: number;
   late_fine: number;
   non_saving_fine: number;
+  nn-loan-repayment-fine:number;
+  non-insurance-contribution:number;
   meeting_frequency: string;
   cycle_duration_months: number;
   leadership_term_months: number;
@@ -144,7 +146,9 @@ export type VSLASetupRuleUpdates = {
   absenceFine?: number;
   lateFine?: number;
   nonSavingFine?: number;
-  meetingFrequency?: string;
+  nonLoanRepaymentFine?:number;
+  nonInsuranceContribution?:number
+  meetingFrequencyuency?: string;
   cycleDurationMonths?: number;
   leadershipTermMonths?: number;
   shareOutEnabled?: boolean | number;
