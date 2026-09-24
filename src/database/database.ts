@@ -148,7 +148,7 @@ export type VSLASetupRuleUpdates = {
   nonSavingFine?: number;
   nonLoanRepaymentFine?: number;
   nonInsuranceContribution?: number
-  meetingFrequencyuency?: string;
+  meetingFrequency?: string;
   cycleDurationMonths?: number;
   leadershipTermMonths?: number;
   shareOutEnabled?: boolean | number;
