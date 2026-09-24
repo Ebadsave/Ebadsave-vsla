@@ -1938,31 +1938,29 @@ export async function updateVSLASetupRules(
     );
   }
 
-if (
-  !Number.isFinite(nonLoanRepaymentFine) ||
-  nonLoanRepaymentFine < 0
-) {
-  throw new Error(
-    'Non-loan repayment fine cannot be negative.',
-  );
+  if (
+    !Number.isFinite(nonLoanRepaymentFine) ||
+    nonLoanRepaymentFine < 0
+  ) {
+    throw new Error(
+      'Non-loan repayment fine cannot be negative.',
+    );
   }
-  
+
   if (
     !Number.isFinite(nonInsuranceContribution) ||
-    non-insurance contribution < 0
+    nonInsuranceContribution < 0
   ) {
     throw new Error(
       'Non-insurance contribution cannot be negative.',
     );
-}
-  
- if(
-  !meetingFrequency) {
+  }
+
+  if (!meetingFrequency) {
     throw new Error(
       'Meeting frequency is required.',
     );
 }
-
   if (
     !Number.isInteger(
       cycleDurationMonths,
