@@ -162,6 +162,25 @@ export type SyncQueueRecord = {
   created_at: string;
 };
 
+type VSLASetupRuleUpdates = {
+  shareValue?: number;
+  minimumSharesPerMeeting?: number;
+  maximumSharesPerMeeting?: number;
+  maximumLoanMultiple?: number;
+  loanInterestPercentage?: number;
+  loanInterestPeriod?: string;
+  maximumLoanRepaymentPeriod?: number;
+  socialFundContribution?: number;
+  absenceFine?: number;
+  lateFine?: number;
+  nonSavingFine?: number;
+  nonLoanRepaymentFine?: number;
+  nonInsuranceContribution?: number;
+  meetingFrequency?: string;
+  cycleDurationMonths?: number;
+  leadershipTermMonths?: number;
+  shareOutEnabled?: boolean;
+};
 /* ============================================================
    FINANCIAL TYPES
    ============================================================ */
