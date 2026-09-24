@@ -1937,24 +1937,23 @@ export async function updateVSLASetupRules(
       'Non-saving fine cannot be negative.',
     );
   }
+if (
+  !Number.isFinite(nonLoanRepaymentFine) ||
+  nonLoanRepaymentFine < 0
+) {
+  throw new Error(
+    'Non-loan repayment fine cannot be negative.',
+  );
+    }
 
-  if (
-    !Number.isFinite(nonLoanRepaymentFine) ||
-    nonLoanRepaymentFine < 0
-  ) {
-    throw new Error(
-      'Non-loan repayment fine cannot be negative.',
-    );
-  }
-
-  if (
-    !Number.isFinite(nonInsuranceContribution) ||
-    nonInsuranceContribution < 0
-  ) {
-    throw new Error(
-      'Non-insurance contribution cannot be negative.',
-    );
-  }
+ if (
+  !Number.isFinite(nonInsuranceContribution) ||
+  nonInsuranceContribution < 0
+) {
+  throw new Error(
+    'Non-insurance contribution cannot be negative.',
+  );
+    }
 
   if (!meetingFrequency) {
     throw new Error(
