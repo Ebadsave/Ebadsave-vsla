@@ -1812,12 +1812,14 @@ export async function updateVSLASetupRules(
     current.non_saving_fine;
 
   const nonLoanRepaymentFine =
-    data.nonLoanRepaymentFine === undefined ??
-    current.non_loan_repayment_fine;
+  data.nonLoanRepaymentFine !== undefined
+    ? data.nonLoanRepaymentFine
+    : current.non_loan_repayment_fine;
   
   const nonInsuranceContribution =
-    data.nonInsuranceContribution === undefined ??
-    current.non_insurance_contribution;
+  data.nonInsuranceContribution !== undefined
+    ? data.nonInsuranceContribution
+    : current.non_insurance_contribution;;
   
   const meetingFrequency =
     normalizeText(
@@ -1940,24 +1942,22 @@ export async function updateVSLASetupRules(
     throw new Error(
       'Non-saving fine cannot be negative.',
     );
-  }
-if (
+    }if (
   !Number.isFinite(nonLoanRepaymentFine) ||
   nonLoanRepaymentFine < 0
 ) {
   throw new Error(
     'Non-loan repayment fine cannot be negative.',
   );
-    }
-
- if (
+      }
+if (
   !Number.isFinite(nonInsuranceContribution) ||
   nonInsuranceContribution < 0
 ) {
   throw new Error(
     'Non-insurance contribution cannot be negative.',
   );
-    }
+      }
 
   if (!meetingFrequency) {
     throw new Error(
