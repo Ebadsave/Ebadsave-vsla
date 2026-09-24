@@ -538,6 +538,7 @@ async function createDefaultVSLASetupRules(
       absence_fine,
       late_fine,
       non_saving_fine,
+      non_loan_repayment_fine,
       non_insurance_conribution,
       meeting_frequency,
       cycle_duration_months,
@@ -1812,7 +1813,7 @@ export async function updateVSLASetupRules(
   
   const nonInsuranceContribution =
     data.nonInsuranceContribution ??
-    current.non_insurancecontribution;
+    current.non_insurance_contribution;
   
   const meetingFrequency =
     normalizeText(
@@ -1944,9 +1945,19 @@ export async function updateVSLASetupRules(
   throw new Error(
     'Non-loan repayment fine cannot be negative.',
   );
+  }
+  
+  if (
+    !Number.isFinite(nonInsuranceContribution) ||
+    nonSavingFine < 0
+  ) {
+    throw new Error(
+      'Non-insirance contribution cannot be negative.',
+    );
 }
   
-  if (!meetingFrequency) {
+ if(
+  !Number.meetingFrequency) {
     throw new Error(
       'Meeting frequency is required.',
     );
