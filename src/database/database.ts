@@ -1072,7 +1072,21 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       FOREIGN KEY (member_id) REFERENCES members(id)
     );
 
-    
+    CREATE TABLE IF NOT EXISTS loan_interest_charges (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id INTEGER NOT NULL,
+  member_id INTEGER NOT NULL,
+  loan_month TEXT NOT NULL,
+  opening_balance REAL NOT NULL,
+  interest_percentage REAL NOT NULL,
+  interest_amount REAL NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(member_id, loan_month),
+  FOREIGN KEY (group_id) REFERENCES groups(id),
+  FOREIGN KEY (member_id) REFERENCES members(id)
+);
+
+
       
 
     CREATE INDEX IF NOT EXISTS idx_members_group
@@ -1742,6 +1756,114 @@ export async function getVSLASetupRules(
 
   return rules ?? null;
 }
+
+export async function applyMonthlyLoanInterest(
+  groupId: number,
+  memberId: number,
+): Promise<number> {
+  const db = await getDatabase();
+
+  const setup = await getVSLASetupRules(groupId);
+
+  const interestPercentage =
+    Number.isFinite(setup?.loan_interest_percentage)
+      ? setup!.loan_interest_percentage
+      : 5;
+
+  const issued = await db.getFirstAsync<{ total: number }>(
+    `SELECT COALESCE(SUM(ABS(amount)), 0) AS total
+     FROM financial_transactions
+     WHERE group_id = ?
+       AND member_id = ?
+       AND transaction_type = 'loan_issued'
+       AND reversed = 0`,
+    groupId,
+    memberId,
+  );
+
+  const repayments = await db.getFirstAsync<{ total: number }>(
+    `SELECT COALESCE(SUM(amount), 0) AS total
+     FROM financial_transactions
+     WHERE group_id = ?
+       AND member_id = ?
+       AND transaction_type = 'loan_repayment'
+       AND reversed = 0`,
+    groupId,
+    memberId,
+  );
+
+  const principal = issued?.total ?? 0;
+  const paid = repayments?.total ?? 0;
+
+  if (principal <= 0) {
+    return 0;
+  }
+
+  const currentBalance = Math.max(
+    0,
+    principal - paid,
+  );
+
+  if (currentBalance <= 0) {
+    return 0;
+  }
+
+  const nowDate = new Date();
+
+  const monthKey =
+    `${nowDate.getFullYear()}-${String(
+      nowDate.getMonth() + 1,
+    ).padStart(2, '0')}`;
+
+  const alreadyCharged =
+    await db.getFirstAsync<{ id: number }>(
+      `SELECT id
+       FROM loan_interest_charges
+       WHERE group_id = ?
+       AND member_id = ?
+       AND loan_month = ?
+       LIMIT 1`,
+      groupId,
+      memberId,
+      monthKey,
+    );
+
+  if (alreadyCharged) {
+    return 0;
+  }
+
+  const interest =
+    currentBalance *
+    (interestPercentage / 100);
+
+  if (interest <= 0) {
+    return 0;
+  }
+
+  const timestamp = now();
+
+  await db.runAsync(
+    `INSERT INTO loan_interest_charges (
+      group_id,
+      member_id,
+      loan_month,
+      opening_balance,
+      interest_percentage,
+      interest_amount,
+      created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    groupId,
+    memberId,
+    monthKey,
+    currentBalance,
+    interestPercentage,
+    interest,
+    timestamp,
+  );
+
+  return interest;
+  }
 
 export async function updateVSLASetupRules(
   groupId: number,
@@ -3452,6 +3574,49 @@ export async function recordLoanRepayment(
   );
 }
 
+export async function getMemberLoanBalance(
+  groupId: number,
+  memberId: number,
+): Promise<{
+  principal: number;
+  interest: number;
+  balance: number;
+}> {
+  const db = await getDatabase();
+
+  const issued = await db.getFirstAsync<{ total: number }>(
+    `SELECT COALESCE(SUM(ABS(amount)), 0) AS total
+     FROM financial_transactions
+     WHERE group_id = ?
+       AND member_id = ?
+       AND account_type = 'loan_fund'
+       AND transaction_type = 'loan_issued'
+       AND reversed = 0`,
+    groupId,
+    memberId,
+  );
+
+  const repayments = await db.getFirstAsync<{ total: number }>(
+    `SELECT COALESCE(SUM(amount), 0) AS total
+     FROM financial_transactions
+     WHERE group_id = ?
+       AND member_id = ?
+       AND account_type = 'loan_repayment'
+       AND transaction_type = 'loan_repayment'
+       AND reversed = 0`,
+    groupId,
+    memberId,
+  );
+
+  const principal = issued?.total ?? 0;
+  const paid = repayments?.total ?? 0;
+
+  return {
+    principal,
+    interest: 0,
+    balance: Math.max(0, principal - paid),
+  };
+    }
 export async function recordSocialFund(
   groupId: number,
   amount: number,
