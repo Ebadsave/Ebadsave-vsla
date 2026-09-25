@@ -3491,6 +3491,17 @@ export async function issueLoan(
     );
   }
 
+  const setup =
+    await getVSLASetupRules(groupId);
+
+  const interestPercentage =
+    setup &&
+    Number.isFinite(
+      setup.loan_interest_percentage,
+    )
+      ? setup.loan_interest_percentage
+      : 5;
+
   const timestamp = now();
 
   const result =
@@ -3523,7 +3534,7 @@ export async function issueLoan(
        balance = balance - ?,
        updated_at = ?
      WHERE group_id = ?
-     AND account_type = 'loan_fund'`,
+       AND account_type = 'loan_fund'`,
     amount,
     timestamp,
     groupId,
@@ -3540,6 +3551,42 @@ export async function issueLoan(
     reason,
   );
 
+  /*
+   * Charge the first month's interest immediately.
+   */
+  const issueDate = new Date(timestamp);
+
+  const monthKey =
+    `${issueDate.getFullYear()}-${String(
+      issueDate.getMonth() + 1,
+    ).padStart(2, '0')}`;
+
+  const interest =
+    amount *
+    (interestPercentage / 100);
+
+  if (interest > 0) {
+    await db.runAsync(
+      `INSERT OR IGNORE INTO loan_interest_charges (
+        group_id,
+        member_id,
+        loan_month,
+        opening_balance,
+        interest_percentage,
+        interest_amount,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      groupId,
+      memberId,
+      monthKey,
+      amount,
+      interestPercentage,
+      interest,
+      timestamp,
+    );
+  }
+
   if (dueDate) {
     await db.runAsync(
       `UPDATE loan_records
@@ -3554,7 +3601,8 @@ export async function issueLoan(
   await recordGroupActivity(groupId);
 
   return transactionId;
-}
+  }
+
 
 export async function recordLoanRepayment(
   groupId: number,
