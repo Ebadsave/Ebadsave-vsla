@@ -3608,15 +3608,32 @@ export async function getMemberLoanBalance(
     memberId,
   );
 
+  const interestCharges =
+    await db.getFirstAsync<{ total: number }>(
+      `SELECT COALESCE(SUM(interest_amount), 0) AS total
+       FROM loan_interest_charges
+       WHERE group_id = ?
+         AND member_id = ?`,
+      groupId,
+      memberId,
+    );
+
   const principal = issued?.total ?? 0;
   const paid = repayments?.total ?? 0;
+  const interest = interestCharges?.total ?? 0;
+
+  const balance = Math.max(
+    0,
+    principal + interest - paid,
+  );
 
   return {
     principal,
-    interest: 0,
-    balance: Math.max(0, principal - paid),
+    interest,
+    balance,
   };
-    }
+  }
+
 export async function recordSocialFund(
   groupId: number,
   amount: number,
