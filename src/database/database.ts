@@ -1,23 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import * as Crypto from 'expo-crypto';
 
-
-              if (typeof value === 'boolean') {
-                return [key, { booleanValue: value }];
-              }
-
-              return [key, { stringValue: String(value ?? '') }];
-            }),
-          ),
-        }),
-      },
-    );
-
-    return response.ok;
-  } catch {
-    return false;
-  }
-  }
 export type GroupRecord = {
   id: number;
   group_number: number;
