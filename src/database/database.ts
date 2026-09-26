@@ -1,28 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 import * as Crypto from 'expo-crypto';
-const FIREBASE_PROJECT_ID = 'onesandfourhole';
-const FIREBASE_BASE_URL =
-  `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents`;
 
-async function firebaseCreateDocument(
-  collection: string,
-  documentId: string,
-  data: Record<string, any>,
-): Promise<boolean> {
-  try {
-    const response = await fetch(
-      `${FIREBASE_BASE_URL}/${collection}?documentId=${encodeURIComponent(documentId)}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          fields: Object.fromEntries(
-            Object.entries(data).map(([key, value]) => {
-              if (typeof value === 'number') {
-                return [key, { doubleValue: value }];
-              }
 
               if (typeof value === 'boolean') {
                 return [key, { booleanValue: value }];
