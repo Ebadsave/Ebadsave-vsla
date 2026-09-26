@@ -1,5 +1,17 @@
 import * as SQLite from 'expo-sqlite';
+function simpleHash(value: string): string {
+  let hash = 0;
 
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash << 5) - hash + value.charCodeAt(i);
+    hash |= 0;
+  }
+
+  return Math.abs(hash).toString(36);
+}
+function generateLocalId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
 export type GroupRecord = {
   id: number;
   group_number: number;
@@ -313,10 +325,7 @@ async function hashPasscode(
   passcode: string,
   salt: string,
 ): Promise<string> {
-  return Crypto.digestStringAsync(
-    Crypto.CryptoDigestAlgorithm.SHA256,
-    `${salt}:${passcode}`,
-  );
+  return simpleHash(`${salt}:${passcode}`);
 }
 
 /* ============================================================
@@ -2334,7 +2343,7 @@ export async function registerMember(
   );
 
   const salt =
-    Crypto.randomUUID();
+    generateLocalId();
 
   await db.runAsync(
     `INSERT INTO member_credentials (
@@ -3257,7 +3266,7 @@ export async function createFinancialCollection(
     );
 
   const confirmationCode =
-    Crypto.randomUUID()
+    generateLocalId()
       .replace(/-/g, '')
       .slice(0, 10)
       .toUpperCase();
