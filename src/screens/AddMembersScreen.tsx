@@ -19,7 +19,7 @@ import type { RootStackParamList } from '../../App';
 import {
   getMembersByGroupId,
   registerMember,
-  MemberRecord,
+  updsteMemberRecord,
 } from '../database/database';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AddMembers'>;
@@ -78,6 +78,28 @@ export default function AddMembersScreen({ route }: Props) {
 
     if (!trimmedName) {
       Alert.alert('Required', 'Please enter the member name.');
+     const handleAssignRole = async (
+  member: MemberRecord,
+  role: string,
+) => {
+  try {
+    await updateMemberRole(member.id, role);
+
+    await loadMembers();
+
+    Alert.alert(
+      'Role Assigned',
+      `${member.full_name} is now ${role === 'executive' ? 'an Executive' : 'a Member'}.`,
+    );
+  } catch (error) {
+    console.error('Failed to assign role:', error);
+
+    Alert.alert(
+      'Error',
+      'The member role could not be updated.',
+    );
+  }
+};
       return;
     }
 
