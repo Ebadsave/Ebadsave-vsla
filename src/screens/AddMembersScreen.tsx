@@ -283,38 +283,78 @@ export default function AddMembersScreen({ route }: Props) {
             ) : (
               members.map((member) => (
                 <View key={member.id} style={styles.memberCard}>
-                  <View style={styles.memberNumberCircle}>
-                    <Text style={styles.memberNumberText}>
-                      {member.member_number.replace('KYA', '')}
-                    </Text>
-                  </View>
+  <View style={styles.memberNumberCircle}>
+    <Text style={styles.memberNumberText}>
+      {member.member_number.replace('KYA', '')}
+    </Text>
+  </View>
 
-                  <View style={styles.memberInfo}>
-                    <Text style={styles.memberName}>
-                      {member.full_name}
-                    </Text>
+  <View style={styles.memberInfo}>
+    <Text style={styles.memberName}>
+      {member.full_name}
+    </Text>
 
-                    <Text style={styles.memberNumber}>
-                      {member.member_number}
-                    </Text>
+    <Text style={styles.memberNumber}>
+      {member.member_number}
+    </Text>
 
-                    <Text style={styles.memberDetails}>
-                      {member.gender} • {member.age} years
-                    </Text>
+    <Text style={styles.memberDetails}>
+      {member.gender} • {member.age} years
+    </Text>
 
-                    <Text style={styles.memberDetails}>
-                      {member.cell} • {member.district}
-                    </Text>
-                  </View>
-                </View>
-              ))
-            )}
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
-  );
-}
+    <Text style={styles.memberDetails}>
+      {member.cell} • {member.district}
+    </Text>
+
+    <Text style={styles.roleText}>
+      Role: {member.role || 'member'}
+    </Text>
+
+    <View style={styles.roleRow}>
+      <TouchableOpacity
+        style={[
+          styles.roleButton,
+          member.role?.toLowerCase() === 'executive' &&
+            styles.activeRoleButton,
+        ]}
+        onPress={() =>
+          handleAssignRole(member, 'executive')
+        }
+      >
+        <Text
+          style={[
+            styles.roleButtonText,
+            member.role?.toLowerCase() === 'executive' &&
+              styles.activeRoleButtonText,
+          ]}
+        >
+          Executive
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[
+          styles.roleButton,
+          member.role?.toLowerCase() !== 'executive' &&
+            styles.activeRoleButton,
+        ]}
+        onPress={() =>
+          handleAssignRole(member, 'member')
+        }
+      >
+        <Text
+          style={[
+            styles.roleButtonText,
+            member.role?.toLowerCase() !== 'executive' &&
+              styles.activeRoleButtonText,
+          ]}
+        >
+          Member
+        </Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+</View>
 
 const styles = StyleSheet.create({
   container: {
@@ -497,4 +537,39 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#6b7280',
   },
+  roleText: {
+  marginTop: 6,
+  fontSize: 13,
+  fontWeight: '700',
+  color: '#374151',
+},
+
+roleRow: {
+  flexDirection: 'row',
+  marginTop: 10,
+  gap: 8,
+},
+
+roleButton: {
+  borderWidth: 1,
+  borderColor: '#16a34a',
+  borderRadius: 7,
+  paddingHorizontal: 12,
+  paddingVertical: 7,
+  backgroundColor: '#ffffff',
+},
+
+activeRoleButton: {
+  backgroundColor: '#16a34a',
+},
+
+roleButtonText: {
+  color: '#16a34a',
+  fontSize: 13,
+  fontWeight: '700',
+},
+
+activeRoleButtonText: {
+  color: '#ffffff',
+},
 });
