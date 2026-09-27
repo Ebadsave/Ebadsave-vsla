@@ -2166,6 +2166,20 @@ export async function getMembersByGroupId(
   );
 }
 
+export async function updateMemberRole(
+  memberId: number,
+  role: string,
+): Promise<void> {
+  const db = await dbPromise;
+
+  await db.runAsync(
+    `UPDATE members
+     SET role = ?
+     WHERE id = ?`,
+    role,
+    memberId,
+  );
+}
 async function getNextMemberSequence(
   db: SQLite.SQLiteDatabase,
   groupId: number,
