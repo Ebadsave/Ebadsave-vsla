@@ -19,7 +19,8 @@ import type { RootStackParamList } from '../../App';
 import {
   getMembersByGroupId,
   registerMember,
-  updsteMemberRecord,
+  updateMemberRole,
+  MemberRecord,
 } from '../database/database';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AddMembers'>;
@@ -77,56 +78,55 @@ export default function AddMembersScreen({ route }: Props) {
     const trimmedDistrict = district.trim();
 
     if (!trimmedName) {
-      Alert.alert('Required', 'Please enter the member name.');
-     const handleAssignRole = async (
-  member: MemberRecord,
-  role: string,
-) => {
-  try {
-    await updateMemberRole(member.id, role);
-
-    await loadMembers();
-
-    Alert.alert(
-      'Role Assigned',
-      `${member.full_name} is now ${role === 'executive' ? 'an Executive' : 'a Member'}.`,
-    );
-  } catch (error) {
-    console.error('Failed to assign role:', error);
-
-    Alert.alert(
-      'Error',
-      'The member role could not be updated.',
-    );
-  }
-};
+      Alert.alert(
+        'Required',
+        'Please enter the member name.',
+      );
       return;
     }
 
     if (!trimmedGender) {
-      Alert.alert('Required', 'Please enter the member gender.');
+      Alert.alert(
+        'Required',
+        'Please enter the member gender.',
+      );
       return;
     }
 
     if (!trimmedAge) {
-      Alert.alert('Required', 'Please enter the member age.');
+      Alert.alert(
+        'Required',
+        'Please enter the member age.',
+      );
       return;
     }
 
     const numericAge = Number(trimmedAge);
 
-    if (!Number.isInteger(numericAge) || numericAge <= 0) {
-      Alert.alert('Invalid Age', 'Please enter a valid age.');
+    if (
+      !Number.isInteger(numericAge) ||
+      numericAge <= 0
+    ) {
+      Alert.alert(
+        'Invalid Age',
+        'Please enter a valid age.',
+      );
       return;
     }
 
     if (!trimmedCell) {
-      Alert.alert('Required', 'Please enter the cell.');
+      Alert.alert(
+        'Required',
+        'Please enter the cell.',
+      );
       return;
     }
 
     if (!trimmedDistrict) {
-      Alert.alert('Required', 'Please enter the district.');
+      Alert.alert(
+        'Required',
+        'Please enter the district.',
+      );
       return;
     }
 
@@ -154,7 +154,10 @@ export default function AddMembersScreen({ route }: Props) {
         `Member registered successfully.\nMember ID: ${memberId}`,
       );
     } catch (error) {
-      console.error('Failed to register member:', error);
+      console.error(
+        'Failed to register member:',
+        error,
+      );
 
       Alert.alert(
         'Registration Failed',
@@ -167,23 +170,71 @@ export default function AddMembersScreen({ route }: Props) {
     }
   };
 
+  const handleAssignRole = async (
+    member: MemberRecord,
+    role: string,
+  ) => {
+    try {
+      await updateMemberRole(
+        member.id,
+        role,
+      );
+
+      await loadMembers();
+
+      Alert.alert(
+        'Role Updated',
+        `${member.full_name} is now ${
+          role === 'executive'
+            ? 'an Executive'
+            : 'a Member'
+        }.`,
+      );
+    } catch (error) {
+      console.error(
+        'Failed to update member role:',
+        error,
+      );
+
+      Alert.alert(
+        'Error',
+        'The member role could not be updated.',
+      );
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={
+          Platform.OS === 'ios'
+            ? 'padding'
+            : undefined
+        }
       >
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>Members</Text>
+          <Text style={styles.headerTitle}>
+            Members
+          </Text>
 
           <TouchableOpacity
             style={styles.addButton}
-            onPress={() => setShowForm((current) => !current)}
+            onPress={() =>
+              setShowForm(
+                (current) => !current,
+              )
+            }
             activeOpacity={0.8}
           >
-            <Text style={styles.plus}>+</Text>
+            <Text style={styles.plus}>
+              +
+            </Text>
+
             <Text style={styles.addButtonText}>
-              {showForm ? 'Close' : 'Add Member'}
+              {showForm
+                ? 'Close'
+                : 'Add Member'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -194,9 +245,14 @@ export default function AddMembersScreen({ route }: Props) {
         >
           {showForm && (
             <View style={styles.formCard}>
-              <Text style={styles.formTitle}>Register Member</Text>
+              <Text style={styles.formTitle}>
+                Register Member
+              </Text>
 
-              <Text style={styles.label}>Member Name</Text>
+              <Text style={styles.label}>
+                Member Name
+              </Text>
+
               <TextInput
                 style={styles.input}
                 value={fullName}
@@ -205,7 +261,10 @@ export default function AddMembersScreen({ route }: Props) {
                 placeholderTextColor="#9ca3af"
               />
 
-              <Text style={styles.label}>Gender</Text>
+              <Text style={styles.label}>
+                Gender
+              </Text>
+
               <TextInput
                 style={styles.input}
                 value={gender}
@@ -214,7 +273,10 @@ export default function AddMembersScreen({ route }: Props) {
                 placeholderTextColor="#9ca3af"
               />
 
-              <Text style={styles.label}>Age</Text>
+              <Text style={styles.label}>
+                Age
+              </Text>
+
               <TextInput
                 style={styles.input}
                 value={age}
@@ -224,7 +286,10 @@ export default function AddMembersScreen({ route }: Props) {
                 keyboardType="number-pad"
               />
 
-              <Text style={styles.label}>Phone</Text>
+              <Text style={styles.label}>
+                Phone
+              </Text>
+
               <TextInput
                 style={styles.input}
                 value={phone}
@@ -234,7 +299,10 @@ export default function AddMembersScreen({ route }: Props) {
                 keyboardType="phone-pad"
               />
 
-              <Text style={styles.label}>Cell</Text>
+              <Text style={styles.label}>
+                Cell
+              </Text>
+
               <TextInput
                 style={styles.input}
                 value={cell}
@@ -243,7 +311,10 @@ export default function AddMembersScreen({ route }: Props) {
                 placeholderTextColor="#9ca3af"
               />
 
-              <Text style={styles.label}>District</Text>
+              <Text style={styles.label}>
+                District
+              </Text>
+
               <TextInput
                 style={styles.input}
                 value={district}
@@ -255,14 +326,19 @@ export default function AddMembersScreen({ route }: Props) {
               <TouchableOpacity
                 style={[
                   styles.saveButton,
-                  saving && styles.disabledButton,
+                  saving &&
+                    styles.disabledButton,
                 ]}
                 onPress={handleSaveMember}
                 disabled={saving}
                 activeOpacity={0.8}
               >
-                <Text style={styles.saveButtonText}>
-                  {saving ? 'Saving...' : 'Save Member'}
+                <Text
+                  style={styles.saveButtonText}
+                >
+                  {saving
+                    ? 'Saving...'
+                    : 'Save Member'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -270,91 +346,159 @@ export default function AddMembersScreen({ route }: Props) {
 
           <View style={styles.membersSection}>
             <Text style={styles.sectionTitle}>
-              Registered Members ({members.length})
+              Registered Members (
+              {members.length}
+              )
             </Text>
 
             {members.length === 0 ? (
               <View style={styles.emptyCard}>
-                <Text style={styles.emptyTitle}>No members yet</Text>
+                <Text style={styles.emptyTitle}>
+                  No members yet
+                </Text>
+
                 <Text style={styles.emptyText}>
-                  Tap + Add Member to register the first member.
+                  Tap + Add Member to register
+                  the first member.
                 </Text>
               </View>
             ) : (
-              members.map((member) => (
-                <View key={member.id} style={styles.memberCard}>
-  <View style={styles.memberNumberCircle}>
-    <Text style={styles.memberNumberText}>
-      {member.member_number.replace('KYA', '')}
-    </Text>
-  </View>
+              members.map((member) => {
+                const isExecutive =
+                  member.role
+                    ?.toLowerCase() ===
+                  'executive';
 
-  <View style={styles.memberInfo}>
-    <Text style={styles.memberName}>
-      {member.full_name}
-    </Text>
+                return (
+                  <View
+                    key={member.id}
+                    style={styles.memberCard}
+                  >
+                    <View
+                      style={
+                        styles.memberNumberCircle
+                      }
+                    >
+                      <Text
+                        style={
+                          styles.memberNumberText
+                        }
+                      >
+                        {member.member_number.replace(
+                          'KYA',
+                          '',
+                        )}
+                      </Text>
+                    </View>
 
-    <Text style={styles.memberNumber}>
-      {member.member_number}
-    </Text>
+                    <View
+                      style={styles.memberInfo}
+                    >
+                      <Text
+                        style={styles.memberName}
+                      >
+                        {member.full_name}
+                      </Text>
 
-    <Text style={styles.memberDetails}>
-      {member.gender} • {member.age} years
-    </Text>
+                      <Text
+                        style={
+                          styles.memberNumber
+                        }
+                      >
+                        {member.member_number}
+                      </Text>
 
-    <Text style={styles.memberDetails}>
-      {member.cell} • {member.district}
-    </Text>
+                      <Text
+                        style={
+                          styles.memberDetails
+                        }
+                      >
+                        {member.gender} •{' '}
+                        {member.age} years
+                      </Text>
 
-    <Text style={styles.roleText}>
-      Role: {member.role || 'member'}
-    </Text>
+                      <Text
+                        style={
+                          styles.memberDetails
+                        }
+                      >
+                        {member.cell} •{' '}
+                        {member.district}
+                      </Text>
 
-    <View style={styles.roleRow}>
-      <TouchableOpacity
-        style={[
-          styles.roleButton,
-          member.role?.toLowerCase() === 'executive' &&
-            styles.activeRoleButton,
-        ]}
-        onPress={() =>
-          handleAssignRole(member, 'executive')
-        }
-      >
-        <Text
-          style={[
-            styles.roleButtonText,
-            member.role?.toLowerCase() === 'executive' &&
-              styles.activeRoleButtonText,
-          ]}
-        >
-          Executive
-        </Text>
-      </TouchableOpacity>
+                      <Text
+                        style={styles.roleText}
+                      >
+                        Role:{' '}
+                        {isExecutive
+                          ? 'Executive'
+                          : 'Member'}
+                      </Text>
 
-      <TouchableOpacity
-        style={[
-          styles.roleButton,
-          member.role?.toLowerCase() !== 'executive' &&
-            styles.activeRoleButton,
-        ]}
-        onPress={() =>
-          handleAssignRole(member, 'member')
-        }
-      >
-        <Text
-          style={[
-            styles.roleButtonText,
-            member.role?.toLowerCase() !== 'executive' &&
-              styles.activeRoleButtonText,
-          ]}
-        >
-          Member
-        </Text>
-      </TouchableOpacity>
-    </View>
-  </View>
-</View>
+                      <View
+                        style={styles.roleRow}
+                      >
+                        <TouchableOpacity
+                          style={[
+                            styles.roleButton,
+                            isExecutive &&
+                              styles.activeRoleButton,
+                          ]}
+                          onPress={() =>
+                            handleAssignRole(
+                              member,
+                              'executive',
+                            )
+                          }
+                          activeOpacity={0.8}
+                        >
+                          <Text
+                            style={[
+                              styles.roleButtonText,
+                              isExecutive &&
+                                styles.activeRoleButtonText,
+                            ]}
+                          >
+                            Executive
+                          </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[
+                            styles.roleButton,
+                            !isExecutive &&
+                              styles.activeRoleButton,
+                          ]}
+                          onPress={() =>
+                            handleAssignRole(
+                              member,
+                              'member',
+                            )
+                          }
+                          activeOpacity={0.8}
+                        >
+                          <Text
+                            style={[
+                              styles.roleButtonText,
+                              !isExecutive &&
+                                styles.activeRoleButtonText,
+                            ]}
+                          >
+                            Member
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  </View>
+                );
+              })
+            )}
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
 
 const styles = StyleSheet.create({
   container: {
@@ -491,7 +635,7 @@ const styles = StyleSheet.create({
 
   memberCard: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     borderWidth: 1,
     borderColor: '#e5e7eb',
     borderRadius: 12,
@@ -537,39 +681,40 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#6b7280',
   },
+
   roleText: {
-  marginTop: 6,
-  fontSize: 13,
-  fontWeight: '700',
-  color: '#374151',
-},
+    marginTop: 7,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#374151',
+  },
 
-roleRow: {
-  flexDirection: 'row',
-  marginTop: 10,
-  gap: 8,
-},
+  roleRow: {
+    flexDirection: 'row',
+    marginTop: 10,
+  },
 
-roleButton: {
-  borderWidth: 1,
-  borderColor: '#16a34a',
-  borderRadius: 7,
-  paddingHorizontal: 12,
-  paddingVertical: 7,
-  backgroundColor: '#ffffff',
-},
+  roleButton: {
+    borderWidth: 1,
+    borderColor: '#16a34a',
+    borderRadius: 7,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: '#ffffff',
+    marginRight: 8,
+  },
 
-activeRoleButton: {
-  backgroundColor: '#16a34a',
-},
+  activeRoleButton: {
+    backgroundColor: '#16a34a',
+  },
 
-roleButtonText: {
-  color: '#16a34a',
-  fontSize: 13,
-  fontWeight: '700',
-},
+  roleButtonText: {
+    color: '#16a34a',
+    fontSize: 13,
+    fontWeight: '700',
+  },
 
-activeRoleButtonText: {
-  color: '#ffffff',
-},
+  activeRoleButtonText: {
+    color: '#ffffff',
+  },
 });
