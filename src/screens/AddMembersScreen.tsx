@@ -19,11 +19,27 @@ import type { RootStackParamList } from '../../App';
 import {
   getMembersByGroupId,
   registerMember,
-  updateMemberRole,
+  updateMemberRoles,
   MemberRecord,
 } from '../database/database';
 
-type Props = NativeStackScreenProps<RootStackParamList, 'AddMembers'>;
+type Props = NativeStackScreenProps<
+  RootStackParamList,
+  'AddMembers'
+>;
+
+const EXECUTIVE_ROLES = [
+  'Chairperson',
+  'Vice Chairperson',
+  'Secretary',
+  'Treasurer',
+  'Loan Officer',
+  'Key Holder 1',
+  'Key Holder 2',
+  'Key Holder 3',
+  'Money Counter',
+  'Supervisor',
+];
 
 export default function AddMembersScreen({ route }: Props) {
   const { groupId } = route.params;
@@ -38,6 +54,10 @@ export default function AddMembersScreen({ route }: Props) {
   const [cell, setCell] = useState('');
   const [district, setDistrict] = useState('');
 
+  const [isSuperUser, setIsSuperUser] = useState(false);
+  const [selectedRoles, setSelectedRoles] =
+    useState<string[]>(['Member']);
+
   const [saving, setSaving] = useState(false);
 
   const loadMembers = useCallback(async () => {
@@ -45,7 +65,10 @@ export default function AddMembersScreen({ route }: Props) {
       const result = await getMembersByGroupId(groupId);
       setMembers(result);
     } catch (error) {
-      console.error('Failed to load members:', error);
+      console.error(
+        'Failed to load members:',
+        error,
+      );
 
       Alert.alert(
         'Error',
@@ -67,6 +90,56 @@ export default function AddMembersScreen({ route }: Props) {
     setPhone('');
     setCell('');
     setDistrict('');
+
+    setIsSuperUser(false);
+    setSelectedRoles(['Member']);
+  };
+
+  const toggleSuperUser = () => {
+    const nextValue = !isSuperUser;
+
+    setIsSuperUser(nextValue);
+
+    if (nextValue) {
+      setSelectedRoles(['Chairperson']);
+    } else {
+      setSelectedRoles(['Member']);
+    }
+  };
+
+  const toggleRole = (role: string) => {
+    if (isSuperUser) {
+      return;
+    }
+
+    setSelectedRoles((current) => {
+      const exists = current.includes(role);
+
+      if (exists) {
+        const updated = current.filter(
+          (item) => item !== role,
+        );
+
+        return updated.length === 0
+          ? ['Member']
+          : updated;
+      }
+
+      const withoutMember = current.filter(
+        (item) => item !== 'Member',
+      );
+
+      if (withoutMember.length >= 2) {
+        Alert.alert(
+          'Maximum 2 Roles',
+          'A normal Executive can have a maximum of 2 executive roles.',
+        );
+
+        return current;
+      }
+
+      return [...withoutMember, role];
+    });
   };
 
   const handleSaveMember = async () => {
@@ -144,6 +217,12 @@ export default function AddMembersScreen({ route }: Props) {
         null,
       );
 
+      await updateMemberRoles(
+        memberId,
+        isSuperUser,
+        selectedRoles,
+      );
+
       await loadMembers();
 
       clearForm();
@@ -170,25 +249,32 @@ export default function AddMembersScreen({ route }: Props) {
     }
   };
 
-  const handleAssignRole = async (
+  const handleChangeExistingRole = async (
     member: MemberRecord,
-    role: string,
+    makeExecutive: boolean,
   ) => {
     try {
-      await updateMemberRole(
-        member.id,
-        role,
-      );
+      if (!makeExecutive) {
+        await updateMemberRoles(
+          member.id,
+          false,
+          ['Member'],
+        );
+      } else {
+        await updateMemberRoles(
+          member.id,
+          false,
+          ['Chairperson'],
+        );
+      }
 
       await loadMembers();
 
       Alert.alert(
         'Role Updated',
-        `${member.full_name} is now ${
-          role === 'executive'
-            ? 'an Executive'
-            : 'a Member'
-        }.`,
+        makeExecutive
+          ? `${member.full_name} is now an Executive.`
+          : `${member.full_name} is now a Member.`,
       );
     } catch (error) {
       console.error(
@@ -323,6 +409,149 @@ export default function AddMembersScreen({ route }: Props) {
                 placeholderTextColor="#9ca3af"
               />
 
+              {/* SUPER USER */}
+              <View style={styles.superUserCard}>
+                <TouchableOpacity
+                  style={styles.checkboxRow}
+                  onPress={toggleSuperUser}
+                  activeOpacity={0.8}
+                >
+                  <View
+                    style={[
+                      styles.checkbox,
+                      isSuperUser &&
+                        styles.checkboxChecked,
+                    ]}
+                  >
+                    {isSuperUser && (
+                      <Text
+                        style={styles.checkmark}
+                      >
+                        ✓
+                      </Text>
+                    )}
+                  </View>
+
+                  <View
+                    style={styles.checkboxTextArea}
+                  >
+                    <Text
+                      style={
+                        styles.superUserTitle
+                      }
+                    >
+                      Chairperson is Group Admin
+                    </Text>
+
+                    <Text
+                      style={
+                        styles.superUserDescription
+                      }
+                    >
+                      Super User - Full access
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+
+                {isSuperUser && (
+                  <View
+                    style={styles.superUserBanner}
+                  >
+                    <Text
+                      style={
+                        styles.superUserBannerText
+                      }
+                    >
+                      SUPER USER - All Permissions
+                      Granted
+                    </Text>
+
+                    <Text
+                      style={
+                        styles.superUserBannerSubtext
+                      }
+                    >
+                      Chairperson, Group Admin and
+                      all executive permissions are
+                      automatically assigned.
+                    </Text>
+                  </View>
+                )}
+              </View>
+
+              {/* ROLE SELECTION */}
+              <View
+                style={[
+                  styles.rolesCard,
+                  isSuperUser &&
+                    styles.rolesCardDisabled,
+                ]}
+              >
+                <Text style={styles.rolesTitle}>
+                  Choose Roles To Assign
+                </Text>
+
+                <Text style={styles.rolesLimit}>
+                  Normal Executive: Maximum 2
+                  roles
+                </Text>
+
+                {EXECUTIVE_ROLES.map((role) => {
+                  const selected =
+                    selectedRoles.includes(role);
+
+                  return (
+                    <TouchableOpacity
+                      key={role}
+                      style={styles.roleSelectRow}
+                      disabled={isSuperUser}
+                      onPress={() =>
+                        toggleRole(role)
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <View
+                        style={[
+                          styles.roleCheckbox,
+                          selected &&
+                            styles.roleCheckboxSelected,
+                        ]}
+                      >
+                        {selected && (
+                          <Text
+                            style={
+                              styles.roleCheckmark
+                            }
+                          >
+                            ✓
+                          </Text>
+                        )}
+                      </View>
+
+                      <Text
+                        style={[
+                          styles.roleSelectText,
+                          isSuperUser &&
+                            styles.disabledRoleText,
+                        ]}
+                      >
+                        {role}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+
+                <View
+                  style={styles.memberRoleRow}
+                >
+                  <Text
+                    style={styles.memberRoleText}
+                  >
+                    ✓ Member
+                  </Text>
+                </View>
+              </View>
+
               <TouchableOpacity
                 style={[
                   styles.saveButton,
@@ -368,6 +597,21 @@ export default function AddMembersScreen({ route }: Props) {
                   member.role
                     ?.toLowerCase() ===
                   'executive';
+
+                const isSuperUserMember =
+                  Number(
+                    member.is_super_user ?? 0,
+                  ) === 1;
+
+                const assignedRoles =
+                  member.assigned_roles
+                    ? member.assigned_roles
+                        .split(',')
+                        .map((role) =>
+                          role.trim(),
+                        )
+                        .filter(Boolean)
+                    : [];
 
                 return (
                   <View
@@ -429,11 +673,43 @@ export default function AddMembersScreen({ route }: Props) {
                       <Text
                         style={styles.roleText}
                       >
-                        Role:{' '}
+                        Status:{' '}
                         {isExecutive
                           ? 'Executive'
                           : 'Member'}
                       </Text>
+
+                      {isSuperUserMember && (
+                        <View
+                          style={
+                            styles.superUserMemberBadge
+                          }
+                        >
+                          <Text
+                            style={
+                              styles.superUserMemberBadgeText
+                            }
+                          >
+                            SUPER USER
+                          </Text>
+                        </View>
+                      )}
+
+                      {assignedRoles.length >
+                        0 && (
+                        <Text
+                          style={
+                            styles.assignedRolesText
+                          }
+                        >
+                          Roles:{' '}
+                          {isSuperUserMember
+                            ? 'All Executive Roles'
+                            : assignedRoles.join(
+                                ', ',
+                              )}
+                        </Text>
+                      )}
 
                       <View
                         style={styles.roleRow}
@@ -445,9 +721,9 @@ export default function AddMembersScreen({ route }: Props) {
                               styles.activeRoleButton,
                           ]}
                           onPress={() =>
-                            handleAssignRole(
+                            handleChangeExistingRole(
                               member,
-                              'executive',
+                              true,
                             )
                           }
                           activeOpacity={0.8}
@@ -470,9 +746,9 @@ export default function AddMembersScreen({ route }: Props) {
                               styles.activeRoleButton,
                           ]}
                           onPress={() =>
-                            handleAssignRole(
+                            handleChangeExistingRole(
                               member,
-                              'member',
+                              false,
                             )
                           }
                           activeOpacity={0.8}
@@ -583,6 +859,154 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
   },
 
+  superUserCard: {
+    marginTop: 18,
+    borderWidth: 1,
+    borderColor: '#16a34a',
+    borderRadius: 10,
+    padding: 12,
+    backgroundColor: '#f0fdf4',
+  },
+
+  checkboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderWidth: 2,
+    borderColor: '#16a34a',
+    borderRadius: 5,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+  },
+
+  checkboxChecked: {
+    backgroundColor: '#16a34a',
+  },
+
+  checkmark: {
+    color: '#ffffff',
+    fontSize: 17,
+    fontWeight: '800',
+  },
+
+  checkboxTextArea: {
+    marginLeft: 10,
+    flex: 1,
+  },
+
+  superUserTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111827',
+  },
+
+  superUserDescription: {
+    marginTop: 2,
+    fontSize: 12,
+    color: '#16a34a',
+  },
+
+  superUserBanner: {
+    marginTop: 12,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#16a34a',
+  },
+
+  superUserBannerText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+
+  superUserBannerSubtext: {
+    marginTop: 4,
+    color: '#dcfce7',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+
+  rolesCard: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 10,
+    padding: 12,
+    backgroundColor: '#ffffff',
+  },
+
+  rolesCardDisabled: {
+    opacity: 0.45,
+  },
+
+  rolesTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111827',
+  },
+
+  rolesLimit: {
+    marginTop: 3,
+    marginBottom: 8,
+    fontSize: 12,
+    color: '#6b7280',
+  },
+
+  roleSelectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 9,
+  },
+
+  roleCheckbox: {
+    width: 22,
+    height: 22,
+    borderWidth: 1.5,
+    borderColor: '#16a34a',
+    borderRadius: 5,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+  },
+
+  roleCheckboxSelected: {
+    backgroundColor: '#16a34a',
+  },
+
+  roleCheckmark: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+
+  roleSelectText: {
+    marginLeft: 10,
+    fontSize: 14,
+    color: '#374151',
+  },
+
+  disabledRoleText: {
+    color: '#9ca3af',
+  },
+
+  memberRoleRow: {
+    marginTop: 4,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+  },
+
+  memberRoleText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#16a34a',
+  },
+
   saveButton: {
     backgroundColor: '#16a34a',
     borderRadius: 9,
@@ -686,6 +1110,28 @@ const styles = StyleSheet.create({
     marginTop: 7,
     fontSize: 13,
     fontWeight: '700',
+    color: '#374151',
+  },
+
+  superUserMemberBadge: {
+    alignSelf: 'flex-start',
+    marginTop: 7,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 5,
+    backgroundColor: '#16a34a',
+  },
+
+  superUserMemberBadgeText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+
+  assignedRolesText: {
+    marginTop: 6,
+    fontSize: 12,
+    lineHeight: 17,
     color: '#374151',
   },
 
