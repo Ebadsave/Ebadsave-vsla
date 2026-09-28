@@ -998,6 +998,3 @@ const styles = StyleSheet.create({
   },
 });
 
-This is still a single collection screen: savings, loan repayment, social fund, insurance, late fine, absence fine, non-loan repayment, and non-insurance payment are all together.
-
-The next step should be connecting MAKE PAYMENT to your existing SQLite financial functions so that one member's payments are actually recorded together for that meeting/day, rather than changing the UI again.
