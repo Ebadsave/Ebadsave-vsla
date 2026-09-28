@@ -1,7 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+
 import {
   Alert,
-  Image,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -12,12 +17,13 @@ import {
 } from 'react-native';
 
 import {
+  getFinancialTransactions,
+  getMemberSavings,
   getMembersByGroupId,
   getVSLASetupRules,
-  getMemberSavings,
 } from '../database/database';
 
-type Props = {
+type MemberCollectionScreenProps = {
   route?: {
     params?: {
       groupId?: number;
@@ -32,11 +38,38 @@ type Member = {
   full_name: string;
   status: string;
   photo_uri?: string | null;
-  role?: string | null;
+  role?: string;
 };
 
-export default function MemberCollectionScreen({ route }: Props) {
-  const groupId = route?.params?.groupId;
+type FinancialTransaction = {
+  id: number;
+  group_id: number;
+  member_id: number | null;
+  meeting_id?: number | null;
+  account_type: string;
+  transaction_type: string;
+  amount: number;
+  reason?: string | null;
+  created_at: string;
+  reversed?: number;
+};
+
+const formatUGX = (amount: number): string => {
+  const safeAmount = Number.isFinite(amount) ? amount : 0;
+
+  return `UGX ${safeAmount.toLocaleString('en-UG')}`;
+};
+
+const normalizeTransactionType = (
+  value: string | null | undefined,
+): string => {
+  return String(value ?? '').toLowerCase().replace(/[\s-]/g, '_');
+};
+
+export default function MemberCollectionScreen({
+  route,
+}: MemberCollectionScreenProps) {
+  const groupId = route?.params?.groupId ?? 0;
   const meetingId = route?.params?.meetingId ?? null;
 
   const [members, setMembers] = useState<Member[]>([]);
@@ -47,72 +80,51 @@ export default function MemberCollectionScreen({ route }: Props) {
   const [shareValue, setShareValue] = useState(0);
   const [totalSavings, setTotalSavings] = useState(0);
 
+  const [loanIssued, setLoanIssued] = useState(0);
+  const [loanRepaid, setLoanRepaid] = useState(0);
+  const [loanDue, setLoanDue] = useState(0);
+  const [loanBalance, setLoanBalance] = useState(0);
+
   const [sharesToday, setSharesToday] = useState('');
-  const [loanPayment, setLoanPayment] = useState('');
+
+  const [loanRepayment, setLoanRepayment] = useState('');
   const [socialFund, setSocialFund] = useState('');
   const [insurance, setInsurance] = useState('');
+
   const [lateFine, setLateFine] = useState('');
   const [absenceFine, setAbsenceFine] = useState('');
-  const [nonLoanRepayment, setNonLoanRepayment] = useState('');
-  const [nonInsurancePayment, setNonInsurancePayment] = useState('');
+  const [nonLoanRepaymentFine, setNonLoanRepaymentFine] =
+    useState('');
+  const [nonInsurancePayment, setNonInsurancePayment] =
+    useState('');
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   const selectedMember = members[selectedIndex];
 
   /*
-   * Members are already stored in A-Z order.
-   * Search works by member name OR member number.
+   * ---------------------------------------------------------
+   * LOAD MEMBERS
+   * ---------------------------------------------------------
    */
-  const filteredMembers = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
 
-    if (!query) {
-      return members;
-    }
-
-    return members.filter((member) => {
-      return (
-        member.full_name.toLowerCase().includes(query) ||
-        member.member_number.toLowerCase().includes(query)
-      );
-    });
-  }, [members, searchQuery]);
-
-  useEffect(() => {
-    loadMembers();
-  }, [groupId]);
-
-  useEffect(() => {
-    if (selectedMember && groupId) {
-      loadMemberData(selectedMember.id);
-    }
-  }, [selectedMember?.id, groupId]);
-
-  async function loadMembers() {
+  const loadMembers = useCallback(async () => {
     if (!groupId) {
-      Alert.alert(
-        'No Active Group',
-        'Please select or register an active group first.',
-      );
-      setLoading(false);
+      setMembers([]);
       return;
     }
 
     try {
       setLoading(true);
 
-      const [groupMembers, rules] = await Promise.all([
-        getMembersByGroupId(groupId),
-        getVSLASetupRules(groupId),
-      ]);
+      const result = await getMembersByGroupId(groupId);
 
-      /*
-       * Always keep active members in alphabetical A-Z order.
-       */
-      const sortedMembers = groupMembers
-        .filter((member) => member.status === 'active')
-        .sort((a, b) =>
+      const activeMembers = (result ?? [])
+        .filter(
+          (member: Member) =>
+            String(member.status).toLowerCase() === 'active',
+        )
+        .sort((a: Member, b: Member) =>
           a.full_name.localeCompare(
             b.full_name,
             undefined,
@@ -122,89 +134,342 @@ export default function MemberCollectionScreen({ route }: Props) {
           ),
         );
 
-      setMembers(sortedMembers);
-      setShareValue(Number(rules?.share_value ?? 0));
-      setSelectedIndex(0);
+      setMembers(activeMembers);
+
+      setSelectedIndex((currentIndex) => {
+        if (activeMembers.length === 0) {
+          return 0;
+        }
+
+        return Math.min(
+          currentIndex,
+          activeMembers.length - 1,
+        );
+      });
     } catch (error) {
-      console.error('Failed to load members:', error);
+      console.error(
+        'Failed to load members:',
+        error,
+      );
 
       Alert.alert(
         'Error',
-        'Unable to load members.',
+        'Unable to load group members.',
       );
     } finally {
       setLoading(false);
     }
-  }
+  }, [groupId]);
 
-  async function loadMemberData(memberId: number) {
-    if (!groupId) return;
+  /*
+   * ---------------------------------------------------------
+   * LOAD MEMBER FINANCIAL DATA
+   * ---------------------------------------------------------
+   */
 
-    try {
-      const savings = await getMemberSavings(
-        groupId,
-        memberId,
-      );
+  const loadMemberData = useCallback(
+    async (memberId: number) => {
+      if (!groupId || !memberId) {
+        return;
+      }
 
-      setTotalSavings(Number(savings ?? 0));
-    } catch (error) {
-      console.error(
-        'Failed to load member savings:',
-        error,
-      );
+      try {
+        const rules =
+          await getVSLASetupRules(groupId);
 
-      setTotalSavings(0);
+        const savings =
+          await getMemberSavings(
+            groupId,
+            memberId,
+          );
+
+        setShareValue(
+          Number(rules?.share_value ?? 0),
+        );
+
+        setTotalSavings(
+          Number.isFinite(Number(savings))
+            ? Number(savings)
+            : 0,
+        );
+
+        /*
+         * Get all financial transactions for the group
+         * and calculate this member's current loan.
+         */
+        const transactions =
+          (await getFinancialTransactions(
+            groupId,
+          )) as FinancialTransaction[];
+
+        const memberTransactions =
+          (transactions ?? []).filter(
+            (transaction) =>
+              Number(transaction.member_id) ===
+                Number(memberId) &&
+              Number(transaction.reversed ?? 0) === 0,
+          );
+
+        let issued = 0;
+        let repaid = 0;
+
+        for (const transaction of memberTransactions) {
+          const accountType =
+            String(
+              transaction.account_type ?? '',
+            ).toLowerCase();
+
+          const transactionType =
+            normalizeTransactionType(
+              transaction.transaction_type,
+            );
+
+          const amount = Number(
+            transaction.amount ?? 0,
+          );
+
+          if (
+            !Number.isFinite(amount) ||
+            amount <= 0
+          ) {
+            continue;
+          }
+
+          /*
+           * Loan disbursements increase the member's
+           * outstanding loan.
+           */
+          const isLoanDisbursement =
+            accountType === 'loan_fund' &&
+            (
+              transactionType.includes(
+                'loan_disbursement',
+              ) ||
+              transactionType.includes(
+                'loan_issue',
+              ) ||
+              transactionType.includes(
+                'loan_issued',
+              ) ||
+              transactionType === 'loan'
+            );
+
+          /*
+           * Loan repayments reduce the member's
+           * outstanding loan.
+           */
+          const isLoanRepayment =
+            accountType === 'loan_repayment' ||
+            transactionType.includes(
+              'loan_repayment',
+            ) ||
+            transactionType === 'repayment' ||
+            transactionType.includes(
+              'loan_payment',
+            );
+
+          if (isLoanDisbursement) {
+            issued += amount;
+          }
+
+          if (isLoanRepayment) {
+            repaid += amount;
+          }
+        }
+
+        /*
+         * Current outstanding loan balance.
+         *
+         * Example:
+         * Loan issued = 150,000
+         * Repaid      = 30,000
+         * Balance     = 120,000
+         */
+        const balance = Math.max(
+          issued - repaid,
+          0,
+        );
+
+        setLoanIssued(issued);
+        setLoanRepaid(repaid);
+        setLoanBalance(balance);
+
+        /*
+         * Loan due for this collection page.
+         *
+         * The amount entered in the Loan Repayment field
+         * is the amount due/being collected today.
+         */
+        setLoanDue(balance);
+
+        clearPaymentFields();
+      } catch (error) {
+        console.error(
+          'Failed to load member financial data:',
+          error,
+        );
+
+        setTotalSavings(0);
+        setLoanIssued(0);
+        setLoanRepaid(0);
+        setLoanDue(0);
+        setLoanBalance(0);
+      }
+    },
+    [groupId],
+  );
+
+  /*
+   * ---------------------------------------------------------
+   * INITIAL LOAD
+   * ---------------------------------------------------------
+   */
+
+  useEffect(() => {
+    loadMembers();
+  }, [loadMembers]);
+
+  useEffect(() => {
+    if (selectedMember) {
+      loadMemberData(selectedMember.id);
+    }
+  }, [
+    selectedMember,
+    loadMemberData,
+  ]);
+
+  /*
+   * ---------------------------------------------------------
+   * SEARCH + A-Z
+   * ---------------------------------------------------------
+   */
+
+  const filteredMembers = useMemo(() => {
+    const query =
+      searchQuery.trim().toLowerCase();
+
+    if (!query) {
+      return members;
     }
 
-    clearPaymentFields();
-  }
+    return members.filter((member) => {
+      const name =
+        member.full_name.toLowerCase();
+
+      const number =
+        member.member_number.toLowerCase();
+
+      return (
+        name.includes(query) ||
+        number.includes(query)
+      );
+    });
+  }, [members, searchQuery]);
+
+  /*
+   * ---------------------------------------------------------
+   * PAYMENT CALCULATIONS
+   * ---------------------------------------------------------
+   */
+
+  const savingsToday =
+    Number(sharesToday) > 0 &&
+    Number.isFinite(Number(sharesToday)) &&
+    shareValue > 0
+      ? Number(sharesToday) * shareValue
+      : 0;
+
+  const loanPaymentToday =
+    Number(loanRepayment) > 0 &&
+    Number.isFinite(Number(loanRepayment))
+      ? Number(loanRepayment)
+      : 0;
+
+  const socialFundToday =
+    Number(socialFund) > 0 &&
+    Number.isFinite(Number(socialFund))
+      ? Number(socialFund)
+      : 0;
+
+  const insuranceToday =
+    Number(insurance) > 0 &&
+    Number.isFinite(Number(insurance))
+      ? Number(insurance)
+      : 0;
+
+  const lateFineToday =
+    Number(lateFine) > 0 &&
+    Number.isFinite(Number(lateFine))
+      ? Number(lateFine)
+      : 0;
+
+  const absenceFineToday =
+    Number(absenceFine) > 0 &&
+    Number.isFinite(Number(absenceFine))
+      ? Number(absenceFine)
+      : 0;
+
+  const nonLoanRepaymentFineToday =
+    Number(nonLoanRepaymentFine) > 0 &&
+    Number.isFinite(
+      Number(nonLoanRepaymentFine),
+    )
+      ? Number(nonLoanRepaymentFine)
+      : 0;
+
+  const nonInsurancePaymentToday =
+    Number(nonInsurancePayment) > 0 &&
+    Number.isFinite(
+      Number(nonInsurancePayment),
+    )
+      ? Number(nonInsurancePayment)
+      : 0;
+
+  const totalPaymentToday =
+    savingsToday +
+    loanPaymentToday +
+    socialFundToday +
+    insuranceToday +
+    lateFineToday +
+    absenceFineToday +
+    nonLoanRepaymentFineToday +
+    nonInsurancePaymentToday;
+
+  /*
+   * Balance after today's entered loan repayment.
+   */
+  const loanBalanceAfterPayment = Math.max(
+    loanBalance - loanPaymentToday,
+    0,
+  );
+
+  /*
+   * ---------------------------------------------------------
+   * CLEAR PAYMENT FIELDS
+   * ---------------------------------------------------------
+   */
 
   function clearPaymentFields() {
     setSharesToday('');
-    setLoanPayment('');
+    setLoanRepayment('');
     setSocialFund('');
     setInsurance('');
     setLateFine('');
     setAbsenceFine('');
-    setNonLoanRepayment('');
+    setNonLoanRepaymentFine('');
     setNonInsurancePayment('');
   }
 
-  const savingsToday = useMemo(() => {
-    const shares = Number(sharesToday);
-
-    if (!Number.isFinite(shares) || shares <= 0) {
-      return 0;
-    }
-
-    return shares * shareValue;
-  }, [sharesToday, shareValue]);
-
-  const totalPaymentToday = useMemo(() => {
-    return (
-      savingsToday +
-      Number(loanPayment || 0) +
-      Number(socialFund || 0) +
-      Number(insurance || 0) +
-      Number(lateFine || 0) +
-      Number(absenceFine || 0) +
-      Number(nonLoanRepayment || 0) +
-      Number(nonInsurancePayment || 0)
-    );
-  }, [
-    savingsToday,
-    loanPayment,
-    socialFund,
-    insurance,
-    lateFine,
-    absenceFine,
-    nonLoanRepayment,
-    nonInsurancePayment,
-  ]);
+  /*
+   * ---------------------------------------------------------
+   * SELECT MEMBER
+   * ---------------------------------------------------------
+   */
 
   function selectMember(memberId: number) {
     const index = members.findIndex(
-      (member) => member.id === memberId,
+      (member) =>
+        Number(member.id) === Number(memberId),
     );
 
     if (index >= 0) {
@@ -212,25 +477,38 @@ export default function MemberCollectionScreen({ route }: Props) {
     }
   }
 
+  /*
+   * ---------------------------------------------------------
+   * NEXT MEMBER
+   * ---------------------------------------------------------
+   */
+
   function nextMember() {
-    if (members.length === 0) return;
-
-    if (selectedIndex < members.length - 1) {
-      setSelectedIndex((current) => current + 1);
-
-      /*
-       * Clear search after moving to the next member
-       * so the complete A-Z list is visible again.
-       */
-      setSearchQuery('');
-    } else {
-      Alert.alert(
-        'End of Members',
-        'You have reached the last member in A–Z order.',
-      );
+    if (members.length === 0) {
+      return;
     }
+
+    setSelectedIndex((currentIndex) => {
+      if (
+        currentIndex >=
+        members.length - 1
+      ) {
+        return 0;
+      }
+
+      return currentIndex + 1;
+    });
+
+    setSearchQuery('');
   }
-    async function handleMakePayment() {
+
+  /*
+   * ---------------------------------------------------------
+   * MAKE PAYMENT
+   * ---------------------------------------------------------
+   */
+
+  async function handleMakePayment() {
     if (!selectedMember) {
       Alert.alert(
         'No Member',
@@ -247,45 +525,61 @@ export default function MemberCollectionScreen({ route }: Props) {
       return;
     }
 
-    const paymentDetails = [
-      Number(sharesToday) > 0
-        ? `Savings: UGX ${savingsToday.toLocaleString()}`
-        : null,
+    if (
+      loanPaymentToday > loanBalance &&
+      loanBalance > 0
+    ) {
+      Alert.alert(
+        'Loan Payment Too High',
+        `The member's current loan balance is ${formatUGX(
+          loanBalance,
+        )}.`,
+      );
+      return;
+    }
 
-      Number(loanPayment) > 0
-        ? `Loan repayment: UGX ${Number(loanPayment).toLocaleString()}`
-        : null,
-
-      Number(socialFund) > 0
-        ? `Social fund: UGX ${Number(socialFund).toLocaleString()}`
-        : null,
-
-      Number(insurance) > 0
-        ? `Insurance: UGX ${Number(insurance).toLocaleString()}`
-        : null,
-
-      Number(lateFine) > 0
-        ? `Late fine: UGX ${Number(lateFine).toLocaleString()}`
-        : null,
-
-      Number(absenceFine) > 0
-        ? `Absence fine: UGX ${Number(absenceFine).toLocaleString()}`
-        : null,
-
-      Number(nonLoanRepayment) > 0
-        ? `Non-loan repayment fine: UGX ${Number(nonLoanRepayment).toLocaleString()}`
-        : null,
-
-      Number(nonInsurancePayment) > 0
-        ? `Non-insurance payment: UGX ${Number(nonInsurancePayment).toLocaleString()}`
-        : null,
-    ]
-      .filter(Boolean)
-      .join('\n');
+    const confirmationMessage = [
+      `Member: ${selectedMember.full_name}`,
+      `Member No: ${selectedMember.member_number}`,
+      '',
+      `Savings: ${formatUGX(savingsToday)}`,
+      `Loan repayment: ${formatUGX(
+        loanPaymentToday,
+      )}`,
+      `Social fund: ${formatUGX(
+        socialFundToday,
+      )}`,
+      `Insurance: ${formatUGX(
+        insuranceToday,
+      )}`,
+      `Late fine: ${formatUGX(
+        lateFineToday,
+      )}`,
+      `Absence fine: ${formatUGX(
+        absenceFineToday,
+      )}`,
+      `Non-loan repayment fine: ${formatUGX(
+        nonLoanRepaymentFineToday,
+      )}`,
+      `Non-insurance payment: ${formatUGX(
+        nonInsurancePaymentToday,
+      )}`,
+      '',
+      `TOTAL: ${formatUGX(
+        totalPaymentToday,
+      )}`,
+      '',
+      `Loan due before payment: ${formatUGX(
+        loanDue,
+      )}`,
+      `Loan balance after payment: ${formatUGX(
+        loanBalanceAfterPayment,
+      )}`,
+    ].join('\n');
 
     Alert.alert(
       'Confirm Payment',
-      `Member: ${selectedMember.full_name}\n\n${paymentDetails}\n\nTOTAL: UGX ${totalPaymentToday.toLocaleString()}`,
+      confirmationMessage,
       [
         {
           text: 'Cancel',
@@ -294,757 +588,587 @@ export default function MemberCollectionScreen({ route }: Props) {
         {
           text: 'Confirm',
           onPress: () => {
+            /*
+             * Database recording will be connected
+             * to the existing financial collection
+             * function without changing this screen's
+             * calculations.
+             */
             Alert.alert(
               'Payment Ready',
-              'The payment has been confirmed on this screen. Database recording will be connected in the next step.',
+              `${formatUGX(
+                totalPaymentToday,
+              )} prepared for ${
+                selectedMember.full_name
+              }.`,
             );
           },
         },
       ],
     );
-    }
+  }
+
+  /*
+   * ---------------------------------------------------------
+   * PRINT RECEIPT
+   * ---------------------------------------------------------
+   */
 
   function handlePrintReceipt() {
-    if (!selectedMember) return;
+    if (!selectedMember) {
+      Alert.alert(
+        'No Member',
+        'Please select a member first.',
+      );
+      return;
+    }
+
+    if (totalPaymentToday <= 0) {
+      Alert.alert(
+        'No Payment',
+        'There is no payment to print.',
+      );
+      return;
+    }
 
     Alert.alert(
       'Receipt',
-      'Receipt printing will be connected after payment recording is connected.',
+      `Receipt for ${
+        selectedMember.full_name
+      }\n\nTotal: ${formatUGX(
+        totalPaymentToday,
+      )}`,
     );
   }
 
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.center}>
-          <Text style={styles.loadingText}>
-            Loading members...
-          </Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  if (!selectedMember) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.center}>
-          <Text style={styles.emptyTitle}>
-            No Active Members
-          </Text>
-
-          <Text style={styles.emptyText}>
-            There are no active members in this group.
-          </Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  /*
+   * ---------------------------------------------------------
+   * UI
+   * ---------------------------------------------------------
+   */
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView
-        contentContainerStyle={styles.container}
+        contentContainerStyle={
+          styles.container
+        }
         keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.title}>
-          MEMBER COLLECTION
-        </Text>
-
-        {/* SEARCH */}
-        <View style={styles.searchCard}>
-          <Text style={styles.searchLabel}>
-            SEARCH MEMBER
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>
+            Member Collection
           </Text>
 
-          <TextInput
-            style={styles.searchInput}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            placeholder="Search name or member number"
-            placeholderTextColor="#94a3b8"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-
-          <Text style={styles.searchCount}>
-            Showing {filteredMembers.length} of {members.length} members
+          <Text style={styles.headerSubtitle}>
+            Savings, loans, fines and funds
           </Text>
         </View>
 
-        {/* A-Z MEMBER LIST */}
+        {/* SEARCH */}
+
+        <View style={styles.searchContainer}>
+          <TextInput
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="Search member name or number"
+            placeholderTextColor="#777"
+            style={styles.searchInput}
+          />
+        </View>
+
+        {/* MEMBER LIST */}
+
         <View style={styles.memberListCard}>
-          <View style={styles.memberListHeader}>
-            <Text style={styles.memberListTitle}>
-              MEMBERS — A TO Z
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>
+              Members A-Z
             </Text>
 
-            <Text style={styles.memberListCount}>
-              {members.length}
+            <Text style={styles.memberCount}>
+              {filteredMembers.length}
             </Text>
           </View>
 
           {filteredMembers.length === 0 ? (
-            <Text style={styles.noSearchResults}>
-              No member found.
+            <Text style={styles.emptyText}>
+              No members found.
             </Text>
           ) : (
-            filteredMembers.map((member) => (
-              <TouchableOpacity
-                key={member.id}
-                style={[
-                  styles.memberListRow,
-                  selectedMember.id === member.id &&
-                    styles.selectedMemberRow,
-                ]}
-                onPress={() => selectMember(member.id)}
-                activeOpacity={0.8}
-              >
-                <View style={styles.memberListNumber}>
-                  <Text style={styles.memberListNumberText}>
-                    {member.member_number.replace('KYA', '')}
-                  </Text>
-                </View>
+            filteredMembers.map((member) => {
+              const isSelected =
+                selectedMember?.id ===
+                member.id;
 
-                <View style={styles.memberListInfo}>
-                  <Text style={styles.memberListName}>
-                    {member.full_name}
-                  </Text>
+              return (
+                <TouchableOpacity
+                  key={member.id}
+                  style={[
+                    styles.memberRow,
+                    isSelected &&
+                      styles.selectedMemberRow,
+                  ]}
+                  onPress={() =>
+                    selectMember(member.id)
+                  }
+                >
+                  <View
+                    style={styles.memberAvatar}
+                  >
+                    <Text
+                      style={
+                        styles.memberAvatarText
+                      }
+                    >
+                      {member.full_name
+                        .charAt(0)
+                        .toUpperCase()}
+                    </Text>
+                  </View>
 
-                  <Text style={styles.memberListMemberNumber}>
-                    {member.member_number}
-                  </Text>
-                </View>
+                  <View
+                    style={styles.memberInfo}
+                  >
+                    <Text
+                      style={styles.memberName}
+                    >
+                      {member.full_name}
+                    </Text>
 
-                {selectedMember.id === member.id && (
-                  <Text style={styles.selectedText}>
-                    SELECTED
-                  </Text>
-                )}
-              </TouchableOpacity>
-            ))
+                    <Text
+                      style={
+                        styles.memberNumber
+                      }
+                    >
+                      {member.member_number}
+                    </Text>
+                  </View>
+
+                  {isSelected && (
+                    <Text
+                      style={styles.selectedText}
+                    >
+                      SELECTED
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              );
+            })
           )}
         </View>
 
-        {/* SELECTED MEMBER */}
-        <View style={styles.memberCard}>
-          {selectedMember.photo_uri ? (
-            <Image
-              source={{
-                uri: selectedMember.photo_uri,
-              }}
-              style={styles.photo}
-            />
-          ) : (
-            <View style={styles.photoPlaceholder}>
-              <Text style={styles.photoText}>
-                {selectedMember.full_name
-                  .charAt(0)
-                  .toUpperCase()}
+        {selectedMember && (
+          <>
+            {/* SELECTED MEMBER */}
+
+            <View style={styles.selectedCard}>
+              <Text style={styles.selectedLabel}>
+                SELECTED MEMBER
+              </Text>
+
+              <Text style={styles.selectedName}>
+                {selectedMember.full_name}
+              </Text>
+
+              <Text style={styles.selectedNumber}>
+                {selectedMember.member_number}
               </Text>
             </View>
-          )}
 
-          <Text style={styles.memberName}>
-            {selectedMember.full_name}
+            {/* FINANCIAL SUMMARY */}
+
+            <View style={styles.summaryCard}>
+              <Text style={styles.sectionTitle}>
+                Member Financial Summary
+              </Text>
+
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>
+                  Total Savings
+                </Text>
+
+                <Text
+                  style={styles.summaryValue}
+                >
+                  {formatUGX(totalSavings)}
+                </Text>
+              </View>
+
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>
+                  Loan Issued
+                </Text>
+
+                <Text
+                  style={styles.summaryValue}
+                >
+                  {formatUGX(loanIssued)}
+                </Text>
+              </View>
+
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>
+                  Loan Repaid
+                </Text>
+
+                <Text
+                  style={styles.summaryValue}
+                >
+                  {formatUGX(loanRepaid)}
+                </Text>
+              </View>
+
+              <View
+                style={[
+                  styles.summaryRow,
+                  styles.loanDueRow,
+                ]}
+              >
+                <Text
+                  style={styles.loanDueLabel}
+                >
+                  Loan Due
+                </Text>
+
+                <Text
+                  style={styles.loanDueValue}
+                >
+                  {formatUGX(loanDue)}
+                </Text>
+              </View>
+
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>
+                  Current Loan Balance
+                </Text>
+
+                <Text
+                  style={styles.loanBalanceValue}
+                >
+                  {formatUGX(loanBalance)}
+                </Text>
+              </View>
+            </View>
+
+            {/* SAVINGS */}
+
+            <View style={styles.paymentCard}>
+              <Text style={styles.sectionTitle}>
+                Savings
+              </Text>
+
+              <Text style={styles.inputLabel}>
+                Number of shares
+              </Text>
+
+              <TextInput
+                value={sharesToday}
+                onChangeText={setSharesToday}
+                placeholder="0"
+                keyboardType="numeric"
+                style={styles.input}
+              />
+
+              <View style={styles.calculatedRow}>
+                <Text style={styles.calculatedLabel}>
+                  Savings today
+                </Text>
+
+                <Text
+                  style={styles.calculatedValue}
+                >
+                  {formatUGX(savingsToday)}
+                </Text>
+              </View>
+
+              <Text
+                style={styles.smallText}
+              >
+                Share value:{' '}
+                {formatUGX(shareValue)}
+              </Text>
+            </View>
+
+            {/* LOAN REPAYMENT */}
+
+            <View style={styles.paymentCard}>
+              <Text style={styles.sectionTitle}>
+                Loan Repayment
+              </Text>
+
+              <View style={styles.loanInfoBox}>
+                <Text style={styles.loanInfoText}>
+                  Loan due:{' '}
+                  {formatUGX(loanDue)}
+                </Text>
+
+                <Text style={styles.loanInfoText}>
+                  Current balance:{' '}
+                  {formatUGX(loanBalance)}
+                </Text>
+
+                <Text style={styles.loanInfoText}>
+                  After payment:{' '}
+                  {formatUGX(
+                    loanBalanceAfterPayment,
+                  )}
+                </Text>
+              </View>
+
+              <Text style={styles.inputLabel}>
+                Amount paid
+              </Text>
+
+              <TextInput
+                value={loanRepayment}
+                onChangeText={setLoanRepayment}
+                placeholder="0"
+                keyboardType="numeric"
+                style={styles.input}
+              />
+            </View>
+
+            {/* OTHER PAYMENTS */}
+
+            <View style={styles.paymentCard}>
+              <Text style={styles.sectionTitle}>
+                Other Payments
+              </Text>
+
+              <Text style={styles.inputLabel}>
+                Social Fund
+              </Text>
+
+              <TextInput
+                value={socialFund}
+                onChangeText={setSocialFund}
+                placeholder="0"
+                keyboardType="numeric"
+                style={styles.input}
+              />
+
+              <Text style={styles.inputLabel}>
+                Insurance
+              </Text>
+
+              <TextInput
+                value={insurance}
+                onChangeText={setInsurance}
+                placeholder="0"
+                keyboardType="numeric"
+                style={styles.input}
+              />
+
+              <Text style={styles.inputLabel}>
+                Late Fine
+              </Text>
+
+              <TextInput
+                value={lateFine}
+                onChangeText={setLateFine}
+                placeholder="0"
+                keyboardType="numeric"
+                style={styles.input}
+              />
+
+              <Text style={styles.inputLabel}>
+                Absence Fine
+              </Text>
+
+              <TextInput
+                value={absenceFine}
+                onChangeText={setAbsenceFine}
+                placeholder="0"
+                keyboardType="numeric"
+                style={styles.input}
+              />
+
+              <Text style={styles.inputLabel}>
+                Non-loan Repayment Fine
+              </Text>
+
+              <TextInput
+                value={nonLoanRepaymentFine}
+                onChangeText={
+                  setNonLoanRepaymentFine
+                }
+                placeholder="0"
+                keyboardType="numeric"
+                style={styles.input}
+              />
+
+              <Text style={styles.inputLabel}>
+                Non-insurance Payment
+              </Text>
+
+              <TextInput
+                value={nonInsurancePayment}
+                onChangeText={
+                  setNonInsurancePayment
+                }
+                placeholder="0"
+                keyboardType="numeric"
+                style={styles.input}
+              />
+            </View>
+
+            {/* TODAY'S TOTAL */}
+
+            <View style={styles.totalCard}>
+              <Text style={styles.totalLabel}>
+                TOTAL PAYMENT TODAY
+              </Text>
+
+              <Text style={styles.totalAmount}>
+                {formatUGX(
+                  totalPaymentToday,
+                )}
+              </Text>
+
+              <View style={styles.totalBreakdown}>
+                <Text style={styles.breakdownText}>
+                  Savings:{' '}
+                  {formatUGX(savingsToday)}
+                </Text>
+
+                <Text style={styles.breakdownText}>
+                  Loan:{' '}
+                  {formatUGX(
+                    loanPaymentToday,
+                  )}
+                </Text>
+
+                <Text style={styles.breakdownText}>
+                  Social:{' '}
+                  {formatUGX(
+                    socialFundToday,
+                  )}
+                </Text>
+
+                <Text style={styles.breakdownText}>
+                  Insurance:{' '}
+                  {formatUGX(
+                    insuranceToday,
+                  )}
+                </Text>
+
+                <Text style={styles.breakdownText}>
+                  Fines/Other:{' '}
+                  {formatUGX(
+                    lateFineToday +
+                      absenceFineToday +
+                      nonLoanRepaymentFineToday +
+                      nonInsurancePaymentToday,
+                  )}
+                </Text>
+              </View>
+            </View>
+
+            {/* ACTIONS */}
+
+            <TouchableOpacity
+              style={styles.payButton}
+              onPress={handleMakePayment}
+            >
+              <Text style={styles.payButtonText}>
+                CONFIRM PAYMENT
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.receiptButton}
+              onPress={handlePrintReceipt}
+            >
+              <Text
+                style={styles.receiptButtonText}
+              >
+                PRINT RECEIPT
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.nextButton}
+              onPress={nextMember}
+            >
+              <Text style={styles.nextButtonText}>
+                NEXT MEMBER
+              </Text>
+            </TouchableOpacity>
+          </>
+        )}
+
+        {loading && (
+          <Text style={styles.loadingText}>
+            Loading members...
           </Text>
-
-          <Text style={styles.memberNumber}>
-            {selectedMember.member_number}
-          </Text>
-        </View>
-
-        {/* MEMBER SUMMARY */}
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryLabel}>
-            Loan due amount
-          </Text>
-
-          <Text style={styles.loanAmount}>
-            UGX 0
-          </Text>
-
-          <Text style={styles.summaryLabel}>
-            Total savings
-          </Text>
-
-          <Text style={styles.summaryValue}>
-            UGX {totalSavings.toLocaleString()}
-          </Text>
-
-          <Text style={styles.summaryLabel}>
-            Outstanding fines
-          </Text>
-
-          <Text style={styles.summaryValue}>
-            UGX 0
-          </Text>
-        </View>
-
-        {/* PAYMENTS */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>
-            MAKE PAYMENTS
-          </Text>
-
-          <Text style={styles.label}>
-            Number of shares purchased
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={sharesToday}
-            onChangeText={setSharesToday}
-            keyboardType="numeric"
-            placeholder="Enter number of shares"
-          />
-
-          <Text style={styles.label}>
-            Total savings amount today
-          </Text>
-
-          <View style={styles.readOnlyBox}>
-            <Text style={styles.readOnlyText}>
-              UGX {savingsToday.toLocaleString()}
-            </Text>
-          </View>
-
-          <Text style={styles.label}>
-            Loan payment
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={loanPayment}
-            onChangeText={setLoanPayment}
-            keyboardType="numeric"
-            placeholder="UGX"
-          />
-
-          <Text style={styles.label}>
-            Social fund
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={socialFund}
-            onChangeText={setSocialFund}
-            keyboardType="numeric"
-            placeholder="UGX"
-          />
-
-          <Text style={styles.label}>
-            Insurance
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={insurance}
-            onChangeText={setInsurance}
-            keyboardType="numeric"
-            placeholder="UGX"
-          />
-
-          <Text style={styles.label}>
-            Late fine
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={lateFine}
-            onChangeText={setLateFine}
-            keyboardType="numeric"
-            placeholder="UGX"
-          />
-
-          <Text style={styles.label}>
-            Absence fine
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={absenceFine}
-            onChangeText={setAbsenceFine}
-            keyboardType="numeric"
-            placeholder="UGX"
-          />
-
-          <Text style={styles.label}>
-            Non-loan repayment
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={nonLoanRepayment}
-            onChangeText={setNonLoanRepayment}
-            keyboardType="numeric"
-            placeholder="UGX"
-          />
-
-          <Text style={styles.label}>
-            Non-insurance payment
-          </Text>
-
-          <TextInput
-            style={styles.input}
-            value={nonInsurancePayment}
-            onChangeText={setNonInsurancePayment}
-            keyboardType="numeric"
-            placeholder="UGX"
-          />
-        </View>
-
-        {/* TOTAL PAYMENT */}
-        <View style={styles.totalCard}>
-          <Text style={styles.totalLabel}>
-            TOTAL PAYMENT TODAY
-          </Text>
-
-          <Text style={styles.totalAmount}>
-            UGX {totalPaymentToday.toLocaleString()}
-          </Text>
-        </View>
-
-        <TouchableOpacity
-          style={styles.primaryButton}
-          onPress={handleMakePayment}
-        >
-          <Text style={styles.primaryButtonText}>
-            MAKE PAYMENT
-          </Text>
-        </TouchableOpacity>
-
-        {/* LOAN BALANCE */}
-        <View style={styles.balanceCard}>
-          <Text style={styles.summaryLabel}>
-            REMAINING LOAN BALANCE
-          </Text>
-
-          <Text style={styles.balanceAmount}>
-            UGX 0
-          </Text>
-        </View>
-
-        <TouchableOpacity
-          style={styles.secondaryButton}
-          onPress={handlePrintReceipt}
-        >
-          <Text style={styles.secondaryButtonText}>
-            PRINT RECEIPT
-          </Text>
-        </TouchableOpacity>
-
-        <Text style={styles.servedBy}>
-          You are being served by
-        </Text>
-
-        <Text style={styles.executiveName}>
-          Executive
-        </Text>
-
-        <TouchableOpacity
-          style={styles.nextButton}
-          onPress={nextMember}
-        >
-          <Text style={styles.nextButtonText}>
-            NEXT
-          </Text>
-        </TouchableOpacity>
-
-        <Text style={styles.position}>
-          Member {selectedIndex + 1} of {members.length}
-        </Text>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+/*
+ * ---------------------------------------------------------
+ * STYLES
+ * ---------------------------------------------------------
+ */
+
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#f5f7f5',
   },
 
   container: {
-    padding: 16,
     paddingBottom: 40,
   },
 
-  center: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
+  header: {
+    backgroundColor: '#16a34a',
+    paddingHorizontal: 20,
+    paddingVertical: 18,
   },
 
-  loadingText: {
-    fontSize: 16,
-    color: '#555',
-  },
-
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-
-  emptyText: {
-    fontSize: 15,
-    color: '#666',
-    textAlign: 'center',
-  },
-
-  title: {
+  headerTitle: {
+    color: '#fff',
     fontSize: 22,
     fontWeight: '800',
-    color: '#16a34a',
-    textAlign: 'center',
-    marginBottom: 16,
   },
 
-  searchCard: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 14,
+  headerSubtitle: {
+    color: '#fff',
+    marginTop: 4,
+    fontSize: 13,
   },
 
-  searchLabel: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#334155',
-    marginBottom: 8,
+  searchContainer: {
+    padding: 15,
   },
 
   searchInput: {
-    height: 48,
+    backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: '#cbd5e1',
+    borderColor: '#d1d5db',
     borderRadius: 10,
-    paddingHorizontal: 12,
-    fontSize: 16,
-    backgroundColor: '#ffffff',
-  },
-
-  searchCount: {
-    fontSize: 13,
-    color: '#64748b',
-    marginTop: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    fontSize: 15,
   },
 
   memberListCard: {
-    backgroundColor: '#ffffff',
+    backgroundColor: '#fff',
+    marginHorizontal: 15,
+    borderRadius: 12,
+    overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 16,
+    borderColor: '#e5e7eb',
   },
 
-  memberListHeader: {
+  sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-
-  memberListTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#16a34a',
-  },
-
-  memberListCount: {
-    minWidth: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#dcfce7',
-    color: '#15803d',
-    fontSize: 13,
-    fontWeight: '800',
-    textAlign: 'center',
-    textAlignVertical: 'center',
-    paddingTop: 5,
-  },
-
-  memberListRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 8,
+    padding: 15,
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    borderBottomColor: '#e5e7eb',
   },
-
-  selectedMemberRow: {
-    backgroundColor: '#f0fdf4',
-    borderRadius: 8,
-  },
-
-  memberListNumber: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#16a34a',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-
-  memberListNumberText: {
-    fontSize: 10,
-    color: '#ffffff',
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-
-  memberListInfo: {
-    flex: 1,
-  },
-
-  memberListName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
-    marginBottom: 2,
-  },
-
-  memberListMemberNumber: {
-    fontSize: 12,
-    color: '#64748b',
-  },
-
-  selectedText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#16a34a',
-  },
-
-  noSearchResults: {
-    textAlign: 'center',
-    color: '#64748b',
-    paddingVertical: 16,
-  },
-
-  memberCard: {
-    alignItems: 'center',
-    backgroundColor: '#f8fafc',
-    borderRadius: 14,
-    padding: 18,
-    marginBottom: 14,
-  },
-
-  photo: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    marginBottom: 10,
-  },
-
-  photoPlaceholder: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    backgroundColor: '#16a34a',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
-  },
-
-  photoText: {
-    color: '#ffffff',
-    fontSize: 42,
-    fontWeight: '800',
-  },
-
-  memberName: {
-    fontSize: 21,
-    fontWeight: '800',
-    color: '#111827',
-  },
-
-  memberNumber: {
-    marginTop: 4,
-    fontSize: 15,
-    color: '#64748b',
-  },
-
-  summaryCard: {
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 16,
-  },
-
-  summaryLabel: {
-    fontSize: 14,
-    color: '#64748b',
-    marginTop: 6,
-  },
-
-  summaryValue: {
-    fontSize: 19,
-    fontWeight: '700',
-    color: '#111827',
-    marginTop: 2,
-  },
-
-  loanAmount: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#111827',
-    marginTop: 2,
-    marginBottom: 8,
-  },
-
-  section: {
-    marginBottom: 16,
-  },
-
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#16a34a',
-    marginBottom: 12,
-  },
-
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#334155',
-    marginBottom: 6,
-    marginTop: 10,
-  },
-
-  input: {
-    height: 48,
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    fontSize: 16,
-    backgroundColor: '#ffffff',
-  },
-
-  readOnlyBox: {
-    height: 48,
-    borderWidth: 1,
-    borderColor: '#bbf7d0',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    justifyContent: 'center',
-    backgroundColor: '#f0fdf4',
-  },
-
-  readOnlyText: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#15803d',
-  },
-
-  totalCard: {
-    backgroundColor: '#dcfce7',
-    borderRadius: 14,
-    padding: 18,
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-
-  totalLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#166534',
-  },
-
-  totalAmount: {
-    fontSize: 25,
-    fontWeight: '900',
-    color: '#15803d',
-    marginTop: 5,
-  },
-
-  primaryButton: {
-    backgroundColor: '#16a34a',
-    borderRadius: 10,
-    height: 52,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-
-  primaryButtonText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-
-  balanceCard: {
-    borderWidth: 1,
-    borderColor: '#fecaca',
-    backgroundColor: '#fffafa',
-    borderRadius: 14,
-    padding: 18,
-    marginBottom: 12,
-  },
-
-  balanceAmount: {
-    fontSize: 23,
-    fontWeight: '900',
-    color: '#b91c1c',
-    marginTop: 5,
-  },
-
-  secondaryButton: {
-    height: 50,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: '#16a34a',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-
-  secondaryButtonText: {
-    color: '#16a34a',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-
-  servedBy: {
-    textAlign: 'center',
-    color: '#64748b',
-    fontSize: 14,
-  },
-
-  executiveName: {
-    textAlign: 'center',
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#111827',
-    marginTop: 4,
-    marginBottom: 16,
-  },
-
-  nextButton: {
-    height: 52,
-    backgroundColor: '#0f172a',
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  nextButtonText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-
-  position: {
-    textAlign: 'center',
-    color: '#64748b',
-    marginTop: 8,
-  },
-});
-
