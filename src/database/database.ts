@@ -25,22 +25,6 @@ export type MemberRecord = {
   district: string;
   photo_uri: string | null;
   role: string;
-  status: string;
-  created_at: string;
-};
-
-export type MemberRecord = {
-  id: number;
-  group_id: number;
-  member_number: string;
-  full_name: string;
-  gender: string;
-  age: number;
-  phone: string | null;
-  cell: string;
-  district: string;
-  photo_uri: string | null;
-  role: string;
   is_super_user: number;
   assigned_roles: string;
   status: string;
