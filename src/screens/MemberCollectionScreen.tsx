@@ -230,29 +230,79 @@ export default function MemberCollectionScreen({ route }: Props) {
       );
     }
   }
-
-  function handleMakePayment() {
-    if (!selectedMember) {
-      Alert.alert(
-        'No Member',
-        'Please select a member first.',
-      );
-      return;
-    }
-
-    if (totalPaymentToday <= 0) {
-      Alert.alert(
-        'No Payment',
-        'Enter at least one payment amount.',
-      );
-      return;
-    }
-
+async function handleMakePayment() {
+  if (!selectedMember) {
     Alert.alert(
-      'Payment Ready',
-      `Total payment today: UGX ${totalPaymentToday.toLocaleString()}\n\nDatabase recording will be connected next.`,
+      'No Member',
+      'Please select a member first.',
     );
+    return;
   }
+
+  if (totalPaymentToday <= 0) {
+    Alert.alert(
+      'No Payment',
+      'Enter at least one payment amount.',
+    );
+    return;
+  }
+
+  const paymentDetails = [
+    sharesToday > 0
+      ? `Savings: UGX ${savingsToday.toLocaleString()}`
+      : null,
+
+    loanPayment > 0
+      ? `Loan repayment: UGX ${loanPayment.toLocaleString()}`
+      : null,
+
+    socialFund > 0
+      ? `Social fund: UGX ${socialFund.toLocaleString()}`
+      : null,
+
+    insurance > 0
+      ? `Insurance: UGX ${insurance.toLocaleString()}`
+      : null,
+
+    lateFine > 0
+      ? `Late fine: UGX ${lateFine.toLocaleString()}`
+      : null,
+
+    absenceFine > 0
+      ? `Absence fine: UGX ${absenceFine.toLocaleString()}`
+      : null,
+
+    nonLoanRepayment > 0
+      ? `Non-loan repayment fine: UGX ${nonLoanRepayment.toLocaleString()}`
+      : null,
+
+    nonInsurancePayment > 0
+      ? `Non-insurance payment: UGX ${nonInsurancePayment.toLocaleString()}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  Alert.alert(
+    'Confirm Payment',
+    `Member: ${selectedMember.full_name}\n\n${paymentDetails}\n\nTOTAL: UGX ${totalPaymentToday.toLocaleString()}`,
+    [
+      {
+        text: 'Cancel',
+        style: 'cancel',
+      },
+      {
+        text: 'Confirm',
+        onPress: () => {
+          Alert.alert(
+            'Payment Ready',
+            'The payment has been confirmed on this screen. Database recording will be connected in the next step.',
+          );
+        },
+      },
+    ],
+  );
+}
 
   function handlePrintReceipt() {
     if (!selectedMember) return;
