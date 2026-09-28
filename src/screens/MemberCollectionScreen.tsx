@@ -42,6 +42,8 @@ export default function MemberCollectionScreen({ route }: Props) {
   const [members, setMembers] = useState<Member[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
+  const [searchQuery, setSearchQuery] = useState('');
+
   const [shareValue, setShareValue] = useState(0);
   const [totalSavings, setTotalSavings] = useState(0);
 
@@ -57,6 +59,25 @@ export default function MemberCollectionScreen({ route }: Props) {
   const [loading, setLoading] = useState(true);
 
   const selectedMember = members[selectedIndex];
+
+  /*
+   * Members are already stored in A-Z order.
+   * Search works by member name OR member number.
+   */
+  const filteredMembers = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    if (!query) {
+      return members;
+    }
+
+    return members.filter((member) => {
+      return (
+        member.full_name.toLowerCase().includes(query) ||
+        member.member_number.toLowerCase().includes(query)
+      );
+    });
+  }, [members, searchQuery]);
 
   useEffect(() => {
     loadMembers();
@@ -86,13 +107,18 @@ export default function MemberCollectionScreen({ route }: Props) {
         getVSLASetupRules(groupId),
       ]);
 
+      /*
+       * Always keep active members in alphabetical A-Z order.
+       */
       const sortedMembers = groupMembers
         .filter((member) => member.status === 'active')
         .sort((a, b) =>
           a.full_name.localeCompare(
             b.full_name,
             undefined,
-            { sensitivity: 'base' },
+            {
+              sensitivity: 'base',
+            },
           ),
         );
 
@@ -176,11 +202,27 @@ export default function MemberCollectionScreen({ route }: Props) {
     nonInsurancePayment,
   ]);
 
+  function selectMember(memberId: number) {
+    const index = members.findIndex(
+      (member) => member.id === memberId,
+    );
+
+    if (index >= 0) {
+      setSelectedIndex(index);
+    }
+  }
+
   function nextMember() {
     if (members.length === 0) return;
 
     if (selectedIndex < members.length - 1) {
       setSelectedIndex((current) => current + 1);
+
+      /*
+       * Clear search after moving to the next member
+       * so the complete A-Z list is visible again.
+       */
+      setSearchQuery('');
     } else {
       Alert.alert(
         'End of Members',
@@ -259,7 +301,82 @@ export default function MemberCollectionScreen({ route }: Props) {
           MEMBER COLLECTION
         </Text>
 
-        {/* MEMBER */}
+        {/* SEARCH */}
+        <View style={styles.searchCard}>
+          <Text style={styles.searchLabel}>
+            SEARCH MEMBER
+          </Text>
+
+          <TextInput
+            style={styles.searchInput}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="Search name or member number"
+            placeholderTextColor="#94a3b8"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+
+          <Text style={styles.searchCount}>
+            Showing {filteredMembers.length} of {members.length} members
+          </Text>
+        </View>
+
+        {/* A-Z MEMBER LIST */}
+        <View style={styles.memberListCard}>
+          <View style={styles.memberListHeader}>
+            <Text style={styles.memberListTitle}>
+              MEMBERS — A TO Z
+            </Text>
+
+            <Text style={styles.memberListCount}>
+              {members.length}
+            </Text>
+          </View>
+
+          {filteredMembers.length === 0 ? (
+            <Text style={styles.noSearchResults}>
+              No member found.
+            </Text>
+          ) : (
+            filteredMembers.map((member) => (
+              <TouchableOpacity
+                key={member.id}
+                style={[
+                  styles.memberListRow,
+                  selectedMember.id === member.id &&
+                    styles.selectedMemberRow,
+                ]}
+                onPress={() => selectMember(member.id)}
+                activeOpacity={0.8}
+              >
+                <View style={styles.memberListNumber}>
+                  <Text style={styles.memberListNumberText}>
+                    {member.member_number.replace('KYA', '')}
+                  </Text>
+                </View>
+
+                <View style={styles.memberListInfo}>
+                  <Text style={styles.memberListName}>
+                    {member.full_name}
+                  </Text>
+
+                  <Text style={styles.memberListMemberNumber}>
+                    {member.member_number}
+                  </Text>
+                </View>
+
+                {selectedMember.id === member.id && (
+                  <Text style={styles.selectedText}>
+                    SELECTED
+                  </Text>
+                )}
+              </TouchableOpacity>
+            ))
+          )}
+        </View>
+
+        {/* SELECTED MEMBER */}
         <View style={styles.memberCard}>
           {selectedMember.photo_uri ? (
             <Image
@@ -427,7 +544,7 @@ export default function MemberCollectionScreen({ route }: Props) {
           />
         </View>
 
-        {/* TOTAL */}
+        {/* TOTAL PAYMENT */}
         <View style={styles.totalCard}>
           <Text style={styles.totalLabel}>
             TOTAL PAYMENT TODAY
@@ -533,6 +650,130 @@ const styles = StyleSheet.create({
     color: '#16a34a',
     textAlign: 'center',
     marginBottom: 16,
+  },
+
+  searchCard: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+  },
+
+  searchLabel: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#334155',
+    marginBottom: 8,
+  },
+
+  searchInput: {
+    height: 48,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    fontSize: 16,
+    backgroundColor: '#ffffff',
+  },
+
+  searchCount: {
+    fontSize: 13,
+    color: '#64748b',
+    marginTop: 8,
+  },
+
+  memberListCard: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 16,
+  },
+
+  memberListHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+
+  memberListTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#16a34a',
+  },
+
+  memberListCount: {
+    minWidth: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#dcfce7',
+    color: '#15803d',
+    fontSize: 13,
+    fontWeight: '800',
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    paddingTop: 5,
+  },
+
+  memberListRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+
+  selectedMemberRow: {
+    backgroundColor: '#f0fdf4',
+    borderRadius: 8,
+  },
+
+  memberListNumber: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#16a34a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+
+  memberListNumberText: {
+    fontSize: 10,
+    color: '#ffffff',
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+
+  memberListInfo: {
+    flex: 1,
+  },
+
+  memberListName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 2,
+  },
+
+  memberListMemberNumber: {
+    fontSize: 12,
+    color: '#64748b',
+  },
+
+  selectedText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#16a34a',
+  },
+
+  noSearchResults: {
+    textAlign: 'center',
+    color: '#64748b',
+    paddingVertical: 16,
   },
 
   memberCard: {
@@ -756,3 +997,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
 });
+
+This is still a single collection screen: savings, loan repayment, social fund, insurance, late fine, absence fine, non-loan repayment, and non-insurance payment are all together.
+
+The next step should be connecting MAKE PAYMENT to your existing SQLite financial functions so that one member's payments are actually recorded together for that meeting/day, rather than changing the UI again.
