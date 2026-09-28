@@ -39,6 +39,24 @@ export type MemberRecord = {
   created_at: string;
 };
 
+export type MemberRecord = {
+  id: number;
+  group_id: number;
+  member_number: string;
+  full_name: string;
+  gender: string;
+  age: number;
+  phone: string | null;
+  cell: string;
+  district: string;
+  photo_uri: string | null;
+  role: string;
+  is_super_user: number;
+  assigned_roles: string;
+  status: string;
+  created_at: string;
+};
+
 export type NextOfKinRecord = {
   id: number;
   member_id: number;
@@ -106,6 +124,31 @@ export async function getMemberSavings(
 
   return result?.total ?? 0;
 }
+export async function updateMemberRoles(
+  memberId: number,
+  isSuperUser: boolean,
+  assignedRoles: string[],
+): Promise<void> {
+  const db = await dbPromise;
+
+  const cleanRoles = isSuperUser
+    ? ['Chairperson']
+    : assignedRoles.filter(
+        (role) => role !== 'All',
+      );
+
+  await db.runAsync(
+    `UPDATE members
+     SET role = ?,
+         is_super_user = ?,
+         assigned_roles = ?
+     WHERE id = ?`,
+    isSuperUser ? 'executive' : 'executive',
+    isSuperUser ? 1 : 0,
+    cleanRoles.join(','),
+    memberId,
+  );
+    }
 export type VSLASetupRuleUpdates = {
   shareValue?: number;
   minimumSharesPerMeeting?: number;
@@ -443,6 +486,34 @@ async function addColumnIfMissing(
   }
 }
 
+async function addMemberRoleColumns(): Promise<void> {
+  const db = await dbPromise;
+
+  const columns = await db.getAllAsync<{
+    name: string;
+  }>(
+    `PRAGMA table_info(members)`,
+  );
+
+  const columnNames = columns.map(
+    (column) => column.name,
+  );
+
+  if (!columnNames.includes('is_super_user')) {
+    await db.execAsync(`
+      ALTER TABLE members
+      ADD COLUMN is_super_user INTEGER NOT NULL DEFAULT 0;
+    `);
+  }
+
+  if (!columnNames.includes('assigned_roles')) {
+    await db.execAsync(`
+      ALTER TABLE members
+      ADD COLUMN assigned_roles TEXT NOT NULL DEFAULT 'member';
+    `);
+  }
+      }
+
 /* ============================================================
    FINANCIAL ACCOUNT CREATION
    ============================================================ */
@@ -676,6 +747,8 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   await db.execAsync(`
     PRAGMA foreign_keys = ON;
     PRAGMA journal_mode = WAL;
+
+await addMemberRoleColumns();
 
     CREATE TABLE IF NOT EXISTS groups (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
