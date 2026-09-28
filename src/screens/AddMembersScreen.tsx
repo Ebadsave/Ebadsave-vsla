@@ -591,11 +591,8 @@ export default function AddMembersScreen({ route }: Props) {
                   the first member.
                 </Text>
               </View>
-            ) : (
-              
-                      </Text>
-                  </
-                        members.map((member) => {
+           ) : (
+  members.map((member) => {
   const isExecutive =
     member.role
       ?.toLowerCase() ===
