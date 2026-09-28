@@ -13,6 +13,17 @@ function generateLocalId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
+export type GroupRecord = {
+  id: number;
+  group_number: number;
+  group_name: string;
+  district: string;
+  country: string;
+  status: string;
+  created_at: string;
+  last_activity_at: string;
+};
+
 export type MemberRecord = {
   id: number;
   group_id: number;
