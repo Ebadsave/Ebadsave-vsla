@@ -1171,4 +1171,5 @@ const styles = StyleSheet.create({
     padding: 15,
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
-  },
+},
+});
