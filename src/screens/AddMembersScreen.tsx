@@ -592,55 +592,58 @@ export default function AddMembersScreen({ route }: Props) {
                 </Text>
               </View>
             ) : (
-              members.map((member) => {
-                const isExecutive =
-                  member.role
-                    ?.toLowerCase() ===
-                  'executive';
-
-                const isSuperUserMember =
-                  Number(
-                    member.is_super_user ?? 0,
-                  ) === 1;
-
-                const assignedRoles =
-                  member.assigned_roles
-                    ? member.assigned_roles
-                        .split(',')
-                        .map((role) =>
-                          role.trim(),
-                        )
-                        .filter(Boolean)
-                    : [];
-
-                return (
-                  <View
-                    key={member.id}
-                    style={styles.memberCard}
-                  >
-                    <View
-                      style={
-                        styles.memberNumberCircle
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.memberNumberText
-                        }
-                      >
-                        {member.member_number.replace(
-                          'KYA',
-                          '',
-                        )}
+              
                       </Text>
-                    </View>
+                  </
+                        members.map((member) => {
+  const isExecutive =
+    member.role
+      ?.toLowerCase() ===
+    'executive';
 
-                    <View
-                      style={styles.memberInfo}
-                    >
-                      <Text
-                        style={styles.memberName}
-                      >
+  const isSuperUserMember =
+    Number(
+      member.is_super_user ?? 0,
+    ) === 1;
+
+  const assignedRoles =
+    member.assigned_roles
+      ? member.assigned_roles
+          .split(',')
+          .map((role: string) =>
+            role.trim(),
+          )
+          .filter(Boolean)
+      : [];
+
+  return (
+    <View
+      key={member.id}
+      style={styles.memberCard}
+    >
+      <View
+        style={
+          styles.memberNumberCircle
+        }
+      >
+        <Text
+          style={
+            styles.memberNumberText
+          }
+        >
+          {member.member_number.replace(
+            'KYA',
+            '',
+          )}
+        </Text>
+      </View>
+
+      <View
+        style={styles.memberInfo}
+      >
+        <Text
+          style={styles.memberName}
+        >
                         {member.full_name}
                       </Text>
 
