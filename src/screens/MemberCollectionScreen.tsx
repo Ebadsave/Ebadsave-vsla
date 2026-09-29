@@ -54,10 +54,16 @@ type FinancialTransaction = {
   reversed?: number;
 };
 
-const formatUGX = (amount: number): string => {
-  const safeAmount = Number.isFinite(amount) ? amount : 0;
-
-  return `UGX ${safeAmount.toLocaleString('en-UG')}`;
+const formatCurrency = (
+  amount: number,
+  currencyCode: string,
+  locale: string = 'en',
+) => {
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: currencyCode,
+  }).format(amount);
+};;
 };
 
 const normalizeTransactionType = (
