@@ -63,7 +63,12 @@ const formatCurrency = (
     style: 'currency',
     currency: currencyCode,
   }).format(amount);
-};;
+};
+
+const normalizeTransactionType = (
+  value: string | null | undefined,
+): string => {
+  return String(value ?? '').toLowerCase().replace(/[\s-]/g, '_');
 };
 
 const normalizeTransactionType = (
