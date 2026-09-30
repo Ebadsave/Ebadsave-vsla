@@ -515,122 +515,229 @@ export default function MemberCollectionScreen({
 
   /* -----------------------------------------------------
      MAKE PAYMENT
-  ----------------------------------------------------- */
-
+  ----------------------------------------------------- *
   async function handleMakePayment() {
-    if (!selectedMember) {
-      Alert.alert(
-        'No Member',
-        'Please select a member first.',
-      );
-      return;
-    }
-
-    if (totalPaymentToday <= 0) {
-      Alert.alert(
-        'No Payment',
-        'Enter at least one payment amount.',
-      );
-      return;
-    }
-
-    if (
-      loanPaymentToday > loanBalance &&
-      loanBalance > 0
-    ) {
-      Alert.alert(
-        'Loan Payment Too High',
-        `The member's current loan balance is ${formatUGX(
-          loanBalance,
-        )}.`,
-      );
-      return;
-    }
-
-    const confirmationMessage = [
-      `Member: ${selectedMember.full_name}`,
-      `Member No: ${selectedMember.member_number}`,
-      '',
-      `Savings: ${formatUGX(
-        savingsToday,
-      )}`,
-      `Loan repayment: ${formatUGX(
-        loanPaymentToday,
-      )}`,
-      `Social fund: ${formatUGX(
-        socialFundToday,
-      )}`,
-      `Insurance: ${formatUGX(
-        insuranceToday,
-      )}`,
-      `Late fine: ${formatUGX(
-        lateFineToday,
-      )}`,
-      `Absence fine: ${formatUGX(
-        absenceFineToday,
-      )}`,
-      `Non-loan repayment fine: ${formatUGX(
-        nonLoanRepaymentFineToday,
-      )}`,
-      `Non-insurance payment: ${formatUGX(
-        nonInsurancePaymentToday,
-      )}`,
-      '',
-      `TOTAL: ${formatUGX(
-        totalPaymentToday,
-      )}`,
-      '',
-      `Loan due before payment: ${formatUGX(
-        loanDue,
-      )}`,
-      `Loan balance after payment: ${formatUGX(
-        loanBalanceAfterPayment,
-      )}`,
-    ].join('\n');
-
+  if (!selectedMember) {
     Alert.alert(
-      'Confirm Payment',
-      confirmationMessage,
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Confirm',
-          onPress: () => {
-            /*
-             * DATABASE WRITE WILL BE CONNECTED
-             * TO THE EXISTING FINANCIAL COLLECTION
-             * FUNCTION.
-             *
-             * Do not invent a second payment system here.
-             *
-             * The saved collection must preserve:
-             * - selected member
-             * - meeting ID
-             * - payment date
-             * - each payment category
-             * - total payment
-             * - loan due before payment
-             * - remaining loan balance after payment
-             */
-
-            Alert.alert(
-              'Payment Ready',
-              `${formatUGX(
-                totalPaymentToday,
-              )} prepared for ${
-                selectedMember.full_name
-              }.`,
-            );
-          },
-        },
-      ],
+      'No Member',
+      'Please select a member first.',
     );
+    return;
   }
 
-  /* -----------------------------------------------------
+  if (!totalPaymentToday || totalPaymentToday <= 0) {
+    Alert.alert(
+      'No Payment',
+      'Enter at least one payment amount.',
+    );
+    return;
+  }
+
+  if (
+    loanPaymentToday > loanBalance &&
+    loanBalance > 0
+  ) {
+    Alert.alert(
+      'Loan Payment Too High',
+      `The member's current loan balance is ${formatUGX(
+        loanBalance,
+      )}.`,
+    );
+    return;
+  }
+
+  const confirmationMessage = [
+    `Member: ${selectedMember.full_name}`,
+    `Member No: ${selectedMember.member_number}`,
+    '',
+    `Savings: ${formatUGX(savingsToday)}`,
+    `Loan repayment: ${formatUGX(loanPaymentToday)}`,
+    `Social fund: ${formatUGX(socialFundToday)}`,
+    `Insurance: ${formatUGX(insuranceToday)}`,
+    `Late fine: ${formatUGX(lateFineToday)}`,
+    `Absence fine: ${formatUGX(absenceFineToday)}`,
+    `Non-loan repayment fine: ${formatUGX(
+      nonLoanRepaymentFineToday,
+    )}`,
+    `Non-insurance payment: ${formatUGX(
+      nonInsurancePaymentToday,
+    )}`,
+    '',
+    `TOTAL: ${formatUGX(totalPaymentToday)}`,
+    '',
+    `Loan due before payment: ${formatUGX(loanDue)}`,
+    `Loan balance after payment: ${formatUGX(
+      loanBalanceAfterPayment,
+    )}`,
+  ].join('\n');
+
+  Alert.alert(
+    'Confirm Payment',
+    confirmationMessage,
+    [
+      {
+        text: 'Cancel',
+        style: 'cancel',
+      },
+      {
+        text: 'Confirm',
+        onPress: async () => {
+          try {
+            setLoading(true);
+
+            const payments: Array<{
+              accountType:
+                | 'savings'
+                | 'loan_fund'
+                | 'loan_repayment'
+                | 'social_fund'
+                | 'fines'
+                | 'external_fund'
+                | 'expenditure_fund'
+                | 'insurance_fund';
+              amount: number;
+              reason: string;
+            }> = [];
+
+            if (savingsToday > 0) {
+              payments.push({
+                accountType: 'savings',
+                amount: savingsToday,
+                reason: 'Savings contribution',
+              });
+            }
+
+            if (loanPaymentToday > 0) {
+              payments.push({
+                accountType: 'loan_repayment',
+                amount: loanPaymentToday,
+                reason: 'Loan repayment',
+              });
+            }
+
+            if (socialFundToday > 0) {
+              payments.push({
+                accountType: 'social_fund',
+                amount: socialFundToday,
+                reason: 'Social fund contribution',
+              });
+            }
+
+            if (insuranceToday > 0) {
+              payments.push({
+                accountType: 'insurance_fund',
+                amount: insuranceToday,
+                reason: 'Insurance contribution',
+              });
+            }
+
+            if (lateFineToday > 0) {
+              payments.push({
+                accountType: 'fines',
+                amount: lateFineToday,
+                reason: 'Late fine',
+              });
+            }
+
+            if (absenceFineToday > 0) {
+              payments.push({
+                accountType: 'fines',
+                amount: absenceFineToday,
+                reason: 'Absence fine',
+              });
+            }
+
+            if (nonLoanRepaymentFineToday > 0) {
+              payments.push({
+                accountType: 'fines',
+                amount: nonLoanRepaymentFineToday,
+                reason: 'Non-loan repayment fine',
+              });
+            }
+
+            if (nonInsurancePaymentToday > 0) {
+              payments.push({
+                accountType: 'fines',
+                amount: nonInsurancePaymentToday,
+                reason: 'Non-insurance payment',
+              });
+            }
+
+            if (payments.length === 0) {
+              throw new Error(
+                'No valid payment was entered.',
+              );
+            }
+
+            const collection =
+              await createFinancialCollection(
+                groupId,
+                selectedMember.id,
+                meetingId,
+                payments,
+              );
+
+            const receipt =
+              await createReceipt(
+                groupId,
+                selectedMember.id,
+                meetingId,
+                collection.id,
+                null,
+                totalPaymentToday,
+                [
+                  'Member collection',
+                  `Loan due before payment: ${formatUGX(
+                    loanDue,
+                  )}`,
+                  `Loan balance after payment: ${formatUGX(
+                    loanBalanceAfterPayment,
+                  )}`,
+                  `Confirmation: ${collection.confirmation_code}`,
+                ].join(' | '),
+              );
+
+            await loadMemberData(
+              selectedMember.id,
+            );
+
+            Alert.alert(
+              'Payment Saved',
+              [
+                `Payment saved for ${selectedMember.full_name}.`,
+                '',
+                `Total: ${formatUGX(
+                  totalPaymentToday,
+                )}`,
+                `Receipt: ${receipt.receipt_number}`,
+                `Confirmation: ${collection.confirmation_code}`,
+                '',
+                `Loan balance after payment: ${formatUGX(
+                  loanBalanceAfterPayment,
+                )}`,
+              ].join('\n'),
+            );
+          } catch (error) {
+            console.error(
+              'Failed to save member collection:',
+              error,
+            );
+
+            Alert.alert(
+              'Payment Failed',
+              error instanceof Error
+                ? error.message
+                : 'Unable to save this payment.',
+            );
+          } finally {
+            setLoading(false);
+          }
+        },
+      },
+    ],
+  );
+}
+/* -----------------------------------------------------
      PRINT RECEIPT
   ----------------------------------------------------- */
 
