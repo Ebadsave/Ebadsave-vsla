@@ -19,6 +19,7 @@ export type GroupRecord = {
   group_name: string;
   district: string;
   country: string;
+  currency: string;
   status: string;
   created_at: string;
   last_activity_at: string;
@@ -741,7 +742,8 @@ await addMemberRoleColumns();
       group_name TEXT NOT NULL,
       district TEXT NOT NULL DEFAULT '',
       country TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'active',
+currency TEXT NOT NULL DEFAULT 'UGX',
+status TEXT NOT NULL DEFAULT 'active',
       created_at TEXT NOT NULL,
       last_activity_at TEXT NOT NULL
     );
@@ -1310,6 +1312,20 @@ await addMemberRoleColumns();
     );
   }
 
+  async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
+  const db = await dbPromise;
+
+  await addColumnIfMissing(
+    db,
+    'groups',
+    'currency',
+    `TEXT NOT NULL DEFAULT 'UGX'`,
+  );
+
+  await db.execAsync(`
+    PRAGMA foreign_keys = ON;
+    PRAGMA journal_mode = WAL;
+  
   await refreshGroupDormancy(db);
   await applyDueNextOfKinChanges(db);
   await applyDueNextOfKinBenefits(db);
