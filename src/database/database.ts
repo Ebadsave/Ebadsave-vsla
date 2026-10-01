@@ -1309,18 +1309,15 @@ status TEXT NOT NULL DEFAULT 'active',
       `SELECT id FROM groups`,
     );
 
-  for (const group of groups) {
+    for (const group of groups) {
     await createDefaultVSLASetupRules(
       db,
       group.id,
     );
   }
 
-  async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
-  
   await refreshGroupDormancy(db);
-  await applyDueNextOfKinChanges(db);
-  await applyDueNextOfKinBenefits(db);
+  
 
   /*
    * Existing meetings from an older database did not have
