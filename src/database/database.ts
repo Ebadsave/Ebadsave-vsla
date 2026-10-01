@@ -734,8 +734,6 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
     PRAGMA foreign_keys = ON;
     PRAGMA journal_mode = WAL;
 
-await addMemberRoleColumns();
-
     CREATE TABLE IF NOT EXISTS groups (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       group_number TEXT NOT NULL,
@@ -1164,7 +1162,13 @@ status TEXT NOT NULL DEFAULT 'active',
   /* ==========================================================
      EXISTING DATABASE MIGRATIONS
      ========================================================== */
-
+  await addColumnIfMissing(
+    db,
+    'groups',
+    'currency',
+    "TEXT NOT NULL DEFAULT 'UGX'",
+  );
+  
   await addColumnIfMissing(
     db,
     'members',
