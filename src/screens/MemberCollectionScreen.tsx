@@ -515,7 +515,7 @@ export default function MemberCollectionScreen({
 
   /* -----------------------------------------------------
      MAKE PAYMENT
-  ----------------------------------------------------- *
+  ----------------------------------------------------------- */
   async function handleMakePayment() {
   if (!selectedMember) {
     Alert.alert(
