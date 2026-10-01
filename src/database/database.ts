@@ -5280,4 +5280,4 @@ export async function isPreAppAuthorized(
     ).length;
 
   return executives >= 2 && ordinary >= 1;
-  }
+}
