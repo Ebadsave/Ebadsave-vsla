@@ -1317,18 +1317,6 @@ status TEXT NOT NULL DEFAULT 'active',
   }
 
   async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
-  const db = await dbPromise;
-
-  await addColumnIfMissing(
-    db,
-    'groups',
-    'currency',
-    `TEXT NOT NULL DEFAULT 'UGX'`,
-  );
-
-  await db.execAsync(`
-    PRAGMA foreign_keys = ON;
-    PRAGMA journal_mode = WAL;
   
   await refreshGroupDormancy(db);
   await applyDueNextOfKinChanges(db);
