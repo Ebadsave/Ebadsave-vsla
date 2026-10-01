@@ -17,6 +17,8 @@ import {
 } from 'react-native';
 
 import {
+  createFinancialCollection,
+  createReceipt,
   getFinancialTransactions,
   getMemberSavings,
   getMembersByGroupId,
