@@ -571,7 +571,6 @@ async function createDefaultVSLASetupRules(
       late_fine,
       non_saving_fine,
       non_loan_repayment_fine,
-      non_insurance_conribution,
       meeting_frequency,
       cycle_duration_months,
       leadership_term_months,
@@ -579,15 +578,28 @@ async function createDefaultVSLASetupRules(
       created_at,
       updated_at
     )
-    VALUES (
-      0, 0, 0, 0, 0, 'weekly', 12, 12, 1, ?, ?
-    )`,
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     groupId,
+    1000,
+    1,
+    5,
+    3,
+    5,
+    'per month',
+    12,
+    0,
+    0,
+    0,
+    0,
+    0,
+    'weekly',
+    12,
+    12,
+    1,
     timestamp,
     timestamp,
   );
-}
-
+  }
 /* ============================================================
    GROUP DORMANCY
    ============================================================ */
