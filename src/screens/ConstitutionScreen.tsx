@@ -234,7 +234,7 @@ export default function ConstitutionScreen({
       setIsRegisteringNewGroup(false);
 
       setRegistrationMessage(
-        `${isTestGroup ? 'Test group' : 'Group'} successfully registered as KYA ${group.group_number}.`,
+        `${isTestGroup ? 'Demo group' : 'Group'} successfully registered as KYA ${group.group_number}.`,
       );
     } catch (error) {
       console.error('Group registration error:', error);
@@ -391,204 +391,193 @@ export default function ConstitutionScreen({
                   </Text>
 
                   {index === 0 && (
-                    <>
-                      <View style={styles.registrationTopBox}>
-                        <Text style={styles.registrationTitle}>
-                          Register Group
+                    <View style={styles.registrationSection}>
+                      {!isRegisteringNewGroup &&
+                        groupNumber !== null && (
+                          <View style={styles.registeredBox}>
+                            <Text style={styles.numberLabel}>
+                              Current Group
+                            </Text>
+
+                            <Text style={styles.groupNumber}>
+                              KYA {groupNumber}
+                            </Text>
+
+                            <TouchableOpacity
+                              style={styles.enterButton}
+                              onPress={() => {
+                                if (currentGroupId !== null) {
+                                  enterGroup(currentGroupId);
+                                }
+                              }}
+                            >
+                              <Text style={styles.enterButtonText}>
+                                Enter Group
+                              </Text>
+                            </TouchableOpacity>
+                          </View>
+                        )}
+
+                      <TouchableOpacity
+                        style={styles.newGroupButton}
+                        onPress={() =>
+                          startNewGroupRegistration(false)
+                        }
+                      >
+                        <Text style={styles.newGroupButtonText}>
+                          + Register New Group
                         </Text>
+                      </TouchableOpacity>
 
-                        <Text style={styles.registrationHelp}>
-                          Production groups receive KYA 2010–KYA
-                          9090 sequentially. Test groups use only
-                          KYA 2000–KYA 2009.
+                      <TouchableOpacity
+                        style={styles.testGroupButton}
+                        onPress={() =>
+                          startNewGroupRegistration(true)
+                        }
+                      >
+                        <Text style={styles.testGroupButtonText}>
+                          Demo Group
                         </Text>
+                      </TouchableOpacity>
 
-                        {!isRegisteringNewGroup &&
-                          groupNumber !== null && (
-                            <View style={styles.registeredBox}>
-                              <Text style={styles.numberLabel}>
-                                Current Group
-                              </Text>
-                              <Text style={styles.groupNumber}>
-                                KYA {groupNumber}
-                              </Text>
-
-                              <TouchableOpacity
-                                style={styles.enterButton}
-                                onPress={() => {
-                                  if (currentGroupId !== null) {
-                                    enterGroup(currentGroupId);
-                                  }
-                                }}
-                              >
-                                <Text style={styles.enterButtonText}>
-                                  Enter Group
-                                </Text>
-                              </TouchableOpacity>
-                            </View>
-                          )}
-
-                        <TouchableOpacity
-                          style={styles.newGroupButton}
-                          onPress={() =>
-                            startNewGroupRegistration(false)
-                          }
-                        >
-                          <Text style={styles.newGroupButtonText}>
-                            + Register New Group
+                      {isRegisteringNewGroup && (
+                        <>
+                          <Text style={styles.modeText}>
+                            {isTestGroup
+                              ? 'DEMO MODE: KYA 2000–KYA 2009'
+                              : 'PRODUCTION MODE: KYA 2010–KYA 9090'}
                           </Text>
-                        </TouchableOpacity>
 
-                        <TouchableOpacity
-                          style={styles.testGroupButton}
-                          onPress={() =>
-                            startNewGroupRegistration(true)
-                          }
-                        >
-                          <Text style={styles.testGroupButtonText}>
-                            Register Test Group
+                          <Text style={styles.inputLabel}>
+                            Group Name
                           </Text>
-                        </TouchableOpacity>
 
-                        {isRegisteringNewGroup && (
-                          <>
-                            <Text style={styles.modeText}>
-                              {isTestGroup
-                                ? 'TEST MODE: KYA 2000–KYA 2009'
-                                : 'PRODUCTION MODE: KYA 2010–KYA 9090'}
+                          <TextInput
+                            style={styles.input}
+                            value={groupName}
+                            onChangeText={setGroupName}
+                            placeholder="Enter group name"
+                            placeholderTextColor="#9ca3af"
+                            autoCorrect={false}
+                            autoCapitalize="words"
+                          />
+
+                          <Text style={styles.inputLabel}>
+                            District
+                          </Text>
+
+                          <TextInput
+                            style={styles.input}
+                            value={district}
+                            onChangeText={setDistrict}
+                            placeholder="Enter district"
+                            placeholderTextColor="#9ca3af"
+                            autoCorrect={false}
+                            autoCapitalize="words"
+                          />
+
+                          <Text style={styles.inputLabel}>
+                            Country
+                          </Text>
+
+                          <TextInput
+                            style={styles.input}
+                            value={country}
+                            onChangeText={setCountry}
+                            placeholder="Enter country"
+                            placeholderTextColor="#9ca3af"
+                            autoCorrect={false}
+                            autoCapitalize="words"
+                          />
+
+                          <View style={styles.numberBox}>
+                            <Text style={styles.numberLabel}>
+                              Group Number
                             </Text>
 
-                            <Text style={styles.inputLabel}>
-                              Group Name
-                            </Text>
-
-                            <TextInput
-                              style={styles.input}
-                              value={groupName}
-                              onChangeText={setGroupName}
-                              placeholder="Enter group name"
-                              placeholderTextColor="#9ca3af"
-                              autoCorrect={false}
-                              autoCapitalize="words"
-                            />
-
-                            <Text style={styles.inputLabel}>
-                              District
-                            </Text>
-
-                            <TextInput
-                              style={styles.input}
-                              value={district}
-                              onChangeText={setDistrict}
-                              placeholder="Enter district"
-                              placeholderTextColor="#9ca3af"
-                              autoCorrect={false}
-                              autoCapitalize="words"
-                            />
-
-                            <Text style={styles.inputLabel}>
-                              Country
-                            </Text>
-
-                            <TextInput
-                              style={styles.input}
-                              value={country}
-                              onChangeText={setCountry}
-                              placeholder="Enter country"
-                              placeholderTextColor="#9ca3af"
-                              autoCorrect={false}
-                              autoCapitalize="words"
-                            />
-
-                            <View style={styles.numberBox}>
-                              <Text style={styles.numberLabel}>
-                                Group Number
+                            {registering ? (
+                              <Text style={styles.numberWaiting}>
+                                Registering group...
                               </Text>
+                            ) : (
+                              <Text style={styles.numberWaiting}>
+                                Number will be assigned when you
+                                press Register Group.
+                              </Text>
+                            )}
+                          </View>
 
-                              {registering ? (
-                                <Text style={styles.numberWaiting}>
-                                  Registering group...
-                                </Text>
-                              ) : (
-                                <Text style={styles.numberWaiting}>
-                                  Number will be assigned when you
-                                  press Register Group.
+                          <TouchableOpacity
+                            style={styles.agreementRow}
+                            onPress={() => setAgreed(!agreed)}
+                          >
+                            <View
+                              style={[
+                                styles.checkbox,
+                                agreed &&
+                                  styles.checkboxSelected,
+                              ]}
+                            >
+                              {agreed && (
+                                <Text style={styles.checkmark}>
+                                  ✓
                                 </Text>
                               )}
                             </View>
 
-                            <TouchableOpacity
-                              style={styles.agreementRow}
-                              onPress={() => setAgreed(!agreed)}
-                            >
-                              <View
-                                style={[
-                                  styles.checkbox,
-                                  agreed &&
-                                    styles.checkboxSelected,
-                                ]}
-                              >
-                                {agreed && (
-                                  <Text style={styles.checkmark}>
-                                    ✓
-                                  </Text>
-                                )}
-                              </View>
-
-                              <Text style={styles.agreementText}>
-                                I have read and agreed
-                              </Text>
-                            </TouchableOpacity>
-
-                            <Text style={styles.inputLabel}>
-                              Signature Code
+                            <Text style={styles.agreementText}>
+                              I have read and agreed
                             </Text>
+                          </TouchableOpacity>
 
-                            <TextInput
-                              style={styles.input}
-                              value={signatureCode}
-                              onChangeText={setSignatureCode}
-                              placeholder="Enter signature code"
-                              placeholderTextColor="#9ca3af"
-                              autoCapitalize="characters"
-                              autoCorrect={false}
-                            />
+                          <Text style={styles.inputLabel}>
+                            Signature Code
+                          </Text>
 
-                            <TouchableOpacity
-                              style={[
-                                styles.registerButton,
-                                registering &&
-                                  styles.disabledButton,
-                              ]}
-                              onPress={handleRegisterGroup}
-                              disabled={registering}
+                          <TextInput
+                            style={styles.input}
+                            value={signatureCode}
+                            onChangeText={setSignatureCode}
+                            placeholder="Enter signature code"
+                            placeholderTextColor="#9ca3af"
+                            autoCapitalize="characters"
+                            autoCorrect={false}
+                          />
+
+                          <TouchableOpacity
+                            style={[
+                              styles.registerButton,
+                              registering &&
+                                styles.disabledButton,
+                            ]}
+                            onPress={handleRegisterGroup}
+                            disabled={registering}
+                          >
+                            <Text
+                              style={
+                                styles.registerButtonText
+                              }
                             >
-                              <Text
-                                style={
-                                  styles.registerButtonText
-                                }
-                              >
-                                {registering
-                                  ? 'Registering...'
-                                  : isTestGroup
-                                    ? 'Register Test Group'
-                                    : 'Register Group'}
-                              </Text>
-                            </TouchableOpacity>
+                              {registering
+                                ? 'Registering...'
+                                : isTestGroup
+                                  ? 'Demo Group'
+                                  : 'Register Group'}
+                            </Text>
+                          </TouchableOpacity>
 
-                            {registrationMessage !== '' && (
-                              <Text
-                                style={
-                                  styles.registrationMessage
-                                }
-                              >
-                                {registrationMessage}
-                              </Text>
-                            )}
-                          </>
-                        )}
-                      </View>
-                    </>
+                          {registrationMessage !== '' && (
+                            <Text
+                              style={
+                                styles.registrationMessage
+                              }
+                            >
+                              {registrationMessage}
+                            </Text>
+                          )}
+                        </>
+                      )}
+                    </View>
                   )}
                 </View>
               )}
@@ -779,29 +768,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 21,
   },
-  registrationTopBox: {
+  registrationSection: {
     marginTop: 15,
-    padding: 14,
-    borderRadius: 10,
-    backgroundColor: '#f0fdf4',
-    borderWidth: 1,
-    borderColor: '#bbf7d0',
-  },
-  registrationTitle: {
-    color: '#166534',
-    fontSize: 18,
-    fontWeight: '900',
-  },
-  registrationHelp: {
-    color: '#4b5563',
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: 5,
-    marginBottom: 10,
   },
   registeredBox: {
     padding: 12,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#f0fdf4',
     borderRadius: 9,
     borderWidth: 1,
     borderColor: '#bbf7d0',
