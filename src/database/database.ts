@@ -533,10 +533,10 @@ async function addMemberRoleColumns(): Promise<void> {
   if (!columnNames.includes('assigned_roles')) {
     await db.execAsync(`
       ALTER TABLE members
-      ADD COLUMN assigned_roles TEXT NOT NULL DEFAULT 'member';
+      ADD COLUMN assigned_roles TEXT NOT NULL DEFAULT '';
     `);
   }
-      }
+}
 
 /* ============================================================
    FINANCIAL ACCOUNT CREATION
@@ -607,6 +607,7 @@ async function createDefaultVSLASetupRules(
       late_fine,
       non_saving_fine,
       non_loan_repayment_fine,
+      non_insurance_contribution,
       meeting_frequency,
       cycle_duration_months,
       leadership_term_months,
@@ -614,7 +615,7 @@ async function createDefaultVSLASetupRules(
       created_at,
       updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     groupId,
     1000,
     1,
@@ -628,6 +629,7 @@ async function createDefaultVSLASetupRules(
     0,
     0,
     0,
+    0,
     'weekly',
     12,
     12,
@@ -635,7 +637,7 @@ async function createDefaultVSLASetupRules(
     timestamp,
     timestamp,
   );
-  }
+}
 /* ============================================================
    GROUP DORMANCY
    ============================================================ */
@@ -895,6 +897,7 @@ status TEXT NOT NULL DEFAULT 'active',
       late_fine REAL NOT NULL DEFAULT 0,
       non_saving_fine REAL NOT NULL DEFAULT 0,
       non_loan_repayment_fine REAL NOT NULL DEFAULT 0,
+      non_insurance_contribution REAL NOT NULL DEFAULT 0,
       meeting_frequency TEXT NOT NULL DEFAULT 'weekly',
       cycle_duration_months INTEGER NOT NULL DEFAULT 12,
       leadership_term_months INTEGER NOT NULL DEFAULT 12,
@@ -1333,6 +1336,13 @@ status TEXT NOT NULL DEFAULT 'active',
     db,
     'meeting_closures',
     'insurance_fund',
+    'REAL NOT NULL DEFAULT 0',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'vsla_setup_rules',
+    'non_insurance_contribution',
     'REAL NOT NULL DEFAULT 0',
   );
 
@@ -2131,15 +2141,15 @@ export async function updateVSLASetupRules(
     current.non_saving_fine;
 
   const nonLoanRepaymentFine =
-  data.nonLoanRepaymentFine !== undefined
-    ? data.nonLoanRepaymentFine
-    : current.non_loan_repayment_fine;
-  
+    data.nonLoanRepaymentFine !== undefined
+      ? Number(data.nonLoanRepaymentFine)
+      : Number(current.non_loan_repayment_fine ?? 0);
+
   const nonInsuranceContribution =
-  data.nonInsuranceContribution !== undefined
-    ? data.nonInsuranceContribution
-    : current.non_insurance_contribution;;
-  
+    data.nonInsuranceContribution !== undefined
+      ? Number(data.nonInsuranceContribution)
+      : Number(current.non_insurance_contribution ?? 0);
+
   const meetingFrequency =
     normalizeText(
       data.meetingFrequency ??
@@ -2261,22 +2271,25 @@ export async function updateVSLASetupRules(
     throw new Error(
       'Non-saving fine cannot be negative.',
     );
-    }if (
-  !Number.isFinite(nonLoanRepaymentFine) ||
-  nonLoanRepaymentFine < 0
-) {
-  throw new Error(
-    'Non-loan repayment fine cannot be negative.',
-  );
-      }
-if (
-  !Number.isFinite(nonInsuranceContribution) ||
-  nonInsuranceContribution < 0
-) {
-  throw new Error(
-    'Non-insurance contribution cannot be negative.',
-  );
-      }
+  }
+
+  if (
+    !Number.isFinite(nonLoanRepaymentFine) ||
+    nonLoanRepaymentFine < 0
+  ) {
+    throw new Error(
+      'Non-loan repayment fine cannot be negative.',
+    );
+  }
+
+  if (
+    !Number.isFinite(nonInsuranceContribution) ||
+    nonInsuranceContribution < 0
+  ) {
+    throw new Error(
+      'Non-insurance contribution cannot be negative.',
+    );
+  }
 
   if (!meetingFrequency) {
     throw new Error(
@@ -2339,8 +2352,8 @@ if (
     socialFundContribution,
     absenceFine,
     lateFine,
-    nonSavingFine,
     nonInsuranceContribution,
+    nonSavingFine,
     nonLoanRepaymentFine,
     meetingFrequency,
     cycleDurationMonths,
