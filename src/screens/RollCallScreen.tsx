@@ -1,4 +1,9 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useState,
+} from 'react';
+
 import {
   ActivityIndicator,
   Alert,
@@ -9,9 +14,11 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import { RootStackParamList } from '../../App';
+
 import {
   getMeetingRollCall,
   isMeetingRollCallComplete,
@@ -24,7 +31,10 @@ type Props = NativeStackScreenProps<
   'MeetingRollCall'
 >;
 
-type AttendanceStatus = 'present' | 'late' | 'absent';
+type AttendanceStatus =
+  | 'present'
+  | 'late'
+  | 'absent';
 
 export default function RollCallScreen({
   route,
@@ -36,11 +46,11 @@ export default function RollCallScreen({
     executiveMemberId,
   } = route.params;
 
-  const [members, setMembers] = useState<
-    MeetingAttendanceRecord[]
-  >([]);
+  const [members, setMembers] =
+    useState<MeetingAttendanceRecord[]>([]);
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] =
+    useState(true);
 
   const [savingMemberId, setSavingMemberId] =
     useState<number | null>(null);
@@ -215,11 +225,7 @@ export default function RollCallScreen({
                 {
                   width:
                     members.length > 0
-                      ? `${
-                          (completedCount /
-                            members.length) *
-                          100
-                        }%`
+                      ? `${(completedCount / members.length) * 100}%`
                       : '0%',
                 },
               ]}
@@ -236,9 +242,7 @@ export default function RollCallScreen({
             {rollCallComplete
               ? '✓ Roll call complete'
               : `${pendingCount} member${
-                  pendingCount === 1
-                    ? ''
-                    : 's'
+                  pendingCount === 1 ? '' : 's'
                 } still pending`}
           </Text>
         </View>
@@ -251,7 +255,7 @@ export default function RollCallScreen({
 
             <Text style={styles.emptyText}>
               There are no active members available
-              for this meeting's roll call.
+              for this meeting roll call.
             </Text>
           </View>
         ) : (
@@ -541,4 +545,166 @@ const styles = StyleSheet.create({
 
   memberCard: {
     borderWidth: 1,
-    borderColor: '#e5e
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    padding: 15,
+    marginBottom: 12,
+    backgroundColor: '#ffffff',
+  },
+
+  memberHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+
+  memberIdentity: {
+    flex: 1,
+    paddingRight: 10,
+  },
+
+  memberName: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#111827',
+  },
+
+  memberNumber: {
+    marginTop: 3,
+    fontSize: 13,
+    color: '#6b7280',
+  },
+
+  statusBadge: {
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+
+  presentBadge: {
+    backgroundColor: '#16a34a',
+  },
+
+  lateBadge: {
+    backgroundColor: '#d97706',
+  },
+
+  absentBadge: {
+    backgroundColor: '#dc2626',
+  },
+
+  statusBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+
+  actionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 13,
+  },
+
+  actionButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  presentButton: {
+    backgroundColor: '#16a34a',
+  },
+
+  lateButton: {
+    backgroundColor: '#d97706',
+  },
+
+  absentButton: {
+    backgroundColor: '#dc2626',
+  },
+
+  selectedPresentButton: {
+    borderWidth: 3,
+    borderColor: '#14532d',
+  },
+
+  selectedLateButton: {
+    borderWidth: 3,
+    borderColor: '#78350f',
+  },
+
+  selectedAbsentButton: {
+    borderWidth: 3,
+    borderColor: '#7f1d1d',
+  },
+
+  actionText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+
+  savingText: {
+    marginTop: 7,
+    textAlign: 'right',
+    color: '#6b7280',
+    fontSize: 12,
+  },
+
+  emptyCard: {
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    padding: 20,
+    marginBottom: 16,
+  },
+
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111827',
+  },
+
+  emptyText: {
+    marginTop: 7,
+    color: '#6b7280',
+    lineHeight: 20,
+  },
+
+  continueButton: {
+    backgroundColor: '#16a34a',
+    borderRadius: 10,
+    minHeight: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+
+  disabledContinueButton: {
+    backgroundColor: '#9ca3af',
+  },
+
+  continueButtonText: {
+    color: '#ffffff',
+    fontSize: 17,
+    fontWeight: '800',
+  },
+
+  backButton: {
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 10,
+    minHeight: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  backButtonText: {
+    color: '#374151',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+});
