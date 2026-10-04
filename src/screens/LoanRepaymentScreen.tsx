@@ -13,6 +13,7 @@ import {
 import {
   getMembersByGroupId,
   recordLoanRepayment,
+  getMemberLoanBalance,
 } from '../database/database';
 
 type Props = {
@@ -44,10 +45,9 @@ export default function LoanRepaymentScreen({
   const meetingId = route?.params?.meetingId ?? null;
 
   /*
-   * UGX remains the default currency for now.
-   * The screen can receive another currency through
-   * route.params.currency when the group/country
-   * currency system is connected.
+   * UGX is only the default currency.
+   * Another country/group currency can be passed
+   * through route.params.currency.
    */
   const currency = route?.params?.currency || 'UGX';
 
@@ -66,11 +66,15 @@ export default function LoanRepaymentScreen({
     (member) => member.id === selectedMemberId,
   );
 
+  /*
+   * Load all active members belonging to this group.
+   */
   const loadMembers = async () => {
     if (!groupId) return;
 
     try {
-      const groupMembers = await getMembersByGroupId(groupId);
+      const groupMembers =
+        await getMembersByGroupId(groupId);
 
       setMembers(
         groupMembers.filter(
@@ -78,7 +82,10 @@ export default function LoanRepaymentScreen({
         ),
       );
     } catch (error) {
-      console.error('Failed to load members:', error);
+      console.error(
+        'Failed to load members:',
+        error,
+      );
 
       Alert.alert(
         'Error',
@@ -87,22 +94,27 @@ export default function LoanRepaymentScreen({
     }
   };
 
+  /*
+   * Load the REAL outstanding loan balance
+   * from database.ts.
+   *
+   * This means the screen does not keep its own
+   * separate loan balance.
+   */
   const loadLoanBalance = async (
     memberId: number,
   ) => {
     if (!groupId) return;
 
     try {
-      /*
-       * Loan balance:
-       * Total loan issued
-       * minus
-       * total loan repayments
-       *
-       * The actual database calculation will be
-       * connected through database.ts.
-       */
-      setLoanBalance(0);
+      const result = await getMemberLoanBalance(
+        groupId,
+        memberId,
+      );
+
+      setLoanBalance(
+        Number(result?.balance ?? 0),
+      );
     } catch (error) {
       console.error(
         'Failed to load loan balance:',
@@ -122,6 +134,10 @@ export default function LoanRepaymentScreen({
     loadMembers();
   }, [groupId]);
 
+  /*
+   * Select a member and immediately load
+   * that member's current outstanding loan.
+   */
   const handleMemberSelect = async (
     memberId: number,
   ) => {
@@ -129,10 +145,14 @@ export default function LoanRepaymentScreen({
 
     setSelectedMemberId(memberId);
     setAmount('');
+    setLoanBalance(0);
 
     await loadLoanBalance(memberId);
   };
 
+  /*
+   * Validate and prepare repayment.
+   */
   const handleRepayment = () => {
     if (!groupId) {
       Alert.alert(
@@ -174,8 +194,8 @@ export default function LoanRepaymentScreen({
     }
 
     /*
-     * Make sure the repayment cannot be greater
-     * than the outstanding loan balance.
+     * Prevent repayment from being greater
+     * than the actual outstanding balance.
      */
     if (repaymentAmount > loanBalance) {
       Alert.alert(
@@ -222,6 +242,9 @@ export default function LoanRepaymentScreen({
     );
   };
 
+  /*
+   * Save repayment to database.
+   */
   const confirmRepayment = async (
     repaymentAmount: number,
   ) => {
@@ -243,8 +266,23 @@ export default function LoanRepaymentScreen({
         reason.trim() || 'Loan repayment',
       );
 
+      /*
+       * Reload the balance directly from
+       * the database after saving.
+       */
+      await loadLoanBalance(
+        selectedMemberId,
+      );
+
+      /*
+       * Calculate the expected remaining balance
+       * for the success message.
+       */
       const remaining =
-        loanBalance - repaymentAmount;
+        Math.max(
+          0,
+          loanBalance - repaymentAmount,
+        );
 
       Alert.alert(
         'Success',
@@ -260,10 +298,6 @@ export default function LoanRepaymentScreen({
 
       setAmount('');
       setReason('Loan repayment');
-
-      await loadLoanBalance(
-        selectedMemberId,
-      );
     } catch (error) {
       Alert.alert(
         'Repayment Failed',
@@ -276,6 +310,9 @@ export default function LoanRepaymentScreen({
     }
   };
 
+  /*
+   * Search members by name or member number.
+   */
   const filteredMembers = members.filter(
     (member) => {
       const searchText =
