@@ -31,6 +31,11 @@ type Member = {
   status: string;
 };
 
+const formatCurrency = (
+  amount: number,
+  currency = 'UGX',
+) =>
+`${currency} ${Math.round(amount).toLocaleString()}`;
 export default function LoanRepaymentScreen({
   route,
 }: Props) {
