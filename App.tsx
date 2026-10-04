@@ -8,6 +8,7 @@ import SetupRulesScreen from './src/screens/SetupRulesScreen';
 
 import AddMembersScreen from './src/screens/AddMembersScreen';
 import NewMeetingScreen from './src/screens/NewMeetingScreen';
+import RollCallScreen from './src/screens/RollCallScreen';
 import SavingsScreen from './src/screens/SavingsScreen';
 import LoanDisbursementScreen from './src/screens/LoanDisbursementScreen';
 import FinesScreen from './src/screens/FinesScreen';
@@ -17,7 +18,6 @@ import LoanRepaymentScreen from './src/screens/LoanRepaymentScreen';
 import LoansScreen from './src/screens/LoansScreen';
 import MiscellaneousExpenseScreen from './src/screens/MiscellaneousExpenseScreen';
 import ExpenditureScreen from './src/screens/ExpenditureScreen';
-import RollCallScreen from './src/screens/RollCallScreen';
 
 export type RootStackParamList = {
   Home: undefined;
@@ -38,11 +38,11 @@ export type RootStackParamList = {
   };
 
   MeetingRollCall: {
-  groupId: number;
-  meetingId: number;
-  executiveMemberId: number;
-};
-  
+    groupId: number;
+    meetingId: number;
+    executiveMemberId: number;
+  };
+
   Savings: {
     groupId: number;
     executiveMemberId: number;
@@ -84,8 +84,8 @@ export type RootStackParamList = {
   };
 
   Expenditure: {
-  groupId: number;
-  meetingId: number;
+    groupId: number;
+    meetingId: number;
   };
 };
 
@@ -123,6 +123,11 @@ export default function App() {
         <Stack.Screen
           name="NewMeeting"
           component={NewMeetingScreen}
+        />
+
+        <Stack.Screen
+          name="MeetingRollCall"
+          component={RollCallScreen}
         />
 
         <Stack.Screen
@@ -169,16 +174,6 @@ export default function App() {
           name="Expenditure"
           component={ExpenditureScreen}
         />
-
-        <Stack.Screen
-  name="NewMeeting"
-  component={NewMeetingScreen}
-/>
-
-<Stack.Screen
-  name="MeetingRollCall"
-  component={RollCallScreen}
-/>
       </Stack.Navigator>
     </NavigationContainer>
   );
