@@ -169,15 +169,14 @@ export default function LoanRepaymentScreen({
       );
       return;
     }
-
-    if (
-      repaymentAmount > loanBalance
-    ) {
-      Alert.alert(
-        'Amount Too High',
-        `Outstanding loan balance: UGX ${loanBalance.toLocaleString()}`,
-      );
-      return;
+if (loanPaymentToday > loanBalance) {
+  Alert.alert(
+    'Loan Payment Too High',
+    `The member's current loan balance is ${formatUGX(
+      loanBalance,
+    )}.`,
+  );
+  return;
     }
 
     Alert.alert(
