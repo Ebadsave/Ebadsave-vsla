@@ -17,6 +17,7 @@ import LoanRepaymentScreen from './src/screens/LoanRepaymentScreen';
 import LoansScreen from './src/screens/LoansScreen';
 import MiscellaneousExpenseScreen from './src/screens/MiscellaneousExpenseScreen';
 import ExpenditureScreen from './src/screens/ExpenditureScreen';
+import RollCallScreen from './src/screens/RollCallScreen';
 
 export type RootStackParamList = {
   Home: undefined;
@@ -36,6 +37,12 @@ export type RootStackParamList = {
     executiveMemberId: number;
   };
 
+  MeetingRollCall: {
+  groupId: number;
+  meetingId: number;
+  executiveMemberId: number;
+};
+  
   Savings: {
     groupId: number;
     executiveMemberId: number;
@@ -164,5 +171,15 @@ export default function App() {
         />
       </Stack.Navigator>
     </NavigationContainer>
+
+    <Stack.Screen
+  name="NewMeeting"
+  component={NewMeetingScreen}
+/>
+
+<Stack.Screen
+  name="MeetingRollCall"
+  component={RollCallScreen}
+/>
   );
 }
