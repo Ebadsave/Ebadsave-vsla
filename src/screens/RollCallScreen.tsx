@@ -135,9 +135,10 @@ export default function RollCallScreen({
       }
 
       navigation.navigate('Savings', {
-        groupId,
-        executiveMemberId,
-      });
+  groupId,
+  executiveMemberId,
+  meetingId,
+});
     } catch (error) {
       Alert.alert(
         'Unable to Continue',
