@@ -169,10 +169,8 @@ export default function App() {
           name="Expenditure"
           component={ExpenditureScreen}
         />
-      </Stack.Navigator>
-    </NavigationContainer>
 
-    <Stack.Screen
+        <Stack.Screen
   name="NewMeeting"
   component={NewMeetingScreen}
 />
@@ -181,5 +179,7 @@ export default function App() {
   name="MeetingRollCall"
   component={RollCallScreen}
 />
+      </Stack.Navigator>
+    </NavigationContainer>
   );
 }
