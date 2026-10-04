@@ -20,6 +20,7 @@ type Props = {
     params?: {
       groupId?: number;
       meetingId?: number | null;
+      currency?: string;
     };
   };
 };
@@ -34,54 +35,50 @@ type Member = {
 const formatCurrency = (
   amount: number,
   currency = 'UGX',
-) =>
-`${currency} ${Math.round(amount).toLocaleString()}`;
+) => `${currency} ${Math.round(amount).toLocaleString()}`;
+
 export default function LoanRepaymentScreen({
   route,
 }: Props) {
   const groupId = route?.params?.groupId;
-  const meetingId =
-    route?.params?.meetingId ?? null;
+  const meetingId = route?.params?.meetingId ?? null;
 
-  const [members, setMembers] = useState<Member[]>(
-    [],
-  );
+  /*
+   * UGX remains the default currency for now.
+   * The screen can receive another currency through
+   * route.params.currency when the group/country
+   * currency system is connected.
+   */
+  const currency = route?.params?.currency || 'UGX';
+
+  const [members, setMembers] = useState<Member[]>([]);
   const [selectedMemberId, setSelectedMemberId] =
     useState<number | null>(null);
 
-  const [loanBalance, setLoanBalance] =
-    useState(0);
+  const [loanBalance, setLoanBalance] = useState(0);
 
   const [amount, setAmount] = useState('');
-  const [reason, setReason] = useState(
-    'Loan repayment',
-  );
+  const [reason, setReason] = useState('Loan repayment');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
 
   const selectedMember = members.find(
-    (member) =>
-      member.id === selectedMemberId,
+    (member) => member.id === selectedMemberId,
   );
 
   const loadMembers = async () => {
     if (!groupId) return;
 
     try {
-      const groupMembers =
-        await getMembersByGroupId(groupId);
+      const groupMembers = await getMembersByGroupId(groupId);
 
       setMembers(
         groupMembers.filter(
-          (member) =>
-            member.status === 'active',
+          (member) => member.status === 'active',
         ),
       );
     } catch (error) {
-      console.error(
-        'Failed to load members:',
-        error,
-      );
+      console.error('Failed to load members:', error);
 
       Alert.alert(
         'Error',
@@ -101,9 +98,10 @@ export default function LoanRepaymentScreen({
        * Total loan issued
        * minus
        * total loan repayments
+       *
+       * The actual database calculation will be
+       * connected through database.ts.
        */
-      // The calculation will be connected
-      // to database.ts in the next step.
       setLoanBalance(0);
     } catch (error) {
       console.error(
@@ -174,19 +172,40 @@ export default function LoanRepaymentScreen({
       );
       return;
     }
-if (loanPaymentToday > loanBalance) {
-  Alert.alert(
-    'Loan Payment Too High',
-    `The member's current loan balance is ${formatUGX(
-      loanBalance,
-    )}.`,
-  );
-  return;
+
+    /*
+     * Make sure the repayment cannot be greater
+     * than the outstanding loan balance.
+     */
+    if (repaymentAmount > loanBalance) {
+      Alert.alert(
+        'Loan Payment Too High',
+        `The member's current loan balance is ${formatCurrency(
+          loanBalance,
+          currency,
+        )}.`,
+      );
+      return;
     }
+
+    const remainingBalance =
+      loanBalance - repaymentAmount;
 
     Alert.alert(
       'Confirm Repayment',
-      `Member: ${selectedMember?.full_name}\n\nOutstanding loan: UGX ${loanBalance.toLocaleString()}\nRepayment: UGX ${repaymentAmount.toLocaleString()}\nRemaining balance: UGX ${(loanBalance - repaymentAmount).toLocaleString()}`,
+      `Member: ${selectedMember?.full_name}\n\n` +
+        `Outstanding loan: ${formatCurrency(
+          loanBalance,
+          currency,
+        )}\n` +
+        `Repayment: ${formatCurrency(
+          repaymentAmount,
+          currency,
+        )}\n` +
+        `Remaining balance: ${formatCurrency(
+          remainingBalance,
+          currency,
+        )}`,
       [
         {
           text: 'Cancel',
@@ -221,8 +240,7 @@ if (loanPaymentToday > loanBalance) {
         selectedMemberId,
         repaymentAmount,
         meetingId,
-        reason.trim() ||
-          'Loan repayment',
+        reason.trim() || 'Loan repayment',
       );
 
       const remaining =
@@ -230,7 +248,14 @@ if (loanPaymentToday > loanBalance) {
 
       Alert.alert(
         'Success',
-        `Repayment of UGX ${repaymentAmount.toLocaleString()} recorded.\n\nRemaining loan balance: UGX ${remaining.toLocaleString()}`,
+        `Repayment of ${formatCurrency(
+          repaymentAmount,
+          currency,
+        )} recorded.\n\n` +
+          `Remaining loan balance: ${formatCurrency(
+            remaining,
+            currency,
+          )}`,
       );
 
       setAmount('');
@@ -251,8 +276,8 @@ if (loanPaymentToday > loanBalance) {
     }
   };
 
-  const filteredMembers =
-    members.filter((member) => {
+  const filteredMembers = members.filter(
+    (member) => {
       const searchText =
         search.trim().toLowerCase();
 
@@ -266,14 +291,13 @@ if (loanPaymentToday > loanBalance) {
           .toLowerCase()
           .includes(searchText)
       );
-    });
+    },
+  );
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView
-        contentContainerStyle={
-          styles.content
-        }
+        contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
       >
         <Text style={styles.title}>
@@ -340,8 +364,10 @@ if (loanPaymentToday > loanBalance) {
             </Text>
 
             <Text style={styles.balance}>
-              UGX{' '}
-              {loanBalance.toLocaleString()}
+              {formatCurrency(
+                loanBalance,
+                currency,
+              )}
             </Text>
 
             <Text style={styles.memberText}>
