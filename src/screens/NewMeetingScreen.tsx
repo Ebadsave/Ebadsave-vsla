@@ -79,7 +79,7 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
     loadMeetingState();
   }, [loadMeetingState]);
 
-  const handleStartMeeting = async () => {
+   const handleStartMeeting = async () => {
   if (openMeeting) {
     Alert.alert(
       'Meeting Already Open',
@@ -88,8 +88,6 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
     return;
   }
 
-  // A first meeting has no previous meeting
-  // and can start immediately.
   if (
     previousMeeting &&
     previousMeeting.summary_approved !== 1
@@ -104,14 +102,11 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
   try {
     setStarting(true);
 
-    // Start the meeting and keep the actual
-    // meeting ID returned by the database.
     const meetingId = await startNewMeeting(
       groupId,
       executiveMemberId,
     );
 
-    // Immediately move to Roll Call.
     navigation.replace('MeetingRollCall', {
       groupId,
       meetingId,
@@ -128,19 +123,6 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
     setStarting(false);
   }
 };
-
-      await loadMeetingState();
-    } catch (error) {
-      Alert.alert(
-        'Unable to Start Meeting',
-        error instanceof Error
-          ? error.message
-          : 'The meeting could not be started.',
-      );
-    } finally {
-      setStarting(false);
-    }
-  };
 
   const handleApprovePreviousMeeting = () => {
     if (!previousMeeting) {
