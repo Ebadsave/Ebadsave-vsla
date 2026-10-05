@@ -13,6 +13,7 @@ import {
 import { useRoute } from '@react-navigation/native';
 import {
   getFinancialAccounts,
+  getFinancialTransactions,
   getMembersByGroupId,
   getOpenMeeting,
   recordFine,
@@ -38,6 +39,18 @@ interface MemberItem {
 interface AccountItem {
   account_type: string;
   balance: number;
+}
+
+interface FinancialTransactionItem {
+  id: number;
+  account_type: string;
+  amount: number;
+  reason: string;
+  member_id: number | null;
+  meeting_id: number | null;
+  transaction_type: string;
+  reversed?: number;
+  created_at: string;
 }
 
 type PaymentType =
@@ -89,6 +102,7 @@ export default function FinancialTransactionsScreen() {
   const [showMembers, setShowMembers] = useState(false);
   const [showFineTypes, setShowFineTypes] = useState(false);
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
+  const [transactions, setTransactions] = useState<FinancialTransactionItem[]>([]);
 
   const loadData = useCallback(async () => {
     if (!groupId) {
@@ -111,9 +125,10 @@ export default function FinancialTransactionsScreen() {
         throw new Error('No open meeting is available. Start the meeting first.');
       }
 
-      const [memberRows, accountRows] = await Promise.all([
+      const [memberRows, accountRows, transactionRows] = await Promise.all([
         getMembersByGroupId(groupId),
         getFinancialAccounts(groupId),
+        getFinancialTransactions(groupId),
       ]);
 
       const activeMembers = (memberRows as MemberItem[]).filter(
@@ -122,6 +137,13 @@ export default function FinancialTransactionsScreen() {
 
       setMembers(activeMembers);
       setAccounts(accountRows as AccountItem[]);
+      setTransactions(
+        (transactionRows as FinancialTransactionItem[]).filter(
+          (transaction) =>
+            Number(transaction.meeting_id) === Number(activeMeetingId) &&
+            Number(transaction.reversed ?? 0) === 0,
+        ),
+      );
 
       if (
         selectedMemberId === null ||
@@ -162,6 +184,54 @@ export default function FinancialTransactionsScreen() {
   const selectedAccount = accounts.find(
     (account) => account.account_type === selectedAccountType,
   );
+
+  const currentMemberIndex = members.findIndex(
+    (member) => member.id === selectedMemberId,
+  );
+
+  const goToNextMember = () => {
+    if (members.length === 0) {
+      return;
+    }
+
+    const nextIndex =
+      currentMemberIndex >= members.length - 1
+        ? 0
+        : currentMemberIndex + 1;
+
+    setSelectedMemberId(members[nextIndex].id);
+    setAmount('');
+  };
+
+  const goToPreviousMember = () => {
+    if (members.length === 0) {
+      return;
+    }
+
+    const previousIndex =
+      currentMemberIndex <= 0
+        ? members.length - 1
+        : currentMemberIndex - 1;
+
+    setSelectedMemberId(members[previousIndex].id);
+    setAmount('');
+  };
+
+  const getMemberName = (memberId: number | null) => {
+    if (memberId === null) {
+      return 'Group';
+    }
+
+    const member = members.find((item) => item.id === memberId);
+    return member
+      ? `${member.member_number} — ${member.full_name}`
+      : `Member #${memberId}`;
+  };
+
+  const formatTransactionType = (value: string) =>
+    value
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (character) => character.toUpperCase());
 
   const submitPayment = async () => {
     const numericAmount = Number(amount.replace(/,/g, '').trim());
@@ -296,6 +366,30 @@ export default function FinancialTransactionsScreen() {
           })}
         </View>
 
+        <View style={styles.memberNavigation}>
+          <TouchableOpacity
+            style={[styles.navigationButton, members.length === 0 && styles.navigationButtonDisabled]}
+            onPress={goToPreviousMember}
+            disabled={members.length === 0}
+          >
+            <Text style={styles.navigationButtonText}>← Back</Text>
+          </TouchableOpacity>
+
+          <Text style={styles.memberPosition}>
+            {members.length > 0 && currentMemberIndex >= 0
+              ? `${currentMemberIndex + 1} / ${members.length}`
+              : '0 / 0'}
+          </Text>
+
+          <TouchableOpacity
+            style={[styles.navigationButton, members.length === 0 && styles.navigationButtonDisabled]}
+            onPress={goToNextMember}
+            disabled={members.length === 0}
+          >
+            <Text style={styles.navigationButtonText}>Next →</Text>
+          </TouchableOpacity>
+        </View>
+
         <View style={styles.card}>
           <Text style={styles.label}>Member</Text>
           <TouchableOpacity
@@ -392,6 +486,32 @@ export default function FinancialTransactionsScreen() {
         {members.length === 0 && (
           <Text style={styles.warningText}>No active members are available for this meeting.</Text>
         )}
+
+        <View style={styles.recordsCard}>
+          <Text style={styles.recordsTitle}>Today's Financial Records</Text>
+          <Text style={styles.recordsSubtitle}>All records for meeting #{meetingId}</Text>
+
+          {transactions.length === 0 ? (
+            <Text style={styles.emptyRecordsText}>No financial records have been recorded for this meeting.</Text>
+          ) : (
+            transactions.map((transaction) => (
+              <View key={transaction.id} style={styles.recordRow}>
+                <View style={styles.recordMain}>
+                  <Text style={styles.recordType}>
+                    {formatTransactionType(transaction.transaction_type)}
+                  </Text>
+                  <Text style={styles.recordMember}>
+                    {getMemberName(transaction.member_id)}
+                  </Text>
+                  <Text style={styles.recordReason}>{transaction.reason}</Text>
+                </View>
+                <Text style={styles.recordAmount}>
+                  {currency} {formatMoney(Math.abs(Number(transaction.amount) || 0))}
+                </Text>
+              </View>
+            ))
+          )}
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -447,6 +567,86 @@ const styles = StyleSheet.create({
   },
   typeButtonTextSelected: {
     color: '#ffffff',
+  },
+  memberNavigation: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  navigationButton: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#16a34a',
+    borderRadius: 10,
+    paddingVertical: 11,
+    paddingHorizontal: 18,
+    minWidth: 92,
+    alignItems: 'center',
+  },
+  navigationButtonDisabled: {
+    opacity: 0.45,
+  },
+  navigationButtonText: {
+    color: '#166534',
+    fontWeight: '800',
+  },
+  memberPosition: {
+    color: '#374151',
+    fontWeight: '800',
+  },
+  recordsCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 16,
+    marginTop: 14,
+    elevation: 2,
+  },
+  recordsTitle: {
+    color: '#111827',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  recordsSubtitle: {
+    color: '#6b7280',
+    fontSize: 13,
+    marginTop: 4,
+    marginBottom: 10,
+  },
+  emptyRecordsText: {
+    color: '#6b7280',
+    marginTop: 8,
+  },
+  recordRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+    paddingVertical: 12,
+    gap: 12,
+  },
+  recordMain: {
+    flex: 1,
+  },
+  recordType: {
+    color: '#111827',
+    fontWeight: '800',
+  },
+  recordMember: {
+    color: '#374151',
+    fontSize: 13,
+    marginTop: 3,
+  },
+  recordReason: {
+    color: '#6b7280',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  recordAmount: {
+    color: '#166534',
+    fontWeight: '800',
+    textAlign: 'right',
   },
   card: {
     backgroundColor: '#ffffff',
