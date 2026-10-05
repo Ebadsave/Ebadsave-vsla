@@ -1,13 +1,13 @@
 import React from 'react';
 import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
 
-export default function LoanDisbursementScreen() {
+export default function disbursementcreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
         <Text style={styles.title}>Loan Disbursement</Text>
         <Text style={styles.subtitle}>
-          Loan disbursement functions will be added here.
+        Fines will be added here.
         </Text>
       </View>
     </SafeAreaView>
