@@ -44,6 +44,11 @@ export type RootStackParamList = {
     executiveMemberId: number;
   };
 
+  FinancialTransactions: {
+  groupId: number;
+  meetingId: number;
+};
+  
   Savings: {
   groupId: number;
   executiveMemberId: number;
@@ -132,6 +137,11 @@ export default function App() {
           component={RollCallScreen}
         />
 
+        <Stack.Screen
+  name="FinancialTransactions"
+  component={FinancialTransactionsScreen}
+/>
+        
         <Stack.Screen
           name="Savings"
           component={SavingsScreen}
