@@ -9,6 +9,7 @@ import SetupRulesScreen from './src/screens/SetupRulesScreen';
 import AddMembersScreen from './src/screens/AddMembersScreen';
 import NewMeetingScreen from './src/screens/NewMeetingScreen';
 import RollCallScreen from './src/screens/RollCallScreen';
+import FinancialTransactionsScreen from './screens/FinancialTransactionsScreen';
 import SavingsScreen from './src/screens/SavingsScreen';
 import LoanDisbursementScreen from './src/screens/LoanDisbursementScreen';
 import FinesScreen from './src/screens/FinesScreen';
