@@ -134,9 +134,8 @@ export default function RollCallScreen({
         return;
       }
 
-      navigation.navigate('Savings', {
+      navigation.navigate('FinancialTransactions', {
   groupId,
-  executiveMemberId,
   meetingId,
 });
     } catch (error) {
