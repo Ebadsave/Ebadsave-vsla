@@ -14,6 +14,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import {
   getAllGroups,
   getMembersByGroupId,
+  getOpenMeeting,
+  isMeetingRollCallComplete,
   GroupRecord,
   MemberRecord,
 } from '../database/database';
@@ -68,22 +70,28 @@ const summaryCards = [
 ];
 
 export default function HomeScreen({ navigation }: HomeScreenProps) {
-  const [activeGroup, setActiveGroup] = useState<GroupRecord | null>(null);
-  const [executiveMemberId, setExecutiveMemberId] = useState<number | null>(
-    null,
-  );
+  const [activeGroup, setActiveGroup] =
+    useState<GroupRecord | null>(null);
+
+  const [executiveMemberId, setExecutiveMemberId] =
+    useState<number | null>(null);
+
+  const [openMeeting, setOpenMeeting] =
+    useState<any | null>(null);
 
   const loadActiveGroup = useCallback(async () => {
     try {
       const groups = await getAllGroups();
 
       const activeGroups = groups.filter(
-        (group) => group.status.toLowerCase() === 'active',
+        (group) =>
+          group.status.toLowerCase() === 'active',
       );
 
       if (activeGroups.length === 0) {
         setActiveGroup(null);
         setExecutiveMemberId(null);
+        setOpenMeeting(null);
         return;
       }
 
@@ -91,19 +99,30 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
 
       setActiveGroup(group);
 
-      const members = await getMembersByGroupId(group.id);
+      const members =
+        await getMembersByGroupId(group.id);
 
       const executive = members.find(
         (member: MemberRecord) =>
           member.role?.toLowerCase() === 'executive',
       );
 
-      setExecutiveMemberId(executive ? executive.id : null);
+      setExecutiveMemberId(
+        executive ? executive.id : null,
+      );
+
+      const meeting = await getOpenMeeting(group.id);
+
+      setOpenMeeting(meeting);
     } catch (error) {
-      console.error('Failed to load active group:', error);
+      console.error(
+        'Failed to load active group:',
+        error,
+      );
 
       setActiveGroup(null);
       setExecutiveMemberId(null);
+      setOpenMeeting(null);
     }
   }, []);
 
@@ -141,6 +160,22 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
     return true;
   };
 
+  const requireOpenMeeting = (): boolean => {
+    if (!requireExecutive()) {
+      return false;
+    }
+
+    if (!openMeeting) {
+      Alert.alert(
+        'No Current Meeting',
+        'Please start a new meeting before recording meeting transactions.',
+      );
+      return false;
+    }
+
+    return true;
+  };
+
   const handleSetupRules = () => {
     if (!requireGroup()) {
       return;
@@ -166,19 +201,72 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
       return;
     }
 
+    if (openMeeting) {
+      Alert.alert(
+        'Meeting Already Open',
+        'The current meeting is still open. Continue the current meeting instead of starting another one.',
+      );
+      return;
+    }
+
     navigation.navigate('NewMeeting', {
       groupId: activeGroup!.id,
       executiveMemberId: executiveMemberId!,
     });
   };
 
-  const handleSavings = () => {
+  const handleCurrentMeeting = async () => {
     if (!requireExecutive()) {
+      return;
+    }
+
+    if (!openMeeting) {
+      Alert.alert(
+        'No Current Meeting',
+        'There is no open meeting for this group.',
+      );
+      return;
+    }
+
+    try {
+      const rollCallComplete =
+        await isMeetingRollCallComplete(
+          openMeeting.id,
+        );
+
+      if (!rollCallComplete) {
+        navigation.navigate('MeetingRollCall', {
+          groupId: activeGroup!.id,
+          meetingId: openMeeting.id,
+          executiveMemberId: executiveMemberId!,
+        });
+
+        return;
+      }
+
+      navigation.navigate('Savings', {
+        groupId: activeGroup!.id,
+        meetingId: openMeeting.id,
+        executiveMemberId: executiveMemberId!,
+      });
+    } catch (error) {
+      Alert.alert(
+        'Unable to Continue Meeting',
+        error instanceof Error
+          ? error.message
+          : 'The current meeting could not be opened.',
+      );
+    }
+  };
+
+  const handleSavings = () => {
+    if (!requireOpenMeeting()) {
       return;
     }
 
     navigation.navigate('Savings', {
       groupId: activeGroup!.id,
+      meetingId: openMeeting!.id,
       executiveMemberId: executiveMemberId!,
     });
   };
@@ -267,7 +355,7 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
 
     navigation.navigate('Expenditure', {
       groupId: activeGroup!.id,
-      executiveMemberId: executiveMemberId!,
+      meetingId: openMeeting?.id ?? 0,
     });
   };
 
@@ -280,7 +368,10 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
           </View>
 
           <View style={styles.titleContainer}>
-            <Text style={styles.appName}>Ebadsave VSLA</Text>
+            <Text style={styles.appName}>
+              Ebadsave VSLA
+            </Text>
+
             <Text style={styles.tagline}>
               save together,grow together
             </Text>
@@ -290,10 +381,14 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
         <View style={styles.headerButtons}>
           <TouchableOpacity
             style={styles.headerButton}
-            onPress={() => navigation.navigate('Constitution')}
+            onPress={() =>
+              navigation.navigate('Constitution')
+            }
             activeOpacity={0.8}
           >
-            <Text style={styles.headerButtonText}>Constitution</Text>
+            <Text style={styles.headerButtonText}>
+              Constitution
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -301,7 +396,9 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
             onPress={handleSetupRules}
             activeOpacity={0.8}
           >
-            <Text style={styles.headerButtonText}>Setup Rules</Text>
+            <Text style={styles.headerButtonText}>
+              Setup Rules
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -312,12 +409,16 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
       >
         <View style={styles.cardsGrid}>
           {summaryCards.map((card) => (
-            <View key={card.title} style={styles.card}>
+            <View
+              key={card.title}
+              style={styles.card}
+            >
               <View
                 style={[
                   styles.iconCircle,
                   {
-                    backgroundColor: card.iconBackground,
+                    backgroundColor:
+                      card.iconBackground,
                   },
                 ]}
               >
@@ -333,50 +434,86 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
                 </Text>
               </View>
 
-              <Text style={styles.cardTitle}>{card.title}</Text>
-              <Text style={styles.cardValue}>{card.value}</Text>
+              <Text style={styles.cardTitle}>
+                {card.title}
+              </Text>
+
+              <Text style={styles.cardValue}>
+                {card.value}
+              </Text>
             </View>
           ))}
         </View>
 
         <View style={styles.activityContainer}>
-          <Text style={styles.sectionTitle}>Recent Activity</Text>
+          <Text style={styles.sectionTitle}>
+            Recent Activity
+          </Text>
 
           <View style={styles.emptyActivity}>
             <Text style={styles.emptyIcon}>—</Text>
-            <Text style={styles.emptyText}>No transactions yet</Text>
+
+            <Text style={styles.emptyText}>
+              No transactions yet
+            </Text>
           </View>
         </View>
 
         <View style={styles.navigationSection}>
-          <Text style={styles.sectionTitle}>Group Management</Text>
+          <Text style={styles.sectionTitle}>
+            Group Management
+          </Text>
 
           <TouchableOpacity
             style={styles.actionButton}
             onPress={handleAddMembers}
             activeOpacity={0.8}
           >
-            <Text style={styles.actionButtonText}>Add Members</Text>
+            <Text style={styles.actionButtonText}>
+              Add Members
+            </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={handleNewMeeting}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.actionButtonText}>New Meeting</Text>
-          </TouchableOpacity>
+          {!openMeeting && (
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={handleNewMeeting}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.actionButtonText}>
+                New Meeting
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {openMeeting && (
+            <TouchableOpacity
+              style={styles.currentMeetingButton}
+              onPress={handleCurrentMeeting}
+              activeOpacity={0.8}
+            >
+              <Text
+                style={styles.currentMeetingButtonText}
+              >
+                Current Meeting *
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         <View style={styles.navigationSection}>
-          <Text style={styles.sectionTitle}>Financial Actions</Text>
+          <Text style={styles.sectionTitle}>
+            Financial Actions
+          </Text>
 
           <TouchableOpacity
             style={styles.actionButton}
             onPress={handleSavings}
             activeOpacity={0.8}
           >
-            <Text style={styles.actionButtonText}>Savings</Text>
+            <Text style={styles.actionButtonText}>
+              Savings
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -384,7 +521,9 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
             onPress={handleLoanDisbursement}
             activeOpacity={0.8}
           >
-            <Text style={styles.actionButtonText}>Loan Disbursement</Text>
+            <Text style={styles.actionButtonText}>
+              Loan Disbursement
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -392,7 +531,9 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
             onPress={handleFines}
             activeOpacity={0.8}
           >
-            <Text style={styles.actionButtonText}>Fines</Text>
+            <Text style={styles.actionButtonText}>
+              Fines
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -400,7 +541,9 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
             onPress={handleInsurance}
             activeOpacity={0.8}
           >
-            <Text style={styles.actionButtonText}>Insurance</Text>
+            <Text style={styles.actionButtonText}>
+              Insurance
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -408,7 +551,9 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
             onPress={handleExternalFunds}
             activeOpacity={0.8}
           >
-            <Text style={styles.actionButtonText}>External Funds</Text>
+            <Text style={styles.actionButtonText}>
+              External Funds
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -416,7 +561,9 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
             onPress={handleRepayment}
             activeOpacity={0.8}
           >
-            <Text style={styles.actionButtonText}>Loan Repayment</Text>
+            <Text style={styles.actionButtonText}>
+              Loan Repayment
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -424,7 +571,9 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
             onPress={handleLoans}
             activeOpacity={0.8}
           >
-            <Text style={styles.actionButtonText}>Loans</Text>
+            <Text style={styles.actionButtonText}>
+              Loans
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -442,7 +591,9 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
             onPress={handleExpenditure}
             activeOpacity={0.8}
           >
-            <Text style={styles.actionButtonText}>Expenditure</Text>
+            <Text style={styles.actionButtonText}>
+              Expenditure
+            </Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -612,6 +763,21 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '700',
+    textAlign: 'center',
+  },
+
+  currentMeetingButton: {
+    backgroundColor: '#f59e0b',
+    borderRadius: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 10,
+  },
+
+  currentMeetingButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
     textAlign: 'center',
   },
 });
