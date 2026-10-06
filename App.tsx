@@ -5,7 +5,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import HomeScreen from './src/screens/HomeScreen';
 import ConstitutionScreen from './src/screens/ConstitutionScreen';
 import SetupRulesScreen from './src/screens/SetupRulesScreen';
-
+import GroupManagementScreen from './src/screens/GroupManagementScreen';
 import AddMembersScreen from './src/screens/AddMembersScreen';
 import NewMeetingScreen from './src/screens/NewMeetingScreen';
 import RollCallScreen from './src/screens/RollCallScreen';
