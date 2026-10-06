@@ -103,8 +103,16 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
     try {
       setStarting(true);
 
-      await startNewMeeting(groupId, executiveMemberId);
+      const meetingId = await startNewMeeting(
+  groupId,
+  executiveMemberId,
+);
 
+navigation.replace('MeetingRollCall', {
+  groupId,
+  meetingId,
+  executiveMemberId,
+});
       Alert.alert(
         'Meeting Started',
         'The new group meeting has been opened. Roll call will begin first.',
