@@ -79,50 +79,49 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
     loadMeetingState();
   }, [loadMeetingState]);
 
-   const handleStartMeeting = async () => {
-  if (openMeeting) {
-    Alert.alert(
-      'Meeting Already Open',
-      'A meeting is already in progress for this group.',
-    );
-    return;
-  }
+  const handleStartMeeting = async () => {
+    if (openMeeting) {
+      Alert.alert(
+        'Meeting Already Open',
+        'A meeting is already in progress for this group.',
+      );
+      return;
+    }
 
-  if (
-    previousMeeting &&
-    previousMeeting.summary_approved !== 1
-  ) {
-    Alert.alert(
-      'Previous Meeting Not Approved',
-      'Approve the previous meeting summary before starting a new meeting.',
-    );
-    return;
-  }
+    // A first meeting has no previous meeting and can start immediately.
+    if (
+      previousMeeting &&
+      previousMeeting.summary_approved !== 1
+    ) {
+      Alert.alert(
+        'Previous Meeting Not Approved',
+        'Approve the previous meeting summary before starting a new meeting.',
+      );
+      return;
+    }
 
-  try {
-    setStarting(true);
+    try {
+      setStarting(true);
 
-    const meetingId = await startNewMeeting(
-      groupId,
-      executiveMemberId,
-    );
+      await startNewMeeting(groupId, executiveMemberId);
 
-    navigation.replace('MeetingRollCall', {
-      groupId,
-      meetingId,
-      executiveMemberId,
-    });
-  } catch (error) {
-    Alert.alert(
-      'Unable to Start Meeting',
-      error instanceof Error
-        ? error.message
-        : 'The meeting could not be started.',
-    );
-  } finally {
-    setStarting(false);
-  }
-};
+      Alert.alert(
+        'Meeting Started',
+        'The new group meeting has been opened. Roll call will begin first.',
+      );
+
+      await loadMeetingState();
+    } catch (error) {
+      Alert.alert(
+        'Unable to Start Meeting',
+        error instanceof Error
+          ? error.message
+          : 'The meeting could not be started.',
+      );
+    } finally {
+      setStarting(false);
+    }
+  };
 
   const handleApprovePreviousMeeting = () => {
     if (!previousMeeting) {
