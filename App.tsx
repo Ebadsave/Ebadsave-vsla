@@ -128,6 +128,11 @@ export default function App() {
         />
 
         <Stack.Screen
+  name="GroupManagement"
+  component={GroupManagementScreen}
+/>
+        
+        <Stack.Screen
           name="AddMembers"
           component={AddMembersScreen}
         />
