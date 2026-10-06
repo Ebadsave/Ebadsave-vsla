@@ -105,9 +105,11 @@ export default function RollCallScreen({ route, navigation }: Props) {
         return;
       }
 
-      navigation.navigate('Savings', {
-        groupId,
-        executiveMemberId,
+navigation.navigate('FinancialTransactions', {
+  groupId,
+  executiveMemberId,
+  meetingId,
+});
       });
     } catch (error) {
       Alert.alert(
