@@ -13,8 +13,6 @@ import {
 import { useRoute } from '@react-navigation/native';
 import {
   getFinancialAccounts,
-  getFinancialTransactions,
-  getMemberLoanBalance,
   getMembersByGroupId,
   getOpenMeeting,
   recordFine,
@@ -40,18 +38,6 @@ interface MemberItem {
 interface AccountItem {
   account_type: string;
   balance: number;
-}
-
-interface FinancialTransactionItem {
-  id: number;
-  account_type: string;
-  amount: number;
-  reason: string;
-  member_id: number | null;
-  meeting_id: number | null;
-  transaction_type: string;
-  reversed?: number;
-  created_at: string;
 }
 
 type PaymentType =
@@ -103,9 +89,6 @@ export default function FinancialTransactionsScreen() {
   const [showMembers, setShowMembers] = useState(false);
   const [showFineTypes, setShowFineTypes] = useState(false);
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
-  const [transactions, setTransactions] = useState<FinancialTransactionItem[]>([]);
-  const [memberLoanBalance, setMemberLoanBalance] = useState(0);
-  const [loanBalanceLoading, setLoanBalanceLoading] = useState(false);
 
   const loadData = useCallback(async () => {
     if (!groupId) {
@@ -128,10 +111,9 @@ export default function FinancialTransactionsScreen() {
         throw new Error('No open meeting is available. Start the meeting first.');
       }
 
-      const [memberRows, accountRows, transactionRows] = await Promise.all([
+      const [memberRows, accountRows] = await Promise.all([
         getMembersByGroupId(groupId),
         getFinancialAccounts(groupId),
-        getFinancialTransactions(groupId),
       ]);
 
       const activeMembers = (memberRows as MemberItem[]).filter(
@@ -140,13 +122,6 @@ export default function FinancialTransactionsScreen() {
 
       setMembers(activeMembers);
       setAccounts(accountRows as AccountItem[]);
-      setTransactions(
-        (transactionRows as FinancialTransactionItem[]).filter(
-          (transaction) =>
-            Number(transaction.meeting_id) === Number(activeMeetingId) &&
-            Number(transaction.reversed ?? 0) === 0,
-        ),
-      );
 
       if (
         selectedMemberId === null ||
@@ -173,45 +148,6 @@ export default function FinancialTransactionsScreen() {
     [members, selectedMemberId],
   );
 
-  const loadSelectedMemberLoanBalance = useCallback(async () => {
-    if (!groupId || !selectedMemberId) {
-      setMemberLoanBalance(0);
-      return;
-    }
-
-    setLoanBalanceLoading(true);
-
-    try {
-      const loan = await getMemberLoanBalance(
-        groupId,
-        selectedMemberId,
-      );
-
-      setMemberLoanBalance(
-        Math.max(0, Number(loan?.balance ?? 0)),
-      );
-    } catch (error) {
-      setMemberLoanBalance(0);
-      Alert.alert(
-        'Loan balance',
-        error instanceof Error
-          ? error.message
-          : 'Unable to load the member loan balance.',
-      );
-    } finally {
-      setLoanBalanceLoading(false);
-    }
-  }, [groupId, selectedMemberId]);
-
-  useEffect(() => {
-    if (paymentType === 'loan_repayment') {
-      void loadSelectedMemberLoanBalance();
-    } else {
-      setMemberLoanBalance(0);
-      setLoanBalanceLoading(false);
-    }
-  }, [paymentType, loadSelectedMemberLoanBalance]);
-
   const selectedAccountType =
     paymentType === 'savings'
       ? 'savings'
@@ -226,54 +162,6 @@ export default function FinancialTransactionsScreen() {
   const selectedAccount = accounts.find(
     (account) => account.account_type === selectedAccountType,
   );
-
-  const currentMemberIndex = members.findIndex(
-    (member) => member.id === selectedMemberId,
-  );
-
-  const goToNextMember = () => {
-    if (members.length === 0) {
-      return;
-    }
-
-    const nextIndex =
-      currentMemberIndex >= members.length - 1
-        ? 0
-        : currentMemberIndex + 1;
-
-    setSelectedMemberId(members[nextIndex].id);
-    setAmount('');
-  };
-
-  const goToPreviousMember = () => {
-    if (members.length === 0) {
-      return;
-    }
-
-    const previousIndex =
-      currentMemberIndex <= 0
-        ? members.length - 1
-        : currentMemberIndex - 1;
-
-    setSelectedMemberId(members[previousIndex].id);
-    setAmount('');
-  };
-
-  const getMemberName = (memberId: number | null) => {
-    if (memberId === null) {
-      return 'Group';
-    }
-
-    const member = members.find((item) => item.id === memberId);
-    return member
-      ? `${member.member_number} — ${member.full_name}`
-      : `Member #${memberId}`;
-  };
-
-  const formatTransactionType = (value: string) =>
-    value
-      .replace(/_/g, ' ')
-      .replace(/\b\w/g, (character) => character.toUpperCase());
 
   const submitPayment = async () => {
     const numericAmount = Number(amount.replace(/,/g, '').trim());
@@ -293,30 +181,9 @@ export default function FinancialTransactionsScreen() {
       return;
     }
 
-    if (paymentType === 'loan_repayment') {
-      if (loanBalanceLoading) {
-        Alert.alert(
-          'Please wait',
-          'The member loan balance is still being checked.',
-        );
-        return;
-      }
-
-      if (memberLoanBalance <= 0) {
-        Alert.alert(
-          'No outstanding loan',
-          'This member has no outstanding loan. Loan repayment cannot be recorded.',
-        );
-        return;
-      }
-
-      if (numericAmount > memberLoanBalance) {
-        Alert.alert(
-          'Repayment exceeds loan balance',
-          `The member's outstanding loan balance is ${currency} ${formatMoney(memberLoanBalance)}.`,
-        );
-        return;
-      }
+    if (paymentType === 'loan_repayment' && selectedAccount && numericAmount <= 0) {
+      Alert.alert('Invalid amount', 'Enter a valid loan repayment amount.');
+      return;
     }
 
     setSaving(true);
@@ -429,30 +296,6 @@ export default function FinancialTransactionsScreen() {
           })}
         </View>
 
-        <View style={styles.memberNavigation}>
-          <TouchableOpacity
-            style={[styles.navigationButton, members.length === 0 && styles.navigationButtonDisabled]}
-            onPress={goToPreviousMember}
-            disabled={members.length === 0}
-          >
-            <Text style={styles.navigationButtonText}>← Back</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.memberPosition}>
-            {members.length > 0 && currentMemberIndex >= 0
-              ? `${currentMemberIndex + 1} / ${members.length}`
-              : '0 / 0'}
-          </Text>
-
-          <TouchableOpacity
-            style={[styles.navigationButton, members.length === 0 && styles.navigationButtonDisabled]}
-            onPress={goToNextMember}
-            disabled={members.length === 0}
-          >
-            <Text style={styles.navigationButtonText}>Next →</Text>
-          </TouchableOpacity>
-        </View>
-
         <View style={styles.card}>
           <Text style={styles.label}>Member</Text>
           <TouchableOpacity
@@ -533,39 +376,10 @@ export default function FinancialTransactionsScreen() {
             </Text>
           </View>
 
-          {paymentType === 'loan_repayment' && (
-            <View style={styles.loanBalanceRow}>
-              <Text style={styles.loanBalanceLabel}>
-                Member outstanding loan
-              </Text>
-              <Text style={styles.loanBalanceValue}>
-                {loanBalanceLoading
-                  ? 'Checking...'
-                  : `${currency} ${formatMoney(memberLoanBalance)}`}
-              </Text>
-
-              {!loanBalanceLoading && memberLoanBalance <= 0 && (
-                <Text style={styles.loanWarningText}>
-                  This member has no outstanding loan. Repayment is not allowed.
-                </Text>
-              )}
-            </View>
-          )}
-
           <TouchableOpacity
-            style={[
-              styles.submitButton,
-              (saving ||
-                (paymentType === 'loan_repayment' &&
-                  (loanBalanceLoading || memberLoanBalance <= 0))) &&
-                styles.submitButtonDisabled,
-            ]}
+            style={[styles.submitButton, saving && styles.submitButtonDisabled]}
             onPress={submitPayment}
-            disabled={
-              saving ||
-              (paymentType === 'loan_repayment' &&
-                (loanBalanceLoading || memberLoanBalance <= 0))
-            }
+            disabled={saving}
           >
             {saving ? (
               <ActivityIndicator color="#ffffff" />
@@ -578,32 +392,6 @@ export default function FinancialTransactionsScreen() {
         {members.length === 0 && (
           <Text style={styles.warningText}>No active members are available for this meeting.</Text>
         )}
-
-        <View style={styles.recordsCard}>
-          <Text style={styles.recordsTitle}>Today's Financial Records</Text>
-          <Text style={styles.recordsSubtitle}>All records for meeting #{meetingId}</Text>
-
-          {transactions.length === 0 ? (
-            <Text style={styles.emptyRecordsText}>No financial records have been recorded for this meeting.</Text>
-          ) : (
-            transactions.map((transaction) => (
-              <View key={transaction.id} style={styles.recordRow}>
-                <View style={styles.recordMain}>
-                  <Text style={styles.recordType}>
-                    {formatTransactionType(transaction.transaction_type)}
-                  </Text>
-                  <Text style={styles.recordMember}>
-                    {getMemberName(transaction.member_id)}
-                  </Text>
-                  <Text style={styles.recordReason}>{transaction.reason}</Text>
-                </View>
-                <Text style={styles.recordAmount}>
-                  {currency} {formatMoney(Math.abs(Number(transaction.amount) || 0))}
-                </Text>
-              </View>
-            ))
-          )}
-        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -659,86 +447,6 @@ const styles = StyleSheet.create({
   },
   typeButtonTextSelected: {
     color: '#ffffff',
-  },
-  memberNavigation: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 14,
-  },
-  navigationButton: {
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#16a34a',
-    borderRadius: 10,
-    paddingVertical: 11,
-    paddingHorizontal: 18,
-    minWidth: 92,
-    alignItems: 'center',
-  },
-  navigationButtonDisabled: {
-    opacity: 0.45,
-  },
-  navigationButtonText: {
-    color: '#166534',
-    fontWeight: '800',
-  },
-  memberPosition: {
-    color: '#374151',
-    fontWeight: '800',
-  },
-  recordsCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
-    padding: 16,
-    marginTop: 14,
-    elevation: 2,
-  },
-  recordsTitle: {
-    color: '#111827',
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  recordsSubtitle: {
-    color: '#6b7280',
-    fontSize: 13,
-    marginTop: 4,
-    marginBottom: 10,
-  },
-  emptyRecordsText: {
-    color: '#6b7280',
-    marginTop: 8,
-  },
-  recordRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-    paddingVertical: 12,
-    gap: 12,
-  },
-  recordMain: {
-    flex: 1,
-  },
-  recordType: {
-    color: '#111827',
-    fontWeight: '800',
-  },
-  recordMember: {
-    color: '#374151',
-    fontSize: 13,
-    marginTop: 3,
-  },
-  recordReason: {
-    color: '#6b7280',
-    fontSize: 12,
-    marginTop: 2,
-  },
-  recordAmount: {
-    color: '#166534',
-    fontWeight: '800',
-    textAlign: 'right',
   },
   card: {
     backgroundColor: '#ffffff',
@@ -815,31 +523,6 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '800',
     marginTop: 3,
-  },
-  loanBalanceRow: {
-    marginTop: 10,
-    padding: 12,
-    backgroundColor: '#fff7ed',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#fed7aa',
-  },
-  loanBalanceLabel: {
-    color: '#9a3412',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  loanBalanceValue: {
-    color: '#9a3412',
-    fontSize: 17,
-    fontWeight: '800',
-    marginTop: 3,
-  },
-  loanWarningText: {
-    color: '#b91c1c',
-    fontSize: 12,
-    fontWeight: '700',
-    marginTop: 5,
   },
   submitButton: {
     backgroundColor: '#16a34a',
