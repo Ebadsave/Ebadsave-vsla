@@ -35,8 +35,9 @@ export default function RollCallScreen({ route, navigation }: Props) {
     try {
       setLoading(true);
 
-      const records = await getMeetingRollCall(meetingId);
+      const { groupId, meetingId, executiveMemberId } = route.params;
       setMembers(records);
+      await getMeetingRollCall(meetingId);
     } catch (error) {
       Alert.alert(
         'Unable to Load Roll Call',
