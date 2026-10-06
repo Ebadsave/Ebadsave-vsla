@@ -87,10 +87,6 @@ export default function FinancialTransactionsScreen() {
       ? null
       : Number(params.meetingId);
 
-  /*
-   * UGX is only the default display currency.
-   * The screen does not lock the database to UGX.
-   */
   const currency = params.currency?.trim() || 'UGX';
 
   const [meetingId, setMeetingId] = useState<number | null>(
@@ -120,10 +116,6 @@ export default function FinancialTransactionsScreen() {
   const [insurance, setInsurance] = useState('');
   const [finePayment, setFinePayment] = useState('');
 
-  /*
-   * New fine amount is NOT manually editable.
-   * It is automatically populated from Setup Rules.
-   */
   const [newFineAmount, setNewFineAmount] = useState('');
 
   const [fineType, setFineType] = useState('Absence fine');
@@ -202,9 +194,6 @@ export default function FinancialTransactionsScreen() {
     insuranceAmount +
     finePaymentAmount;
 
-  /*
-   * Get exact fine amount from Setup Rules.
-   */
   const getSetupFineAmount = useCallback(
     (type: string): number => {
       if (!setupRules) {
@@ -244,10 +233,6 @@ export default function FinancialTransactionsScreen() {
     [setupRules],
   );
 
-  /*
-   * Automatically insert the exact Setup Rules amount
-   * whenever the fine type changes.
-   */
   useEffect(() => {
     const amount = getSetupFineAmount(fineType);
 
@@ -290,10 +275,6 @@ export default function FinancialTransactionsScreen() {
       let activeMeetingId =
         suppliedMeetingId;
 
-      /*
-       * If no meetingId was passed, recover the
-       * currently open meeting.
-       */
       if (activeMeetingId === null) {
         const openMeeting =
           await getOpenMeeting(groupId);
@@ -384,10 +365,6 @@ export default function FinancialTransactionsScreen() {
     setSelectedMemberId(memberId);
     setShowMembers(false);
 
-    /*
-     * Clear this member's unfinished payment
-     * entries when moving to another member.
-     */
     setShares('');
     setLoanRepayment('');
     setSocialFund('');
@@ -410,14 +387,6 @@ export default function FinancialTransactionsScreen() {
     }
   };
 
-  /*
-   * Savings validation.
-   *
-   * IMPORTANT:
-   * If the member is not making a savings payment,
-   * savings rules do not block loan repayment,
-   * social fund, insurance or fine payment.
-   */
   const validateShares = (): boolean => {
     if (shareCount <= 0) {
       return true;
@@ -462,12 +431,6 @@ export default function FinancialTransactionsScreen() {
     return true;
   };
 
-  /*
-   * Save each payment independently.
-   *
-   * If one payment fails, the remaining payments
-   * are still attempted.
-   */
   const submitFinancialTransaction =
     async () => {
       if (!meetingId) {
@@ -534,9 +497,6 @@ export default function FinancialTransactionsScreen() {
       const successfulPayments: string[] =
         [];
 
-      /*
-       * SAVINGS
-       */
       if (savingsAmount > 0) {
         try {
           await recordSavings(
@@ -562,9 +522,6 @@ export default function FinancialTransactionsScreen() {
         }
       }
 
-      /*
-       * LOAN REPAYMENT
-       */
       if (loanAmount > 0) {
         try {
           await recordLoanRepayment(
@@ -591,9 +548,6 @@ export default function FinancialTransactionsScreen() {
         }
       }
 
-      /*
-       * SOCIAL FUND
-       */
       if (socialAmount > 0) {
         try {
           await recordSocialFund(
@@ -620,9 +574,6 @@ export default function FinancialTransactionsScreen() {
         }
       }
 
-      /*
-       * INSURANCE
-       */
       if (insuranceAmount > 0) {
         try {
           await recordInsuranceContribution(
@@ -648,9 +599,6 @@ export default function FinancialTransactionsScreen() {
         }
       }
 
-      /*
-       * FINE PAYMENT
-       */
       if (finePaymentAmount > 0) {
         try {
           await recordFinePayment(
@@ -676,10 +624,6 @@ export default function FinancialTransactionsScreen() {
         }
       }
 
-      /*
-       * Refresh this member regardless of whether
-       * one or more payments failed.
-       */
       try {
         await loadMemberFinancialData(
           selectedMemberId,
@@ -690,12 +634,6 @@ export default function FinancialTransactionsScreen() {
 
       setSaving(false);
 
-      /*
-       * IMPORTANT:
-       * We do not lock the screen after a failure.
-       * The user can continue with the same member
-       * or select another member.
-       */
       if (errors.length > 0) {
         Alert.alert(
           'Some payments failed',
@@ -723,12 +661,6 @@ export default function FinancialTransactionsScreen() {
       );
     };
 
-  /*
-   * Record a NEW fine.
-   *
-   * The amount is taken directly from Setup Rules.
-   * The user cannot change it.
-   */
   const recordNewFine = async () => {
     if (!meetingId) {
       Alert.alert(
@@ -796,9 +728,6 @@ export default function FinancialTransactionsScreen() {
     }
   };
 
-  /*
-   * Next member.
-   */
   const goToNextMember = () => {
     if (
       !selectedMemberId ||
@@ -832,11 +761,6 @@ export default function FinancialTransactionsScreen() {
     );
   };
 
-  /*
-   * NEXT SCREEN
-   *
-   * Financial Transactions -> Expenditure
-   */
   const handleNextScreen = () => {
     if (!meetingId) {
       Alert.alert(
@@ -856,9 +780,6 @@ export default function FinancialTransactionsScreen() {
     );
   };
 
-  /*
-   * BACK
-   */
   const handleBack = () => {
     if (saving || endingMeeting) {
       return;
@@ -867,15 +788,6 @@ export default function FinancialTransactionsScreen() {
     navigation.goBack();
   };
 
-  /*
-   * END MEETING
-   *
-   * The database closeMeeting function requires
-   * an executive member ID.
-   *
-   * We find the active executive from the group's
-   * members instead of changing the route structure.
-   */
   const handleEndMeeting = () => {
     if (!meetingId) {
       Alert.alert(
@@ -1121,4 +1033,940 @@ export default function FinancialTransactionsScreen() {
                       }
                     </Text>
                   </TouchableOpacity>
-               
+                ),
+              )}
+            </View>
+          )}
+
+          {selectedMember && (
+            <View style={styles.memberSummary}>
+              <Text style={styles.memberName}>
+                {selectedMember.full_name}
+              </Text>
+
+              <Text style={styles.memberNumber}>
+                Member #{selectedMember.member_number}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* CURRENT LOAN BALANCE */}
+        {selectedMember && (
+          <View style={styles.balanceCard}>
+            <Text style={styles.balanceLabel}>
+              Outstanding Loan Balance
+            </Text>
+
+            <Text style={styles.balanceAmount}>
+              {currency} {formatMoney(loanBalance)}
+            </Text>
+          </View>
+        )}
+
+        {/* SAVINGS */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            Savings
+          </Text>
+
+          <Text style={styles.fieldLabel}>
+            Number of shares
+          </Text>
+
+          <TextInput
+            style={styles.input}
+            value={shares}
+            onChangeText={setShares}
+            placeholder="Enter number of shares"
+            placeholderTextColor="#888"
+            keyboardType="numeric"
+            editable={!saving}
+          />
+
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>
+              Share value
+            </Text>
+
+            <Text style={styles.infoValue}>
+              {currency} {formatMoney(shareValue)}
+            </Text>
+          </View>
+
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>
+              Savings amount
+            </Text>
+
+            <Text style={styles.infoValue}>
+              {currency} {formatMoney(savingsAmount)}
+            </Text>
+          </View>
+
+          <Text style={styles.helperText}>
+            Minimum shares: {formatMoney(minimumShares)}
+            {maximumShares > 0
+              ? ` • Maximum: ${formatMoney(maximumShares)}`
+              : ''}
+          </Text>
+        </View>
+
+        {/* LOAN REPAYMENT */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            Loan Repayment
+          </Text>
+
+          <TextInput
+            style={styles.input}
+            value={loanRepayment}
+            onChangeText={setLoanRepayment}
+            placeholder="Enter repayment amount"
+            placeholderTextColor="#888"
+            keyboardType="numeric"
+            editable={!saving}
+          />
+
+          <Text style={styles.helperText}>
+            Outstanding balance: {currency}{' '}
+            {formatMoney(loanBalance)}
+          </Text>
+        </View>
+
+        {/* SOCIAL FUND */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            Social Fund
+          </Text>
+
+          <TextInput
+            style={styles.input}
+            value={socialFund}
+            onChangeText={setSocialFund}
+            placeholder="Enter social fund contribution"
+            placeholderTextColor="#888"
+            keyboardType="numeric"
+            editable={!saving}
+          />
+        </View>
+
+        {/* INSURANCE */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            Insurance
+          </Text>
+
+          <TextInput
+            style={styles.input}
+            value={insurance}
+            onChangeText={setInsurance}
+            placeholder="Enter insurance contribution"
+            placeholderTextColor="#888"
+            keyboardType="numeric"
+            editable={!saving}
+          />
+        </View>
+
+        {/* EXISTING FINES */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            Existing Fines
+          </Text>
+
+          {memberFines.length === 0 ? (
+            <Text style={styles.emptyText}>
+              No outstanding fines for this member.
+            </Text>
+          ) : (
+            <>
+              {memberFines.map(
+                (fine, index) => (
+                  <View
+                    key={
+                      fine.id ??
+                      `${fine.fine_type}-${index}`
+                    }
+                    style={styles.fineRow}
+                  >
+                    <View
+                      style={
+                        styles.fineDetails
+                      }
+                    >
+                      <Text
+                        style={
+                          styles.fineType
+                        }
+                      >
+                        {fine.fine_type}
+                      </Text>
+
+                      {'fine_date' in fine &&
+                      typeof fine.fine_date ===
+                        'string' ? (
+                        <Text
+                          style={
+                            styles.fineDate
+                          }
+                        >
+                          {formatDate(
+                            fine.fine_date,
+                          )}
+                        </Text>
+                      ) : null}
+                    </View>
+
+                    <Text
+                      style={
+                        styles.fineAmount
+                      }
+                    >
+                      {currency}{' '}
+                      {formatMoney(
+                        Number(
+                          fine.outstanding_amount ||
+                            0,
+                        ),
+                      )}
+                    </Text>
+                  </View>
+                ),
+              )}
+
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>
+                  Outstanding fines
+                </Text>
+
+                <Text style={styles.totalValue}>
+                  {currency}{' '}
+                  {formatMoney(
+                    outstandingFineTotal,
+                  )}
+                </Text>
+              </View>
+            </>
+          )}
+
+          {outstandingFineTotal > 0 && (
+            <>
+              <Text style={styles.fieldLabel}>
+                Fine payment
+              </Text>
+
+              <TextInput
+                style={styles.input}
+                value={finePayment}
+                onChangeText={setFinePayment}
+                placeholder="Enter fine payment"
+                placeholderTextColor="#888"
+                keyboardType="numeric"
+                editable={!saving}
+              />
+            </>
+          )}
+        </View>
+
+        {/* NEW FINE */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            Record New Fine
+          </Text>
+
+          <Text style={styles.fieldLabel}>
+            Fine type
+          </Text>
+
+          <TouchableOpacity
+            style={styles.selector}
+            onPress={() =>
+              setShowFineTypes(
+                (value) => !value,
+              )
+            }
+            disabled={recordingFine}
+          >
+            <Text style={styles.selectorText}>
+              {fineType}
+            </Text>
+
+            <Text style={styles.arrow}>
+              {showFineTypes
+                ? '▲'
+                : '▼'}
+            </Text>
+          </TouchableOpacity>
+
+          {showFineTypes && (
+            <View
+              style={
+                styles.optionsBox
+              }
+            >
+              {fineTypes.map(
+                (type) => (
+                  <TouchableOpacity
+                    key={type}
+                    style={
+                      styles.option
+                    }
+                    onPress={() => {
+                      setFineType(type);
+                      setShowFineTypes(false);
+                    }}
+                  >
+                    <Text
+                      style={
+                        styles.optionText
+                      }
+                    >
+                      {type}
+                    </Text>
+                  </TouchableOpacity>
+                ),
+              )}
+            </View>
+          )}
+
+          <Text style={styles.fieldLabel}>
+            Fine amount
+          </Text>
+
+          <TextInput
+            style={[
+              styles.input,
+              styles.disabledInput,
+            ]}
+            value={
+              newFineAmount
+                ? `${currency} ${formatMoney(
+                    Number(newFineAmount),
+                  )}`
+                : ''
+            }
+            editable={false}
+            placeholder="Not configured"
+            placeholderTextColor="#888"
+          />
+
+          <Text style={styles.helperText}>
+            Fine amount is automatically taken from
+            VSLA Setup Rules and cannot be edited here.
+          </Text>
+
+          <TouchableOpacity
+            style={[
+              styles.secondaryButton,
+              recordingFine &&
+                styles.disabledButton,
+            ]}
+            onPress={() =>
+              void recordNewFine()
+            }
+            disabled={recordingFine}
+          >
+            {recordingFine ? (
+              <ActivityIndicator
+                color="#ffffff"
+              />
+            ) : (
+              <Text
+                style={
+                  styles.secondaryButtonText
+                }
+              >
+                Record Fine
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* PAYMENT SUMMARY */}
+        <View style={styles.summaryCard}>
+          <Text style={styles.sectionTitle}>
+            Payment Summary
+          </Text>
+
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>
+              Savings
+            </Text>
+
+            <Text style={styles.infoValue}>
+              {currency} {formatMoney(savingsAmount)}
+            </Text>
+          </View>
+
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>
+              Loan repayment
+            </Text>
+
+            <Text style={styles.infoValue}>
+              {currency} {formatMoney(loanAmount)}
+            </Text>
+          </View>
+
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>
+              Social Fund
+            </Text>
+
+            <Text style={styles.infoValue}>
+              {currency} {formatMoney(socialAmount)}
+            </Text>
+          </View>
+
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>
+              Insurance
+            </Text>
+
+            <Text style={styles.infoValue}>
+              {currency} {formatMoney(insuranceAmount)}
+            </Text>
+          </View>
+
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>
+              Fine payment
+            </Text>
+
+            <Text style={styles.infoValue}>
+              {currency} {formatMoney(finePaymentAmount)}
+            </Text>
+          </View>
+
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>
+              Total Payment
+            </Text>
+
+            <Text style={styles.totalValue}>
+              {currency} {formatMoney(totalPayment)}
+            </Text>
+          </View>
+        </View>
+
+        {/* SAVE PAYMENT */}
+        <TouchableOpacity
+          style={[
+            styles.primaryButton,
+            saving &&
+              styles.disabledButton,
+          ]}
+          onPress={() =>
+            void submitFinancialTransaction()
+          }
+          disabled={
+            saving ||
+            endingMeeting ||
+            !selectedMember
+          }
+        >
+          {saving ? (
+            <ActivityIndicator
+              color="#ffffff"
+            />
+          ) : (
+            <Text
+              style={
+                styles.primaryButtonText
+              }
+            >
+              Save Financial Transaction
+            </Text>
+          )}
+        </TouchableOpacity>
+
+        {/* NEXT MEMBER */}
+        <TouchableOpacity
+          style={[
+            styles.nextMemberButton,
+            !hasNextMember &&
+              styles.disabledOutlineButton,
+          ]}
+          onPress={goToNextMember}
+          disabled={
+            !hasNextMember ||
+            saving ||
+            endingMeeting
+          }
+        >
+          <Text
+            style={[
+              styles.nextMemberText,
+              !hasNextMember &&
+                styles.disabledOutlineText,
+            ]}
+          >
+            Next Member
+          </Text>
+        </TouchableOpacity>
+
+        {/* NEXT SCREEN */}
+        <TouchableOpacity
+          style={[
+            styles.nextButton,
+            (saving ||
+              endingMeeting) &&
+              styles.disabledButton,
+          ]}
+          onPress={handleNextScreen}
+          disabled={
+            saving ||
+            endingMeeting
+          }
+        >
+          <Text
+            style={styles.nextButtonText}
+          >
+            Next: Expenditure
+          </Text>
+        </TouchableOpacity>
+
+        {/* BACK */}
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={handleBack}
+          disabled={
+            saving ||
+            endingMeeting
+          }
+        >
+          <Text
+            style={styles.backButtonText}
+          >
+            Back
+          </Text>
+        </TouchableOpacity>
+
+        {/* END MEETING */}
+        <TouchableOpacity
+          style={[
+            styles.endMeetingButton,
+            endingMeeting &&
+              styles.disabledButton,
+          ]}
+          onPress={handleEndMeeting}
+          disabled={
+            saving ||
+            endingMeeting
+          }
+        >
+          {endingMeeting ? (
+            <ActivityIndicator
+              color="#ffffff"
+            />
+          ) : (
+            <Text
+              style={
+                styles.endMeetingText
+              }
+            >
+              End Meeting
+            </Text>
+          )}
+        </TouchableOpacity>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#f5f7f5',
+  },
+
+  container: {
+    padding: 16,
+    paddingBottom: 40,
+  },
+
+  centered: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+
+  header: {
+    backgroundColor: '#16a34a',
+    borderRadius: 14,
+    padding: 18,
+    marginBottom: 14,
+  },
+
+  headerTitle: {
+    color: '#ffffff',
+    fontSize: 22,
+    fontWeight: '800',
+  },
+
+  headerSubtitle: {
+    color: '#ffffff',
+    opacity: 0.9,
+    marginTop: 4,
+    fontSize: 14,
+  },
+
+  title: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#222222',
+    marginBottom: 12,
+  },
+
+  card: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 14,
+    elevation: 2,
+  },
+
+  balanceCard: {
+    backgroundColor: '#e8f5e9',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+
+  balanceLabel: {
+    color: '#166534',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+
+  balanceAmount: {
+    color: '#15803d',
+    fontSize: 24,
+    fontWeight: '800',
+    marginTop: 5,
+  },
+
+  summaryCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#16a34a',
+  },
+
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#222222',
+    marginBottom: 12,
+  },
+
+  fieldLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#444444',
+    marginBottom: 7,
+    marginTop: 8,
+  },
+
+  input: {
+    borderWidth: 1,
+    borderColor: '#cccccc',
+    borderRadius: 10,
+    paddingHorizontal: 13,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#222222',
+    backgroundColor: '#ffffff',
+  },
+
+  disabledInput: {
+    backgroundColor: '#eeeeee',
+    color: '#666666',
+  },
+
+  selector: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: '#cccccc',
+    borderRadius: 10,
+    paddingHorizontal: 13,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#ffffff',
+  },
+
+  selectorText: {
+    flex: 1,
+    color: '#222222',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+
+  placeholderText: {
+    flex: 1,
+    color: '#888888',
+    fontSize: 15,
+  },
+
+  arrow: {
+    marginLeft: 10,
+    color: '#16a34a',
+    fontWeight: '800',
+  },
+
+  optionsBox: {
+    borderWidth: 1,
+    borderColor: '#dddddd',
+    borderRadius: 10,
+    marginTop: 6,
+    overflow: 'hidden',
+    backgroundColor: '#ffffff',
+  },
+
+  option: {
+    paddingHorizontal: 13,
+    paddingVertical: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eeeeee',
+  },
+
+  optionText: {
+    color: '#222222',
+    fontSize: 15,
+  },
+
+  memberSummary: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#f0fdf4',
+    borderRadius: 10,
+  },
+
+  memberName: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#166534',
+  },
+
+  memberNumber: {
+    fontSize: 13,
+    color: '#555555',
+    marginTop: 3,
+  },
+
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 7,
+  },
+
+  infoLabel: {
+    color: '#555555',
+    fontSize: 14,
+  },
+
+  infoValue: {
+    color: '#222222',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+
+  helperText: {
+    color: '#777777',
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 7,
+  },
+
+  fineRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eeeeee',
+  },
+
+  fineDetails: {
+    flex: 1,
+    paddingRight: 10,
+  },
+
+  fineType: {
+    color: '#333333',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+
+  fineDate: {
+    color: '#888888',
+    fontSize: 12,
+    marginTop: 3,
+  },
+
+  fineAmount: {
+    color: '#dc2626',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+
+  totalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#dddddd',
+  },
+
+  totalLabel: {
+    color: '#222222',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+
+  totalValue: {
+    color: '#16a34a',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+
+  primaryButton: {
+    minHeight: 52,
+    borderRadius: 12,
+    backgroundColor: '#16a34a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
+
+  primaryButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+
+  secondaryButton: {
+    minHeight: 48,
+    borderRadius: 10,
+    backgroundColor: '#15803d',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    marginTop: 14,
+  },
+
+  secondaryButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+
+  nextMemberButton: {
+    minHeight: 50,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#16a34a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+    backgroundColor: '#ffffff',
+  },
+
+  nextMemberText: {
+    color: '#16a34a',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+
+  disabledOutlineButton: {
+    borderColor: '#cccccc',
+    backgroundColor: '#eeeeee',
+  },
+
+  disabledOutlineText: {
+    color: '#888888',
+  },
+
+  nextButton: {
+    minHeight: 50,
+    borderRadius: 12,
+    backgroundColor: '#2563eb',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
+
+  nextButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+
+  backButton: {
+    minHeight: 48,
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#cccccc',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
+
+  backButtonText: {
+    color: '#444444',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+
+  endMeetingButton: {
+    minHeight: 50,
+    borderRadius: 12,
+    backgroundColor: '#dc2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 10,
+  },
+
+  endMeetingText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+
+  disabledButton: {
+    opacity: 0.55,
+  },
+
+  emptyText: {
+    color: '#777777',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+
+  errorText: {
+    color: '#dc2626',
+    fontSize: 16,
+    textAlign: 'center',
+  },
+
+  loadingText: {
+    marginTop: 12,
+    color: '#555555',
+    fontSize: 15,
+  },
+});
