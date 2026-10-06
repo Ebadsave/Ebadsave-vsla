@@ -29,6 +29,11 @@ export type RootStackParamList = {
     groupId: number;
   };
 
+  GroupManagement: {
+  groupId: number;
+  executiveMemberId: number;
+};
+  
   AddMembers: {
     groupId: number;
   };
