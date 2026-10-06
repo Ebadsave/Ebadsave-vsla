@@ -106,7 +106,6 @@ export default function RollCallScreen({ route, navigation }: Props) {
 
       navigation.navigate('FinancialTransactions', {
         groupId,
-        executiveMemberId,
         meetingId,
       });
     } catch (error) {
@@ -150,6 +149,7 @@ export default function RollCallScreen({ route, navigation }: Props) {
       >
         <View style={styles.header}>
           <Text style={styles.title}>Roll Call</Text>
+
           <Text style={styles.subtitle}>
             Meeting #{meetingId}
           </Text>
@@ -158,11 +158,15 @@ export default function RollCallScreen({ route, navigation }: Props) {
         <View style={styles.infoCard}>
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Members</Text>
-            <Text style={styles.infoValue}>{members.length}</Text>
+
+            <Text style={styles.infoValue}>
+              {members.length}
+            </Text>
           </View>
 
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Marked</Text>
+
             <Text style={styles.infoValue}>
               {completedCount} / {members.length}
             </Text>
@@ -199,19 +203,27 @@ export default function RollCallScreen({ route, navigation }: Props) {
 
         {members.length === 0 ? (
           <View style={styles.emptyCard}>
-            <Text style={styles.emptyTitle}>No active members</Text>
+            <Text style={styles.emptyTitle}>
+              No active members
+            </Text>
+
             <Text style={styles.emptyText}>
-              There are no active members available for this meeting's roll
-              call.
+              There are no active members available for this
+              meeting's roll call.
             </Text>
           </View>
         ) : (
           members.map((member) => {
-            const saving = savingMemberId === member.member_id;
+            const saving =
+              savingMemberId === member.member_id;
+
             const status = member.attendance_status;
 
             return (
-              <View key={member.member_id} style={styles.memberCard}>
+              <View
+                key={member.member_id}
+                style={styles.memberCard}
+              >
                 <View style={styles.memberHeader}>
                   <View style={styles.memberIdentity}>
                     <Text style={styles.memberName}>
@@ -227,9 +239,12 @@ export default function RollCallScreen({ route, navigation }: Props) {
                     <View
                       style={[
                         styles.statusBadge,
-                        status === 'present' && styles.presentBadge,
-                        status === 'late' && styles.lateBadge,
-                        status === 'absent' && styles.absentBadge,
+                        status === 'present' &&
+                          styles.presentBadge,
+                        status === 'late' &&
+                          styles.lateBadge,
+                        status === 'absent' &&
+                          styles.absentBadge,
                       ]}
                     >
                       <Text style={styles.statusBadgeText}>
@@ -248,7 +263,10 @@ export default function RollCallScreen({ route, navigation }: Props) {
                         styles.selectedPresentButton,
                     ]}
                     onPress={() =>
-                      markAttendance(member.member_id, 'present')
+                      markAttendance(
+                        member.member_id,
+                        'present',
+                      )
                     }
                     disabled={saving}
                   >
@@ -258,7 +276,9 @@ export default function RollCallScreen({ route, navigation }: Props) {
                         size="small"
                       />
                     ) : (
-                      <Text style={styles.actionText}>Present</Text>
+                      <Text style={styles.actionText}>
+                        Present
+                      </Text>
                     )}
                   </TouchableOpacity>
 
@@ -270,7 +290,10 @@ export default function RollCallScreen({ route, navigation }: Props) {
                         styles.selectedLateButton,
                     ]}
                     onPress={() =>
-                      markAttendance(member.member_id, 'late')
+                      markAttendance(
+                        member.member_id,
+                        'late',
+                      )
                     }
                     disabled={saving}
                   >
@@ -280,7 +303,9 @@ export default function RollCallScreen({ route, navigation }: Props) {
                         size="small"
                       />
                     ) : (
-                      <Text style={styles.actionText}>Late</Text>
+                      <Text style={styles.actionText}>
+                        Late
+                      </Text>
                     )}
                   </TouchableOpacity>
 
@@ -292,7 +317,10 @@ export default function RollCallScreen({ route, navigation }: Props) {
                         styles.selectedAbsentButton,
                     ]}
                     onPress={() =>
-                      markAttendance(member.member_id, 'absent')
+                      markAttendance(
+                        member.member_id,
+                        'absent',
+                      )
                     }
                     disabled={saving}
                   >
@@ -302,13 +330,17 @@ export default function RollCallScreen({ route, navigation }: Props) {
                         size="small"
                       />
                     ) : (
-                      <Text style={styles.actionText}>Absent</Text>
+                      <Text style={styles.actionText}>
+                        Absent
+                      </Text>
                     )}
                   </TouchableOpacity>
                 </View>
 
                 {saving && (
-                  <Text style={styles.savingText}>Saving...</Text>
+                  <Text style={styles.savingText}>
+                    Saving...
+                  </Text>
                 )}
               </View>
             );
@@ -328,7 +360,7 @@ export default function RollCallScreen({ route, navigation }: Props) {
             <ActivityIndicator color="#ffffff" />
           ) : (
             <Text style={styles.continueButtonText}>
-              Continue to Savings
+              Continue to Financial Transactions
             </Text>
           )}
         </TouchableOpacity>
@@ -338,7 +370,9 @@ export default function RollCallScreen({ route, navigation }: Props) {
           onPress={() => navigation.goBack()}
           disabled={continuing}
         >
-          <Text style={styles.backButtonText}>Back</Text>
+          <Text style={styles.backButtonText}>
+            Back
+          </Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
