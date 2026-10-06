@@ -1,9 +1,4 @@
-import React, {
-  useCallback,
-  useEffect,
-  useState,
-} from 'react';
-
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,11 +9,9 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import { RootStackParamList } from '../../App';
-
 import {
   getMeetingRollCall,
   isMeetingRollCallComplete,
@@ -26,45 +19,23 @@ import {
   type MeetingAttendanceRecord,
 } from '../database/database';
 
-type Props = NativeStackScreenProps<
-  RootStackParamList,
-  'MeetingRollCall'
->;
+type Props = NativeStackScreenProps<RootStackParamList, 'MeetingRollCall'>;
 
-type AttendanceStatus =
-  | 'present'
-  | 'late'
-  | 'absent';
+type AttendanceStatus = 'present' | 'late' | 'absent';
 
-export default function RollCallScreen({
-  route,
-  navigation,
-}: Props) {
-  const {
-    groupId,
-    meetingId,
-    executiveMemberId,
-  } = route.params;
+export default function RollCallScreen({ route, navigation }: Props) {
+  const { groupId, meetingId, executiveMemberId } = route.params;
 
-  const [members, setMembers] =
-    useState<MeetingAttendanceRecord[]>([]);
-
-  const [loading, setLoading] =
-    useState(true);
-
-  const [savingMemberId, setSavingMemberId] =
-    useState<number | null>(null);
-
-  const [continuing, setContinuing] =
-    useState(false);
+  const [members, setMembers] = useState<MeetingAttendanceRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [savingMemberId, setSavingMemberId] = useState<number | null>(null);
+  const [continuing, setContinuing] = useState(false);
 
   const loadRollCall = useCallback(async () => {
     try {
       setLoading(true);
 
-      const records =
-        await getMeetingRollCall(meetingId);
-
+      const records = await getMeetingRollCall(meetingId);
       setMembers(records);
     } catch (error) {
       Alert.alert(
@@ -123,8 +94,7 @@ export default function RollCallScreen({
     try {
       setContinuing(true);
 
-      const complete =
-        await isMeetingRollCallComplete(meetingId);
+      const complete = await isMeetingRollCallComplete(meetingId);
 
       if (!complete) {
         Alert.alert(
@@ -134,10 +104,10 @@ export default function RollCallScreen({
         return;
       }
 
-      navigation.navigate('FinancialTransactions', {
-  groupId,
-  meetingId,
-});
+      navigation.navigate('Savings', {
+        groupId,
+        executiveMemberId,
+      });
     } catch (error) {
       Alert.alert(
         'Unable to Continue',
@@ -157,25 +127,15 @@ export default function RollCallScreen({
       member.attendance_status === 'absent',
   ).length;
 
-  const pendingCount =
-    members.length - completedCount;
-
-  const rollCallComplete =
-    members.length > 0 &&
-    pendingCount === 0;
+  const pendingCount = members.length - completedCount;
+  const rollCallComplete = members.length > 0 && pendingCount === 0;
 
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator
-            size="large"
-            color="#16a34a"
-          />
-
-          <Text style={styles.loadingText}>
-            Loading Roll Call...
-          </Text>
+          <ActivityIndicator size="large" color="#16a34a" />
+          <Text style={styles.loadingText}>Loading Roll Call...</Text>
         </View>
       </SafeAreaView>
     );
@@ -188,10 +148,7 @@ export default function RollCallScreen({
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.header}>
-          <Text style={styles.title}>
-            Roll Call
-          </Text>
-
+          <Text style={styles.title}>Roll Call</Text>
           <Text style={styles.subtitle}>
             Meeting #{meetingId}
           </Text>
@@ -199,20 +156,12 @@ export default function RollCallScreen({
 
         <View style={styles.infoCard}>
           <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>
-              Members
-            </Text>
-
-            <Text style={styles.infoValue}>
-              {members.length}
-            </Text>
+            <Text style={styles.infoLabel}>Members</Text>
+            <Text style={styles.infoValue}>{members.length}</Text>
           </View>
 
           <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>
-              Marked
-            </Text>
-
+            <Text style={styles.infoLabel}>Marked</Text>
             <Text style={styles.infoValue}>
               {completedCount} / {members.length}
             </Text>
@@ -241,49 +190,30 @@ export default function RollCallScreen({
           >
             {rollCallComplete
               ? '✓ Roll call complete'
-              : `${pendingCount} member${
-                  pendingCount === 1 ? '' : 's'
-                } still pending`}
+              : `${pendingCount} member${pendingCount === 1 ? '' : 's'} still pending`}
           </Text>
         </View>
 
         {members.length === 0 ? (
           <View style={styles.emptyCard}>
-            <Text style={styles.emptyTitle}>
-              No active members
-            </Text>
-
+            <Text style={styles.emptyTitle}>No active members</Text>
             <Text style={styles.emptyText}>
-              There are no active members available
-              for this meeting roll call.
+              There are no active members available for this meeting's roll call.
             </Text>
           </View>
         ) : (
           members.map((member) => {
-            const saving =
-              savingMemberId === member.member_id;
-
-            const status =
-              member.attendance_status;
+            const saving = savingMemberId === member.member_id;
+            const status = member.attendance_status;
 
             return (
-              <View
-                key={member.member_id}
-                style={styles.memberCard}
-              >
+              <View key={member.member_id} style={styles.memberCard}>
                 <View style={styles.memberHeader}>
-                  <View
-                    style={styles.memberIdentity}
-                  >
-                    <Text
-                      style={styles.memberName}
-                    >
+                  <View style={styles.memberIdentity}>
+                    <Text style={styles.memberName}>
                       {member.full_name}
                     </Text>
-
-                    <Text
-                      style={styles.memberNumber}
-                    >
+                    <Text style={styles.memberNumber}>
                       {member.member_number}
                     </Text>
                   </View>
@@ -292,19 +222,12 @@ export default function RollCallScreen({
                     <View
                       style={[
                         styles.statusBadge,
-                        status === 'present' &&
-                          styles.presentBadge,
-                        status === 'late' &&
-                          styles.lateBadge,
-                        status === 'absent' &&
-                          styles.absentBadge,
+                        status === 'present' && styles.presentBadge,
+                        status === 'late' && styles.lateBadge,
+                        status === 'absent' && styles.absentBadge,
                       ]}
                     >
-                      <Text
-                        style={
-                          styles.statusBadgeText
-                        }
-                      >
+                      <Text style={styles.statusBadgeText}>
                         {status.toUpperCase()}
                       </Text>
                     </View>
@@ -316,29 +239,17 @@ export default function RollCallScreen({
                     style={[
                       styles.actionButton,
                       styles.presentButton,
-                      status === 'present' &&
-                        styles.selectedPresentButton,
+                      status === 'present' && styles.selectedPresentButton,
                     ]}
                     onPress={() =>
-                      markAttendance(
-                        member.member_id,
-                        'present',
-                      )
+                      markAttendance(member.member_id, 'present')
                     }
                     disabled={saving}
                   >
-                    {saving &&
-                    status !== 'present' ? (
-                      <ActivityIndicator
-                        color="#ffffff"
-                        size="small"
-                      />
+                    {saving && status !== 'present' ? (
+                      <ActivityIndicator color="#ffffff" size="small" />
                     ) : (
-                      <Text
-                        style={styles.actionText}
-                      >
-                        Present
-                      </Text>
+                      <Text style={styles.actionText}>Present</Text>
                     )}
                   </TouchableOpacity>
 
@@ -346,29 +257,17 @@ export default function RollCallScreen({
                     style={[
                       styles.actionButton,
                       styles.lateButton,
-                      status === 'late' &&
-                        styles.selectedLateButton,
+                      status === 'late' && styles.selectedLateButton,
                     ]}
                     onPress={() =>
-                      markAttendance(
-                        member.member_id,
-                        'late',
-                      )
+                      markAttendance(member.member_id, 'late')
                     }
                     disabled={saving}
                   >
-                    {saving &&
-                    status !== 'late' ? (
-                      <ActivityIndicator
-                        color="#ffffff"
-                        size="small"
-                      />
+                    {saving && status !== 'late' ? (
+                      <ActivityIndicator color="#ffffff" size="small" />
                     ) : (
-                      <Text
-                        style={styles.actionText}
-                      >
-                        Late
-                      </Text>
+                      <Text style={styles.actionText}>Late</Text>
                     )}
                   </TouchableOpacity>
 
@@ -376,37 +275,23 @@ export default function RollCallScreen({
                     style={[
                       styles.actionButton,
                       styles.absentButton,
-                      status === 'absent' &&
-                        styles.selectedAbsentButton,
+                      status === 'absent' && styles.selectedAbsentButton,
                     ]}
                     onPress={() =>
-                      markAttendance(
-                        member.member_id,
-                        'absent',
-                      )
+                      markAttendance(member.member_id, 'absent')
                     }
                     disabled={saving}
                   >
-                    {saving &&
-                    status !== 'absent' ? (
-                      <ActivityIndicator
-                        color="#ffffff"
-                        size="small"
-                      />
+                    {saving && status !== 'absent' ? (
+                      <ActivityIndicator color="#ffffff" size="small" />
                     ) : (
-                      <Text
-                        style={styles.actionText}
-                      >
-                        Absent
-                      </Text>
+                      <Text style={styles.actionText}>Absent</Text>
                     )}
                   </TouchableOpacity>
                 </View>
 
                 {saving && (
-                  <Text style={styles.savingText}>
-                    Saving...
-                  </Text>
+                  <Text style={styles.savingText}>Saving...</Text>
                 )}
               </View>
             );
@@ -416,21 +301,16 @@ export default function RollCallScreen({
         <TouchableOpacity
           style={[
             styles.continueButton,
-            (!rollCallComplete ||
-              continuing) &&
+            (!rollCallComplete || continuing) &&
               styles.disabledContinueButton,
           ]}
           onPress={handleContinue}
-          disabled={
-            !rollCallComplete || continuing
-          }
+          disabled={!rollCallComplete || continuing}
         >
           {continuing ? (
             <ActivityIndicator color="#ffffff" />
           ) : (
-            <Text
-              style={styles.continueButtonText}
-            >
+            <Text style={styles.continueButtonText}>
               Continue to Savings
             </Text>
           )}
@@ -441,9 +321,7 @@ export default function RollCallScreen({
           onPress={() => navigation.goBack()}
           disabled={continuing}
         >
-          <Text style={styles.backButtonText}>
-            Back
-          </Text>
+          <Text style={styles.backButtonText}>Back</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
@@ -455,40 +333,33 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#ffffff',
   },
-
   content: {
     padding: 20,
     paddingBottom: 40,
   },
-
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
-
   loadingText: {
     marginTop: 12,
     color: '#374151',
     fontSize: 15,
   },
-
   header: {
     marginBottom: 18,
   },
-
   title: {
     fontSize: 29,
     fontWeight: '800',
     color: '#16a34a',
   },
-
   subtitle: {
     marginTop: 5,
     color: '#6b7280',
     fontSize: 15,
   },
-
   infoCard: {
     borderWidth: 1,
     borderColor: '#bbf7d0',
@@ -497,24 +368,20 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 16,
   },
-
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingVertical: 5,
   },
-
   infoLabel: {
     color: '#374151',
     fontSize: 15,
   },
-
   infoValue: {
     color: '#15803d',
     fontSize: 15,
     fontWeight: '800',
   },
-
   progressTrack: {
     height: 9,
     backgroundColor: '#dcfce7',
@@ -522,27 +389,23 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginTop: 10,
   },
-
   progressFill: {
     height: '100%',
     backgroundColor: '#16a34a',
     borderRadius: 99,
   },
-
   completeText: {
     marginTop: 10,
     color: '#15803d',
     fontWeight: '800',
     textAlign: 'center',
   },
-
   pendingText: {
     marginTop: 10,
     color: '#92400e',
     fontWeight: '700',
     textAlign: 'center',
   },
-
   memberCard: {
     borderWidth: 1,
     borderColor: '#e5e7eb',
@@ -551,60 +414,49 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     backgroundColor: '#ffffff',
   },
-
   memberHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-
   memberIdentity: {
     flex: 1,
     paddingRight: 10,
   },
-
   memberName: {
     fontSize: 17,
     fontWeight: '800',
     color: '#111827',
   },
-
   memberNumber: {
     marginTop: 3,
     fontSize: 13,
     color: '#6b7280',
   },
-
   statusBadge: {
     paddingHorizontal: 9,
     paddingVertical: 5,
     borderRadius: 6,
   },
-
   presentBadge: {
     backgroundColor: '#16a34a',
   },
-
   lateBadge: {
     backgroundColor: '#d97706',
   },
-
   absentBadge: {
     backgroundColor: '#dc2626',
   },
-
   statusBadgeText: {
     color: '#ffffff',
     fontSize: 10,
     fontWeight: '900',
   },
-
   actionsRow: {
     flexDirection: 'row',
     gap: 8,
     marginTop: 13,
   },
-
   actionButton: {
     flex: 1,
     minHeight: 44,
@@ -612,47 +464,38 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-
   presentButton: {
     backgroundColor: '#16a34a',
   },
-
   lateButton: {
     backgroundColor: '#d97706',
   },
-
   absentButton: {
     backgroundColor: '#dc2626',
   },
-
   selectedPresentButton: {
     borderWidth: 3,
     borderColor: '#14532d',
   },
-
   selectedLateButton: {
     borderWidth: 3,
     borderColor: '#78350f',
   },
-
   selectedAbsentButton: {
     borderWidth: 3,
     borderColor: '#7f1d1d',
   },
-
   actionText: {
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '800',
   },
-
   savingText: {
     marginTop: 7,
     textAlign: 'right',
     color: '#6b7280',
     fontSize: 12,
   },
-
   emptyCard: {
     borderWidth: 1,
     borderColor: '#e5e7eb',
@@ -660,19 +503,16 @@ const styles = StyleSheet.create({
     padding: 20,
     marginBottom: 16,
   },
-
   emptyTitle: {
     fontSize: 18,
     fontWeight: '800',
     color: '#111827',
   },
-
   emptyText: {
     marginTop: 7,
     color: '#6b7280',
     lineHeight: 20,
   },
-
   continueButton: {
     backgroundColor: '#16a34a',
     borderRadius: 10,
@@ -681,17 +521,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 8,
   },
-
   disabledContinueButton: {
     backgroundColor: '#9ca3af',
   },
-
   continueButtonText: {
     color: '#ffffff',
     fontSize: 17,
     fontWeight: '800',
   },
-
   backButton: {
     marginTop: 14,
     borderWidth: 1,
@@ -701,7 +538,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-
   backButtonText: {
     color: '#374151',
     fontSize: 16,
