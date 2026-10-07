@@ -8,68 +8,61 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-
 import { useFocusEffect } from '@react-navigation/native';
 
 import {
   getAllGroups,
+  getHomeDashboardSummary,
+  getLastConcludedMeeting,
   getMembersByGroupId,
   getOpenMeeting,
   isMeetingRollCallComplete,
-  GroupRecord,
-  MemberRecord,
+  type GroupRecord,
+  type MemberRecord,
 } from '../database/database';
 
 type HomeScreenProps = {
   navigation: any;
 };
 
-const summaryCards = [
-  {
-    title: 'Total Savings',
-    value: 'UGX 0',
-    icon: 'S',
-    iconBackground: '#dcfce7',
-    iconColor: '#16a34a',
-  },
-  {
-    title: 'Loans Out',
-    value: 'UGX 0',
-    icon: 'L',
-    iconBackground: '#ffedd5',
-    iconColor: '#f97316',
-  },
-  {
-    title: 'Members',
-    value: '0',
-    icon: 'M',
-    iconBackground: '#dbeafe',
-    iconColor: '#2563eb',
-  },
-  {
-    title: 'Fund Balance',
-    value: 'UGX 0',
-    icon: 'F',
-    iconBackground: '#dcfce7',
-    iconColor: '#166534',
-  },
-  {
-    title: 'Insurance fund',
-    value: 'UGX 0',
-    icon: 'I',
-    iconBackground: '#fee2e2',
-    iconColor: '#dc2626',
-  },
-  {
-    title: 'Fines fund',
-    value: 'UGX 0',
-    icon: 'N',
-    iconBackground: '#ffffff',
-    iconColor: '#374151',
-  },
-];
+type Dashboard = {
+  savings: number;
+  loanFund: number;
+  loanRepayment: number;
+  socialFund: number;
+  fines: number;
+  externalFund: number;
+  expenditureFund: number;
+  insuranceFund: number;
+  fundBalance: number;
+  members: number;
+  currency: string;
+  openMeetingId: number | null;
+  lastClosedMeetingId: number | null;
+};
 
-export default function HomeScreen({ navigation }: HomeScreenProps) {
+const emptyDashboard: Dashboard = {
+  savings: 0,
+  loanFund: 0,
+  loanRepayment: 0,
+  socialFund: 0,
+  fines: 0,
+  externalFund: 0,
+  expenditureFund: 0,
+  insuranceFund: 0,
+  fundBalance: 0,
+  members: 0,
+  currency: 'UGX',
+  openMeetingId: null,
+  lastClosedMeetingId: null,
+};
+
+const money = (currency: string, value: number) =>
+  `${currency} ${Number(value || 0).toLocaleString()}`;
+
+export default function HomeScreen({
+  navigation,
+}: HomeScreenProps) {
   const [activeGroup, setActiveGroup] =
     useState<GroupRecord | null>(null);
 
@@ -79,58 +72,131 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
   const [openMeeting, setOpenMeeting] =
     useState<any | null>(null);
 
-  const loadActiveGroup = useCallback(async () => {
+  const [dashboard, setDashboard] =
+    useState<Dashboard>(emptyDashboard);
+
+  const [lastMeeting, setLastMeeting] =
+    useState<any | null>(null);
+
+  const [loading, setLoading] =
+    useState(false);
+
+  /*
+   * ============================================================
+   * LOAD LIVE HOME DATA FROM DATABASE
+   * ============================================================
+   */
+  const loadHome = useCallback(async () => {
     try {
+      setLoading(true);
+
       const groups = await getAllGroups();
 
-      const activeGroups = groups.filter(
-        (group) =>
-          group.status.toLowerCase() === 'active',
-      );
+      const group =
+        groups.find(
+          (item) =>
+            String(item.status).toLowerCase() === 'active',
+        ) || null;
 
-      if (activeGroups.length === 0) {
+      if (!group) {
         setActiveGroup(null);
         setExecutiveMemberId(null);
         setOpenMeeting(null);
+        setLastMeeting(null);
+        setDashboard(emptyDashboard);
         return;
       }
 
-      const group = activeGroups[0];
-
       setActiveGroup(group);
 
+      /*
+       * Load active members.
+       */
       const members =
         await getMembersByGroupId(group.id);
 
-      const executive = members.find(
+      const activeMembers = members.filter(
         (member: MemberRecord) =>
-          member.role?.toLowerCase() === 'executive',
+          String(member.status).toLowerCase() === 'active',
+      );
+
+      /*
+       * Find executive.
+       */
+      const executive = activeMembers.find(
+        (member: MemberRecord) =>
+          String(member.role).toLowerCase() === 'executive',
       );
 
       setExecutiveMemberId(
-        executive ? executive.id : null,
+        executive?.id ?? null,
       );
 
-      const meeting = await getOpenMeeting(group.id);
+      /*
+       * Load live financial totals.
+       */
+      const summary =
+        await getHomeDashboardSummary(group.id);
+
+      setDashboard({
+        ...emptyDashboard,
+        ...summary,
+        members: activeMembers.length,
+      });
+
+      /*
+       * Load currently open meeting.
+       */
+      const meeting =
+        await getOpenMeeting(group.id);
 
       setOpenMeeting(meeting);
+
+      /*
+       * Load most recently closed meeting.
+       */
+      const previous =
+        await getLastConcludedMeeting(group.id);
+
+      setLastMeeting(previous);
     } catch (error) {
       console.error(
-        'Failed to load active group:',
+        'Failed to load Home dashboard:',
         error,
+      );
+
+      Alert.alert(
+        'Home Screen',
+        error instanceof Error
+          ? error.message
+          : 'Unable to load the latest database information.',
       );
 
       setActiveGroup(null);
       setExecutiveMemberId(null);
       setOpenMeeting(null);
+      setLastMeeting(null);
+    } finally {
+      setLoading(false);
     }
   }, []);
 
+  /*
+   * Refresh every time Home becomes active.
+   * This means returning from Savings, Loans,
+   * Fines, Expenditure, Meeting, etc. refreshes totals.
+   */
   useFocusEffect(
     useCallback(() => {
-      loadActiveGroup();
-    }, [loadActiveGroup]),
+      loadHome();
+    }, [loadHome]),
   );
+
+  /*
+   * ============================================================
+   * REQUIREMENTS
+   * ============================================================
+   */
 
   const requireGroup = (): boolean => {
     if (!activeGroup) {
@@ -138,6 +204,7 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
         'No Active Group',
         'Please register a group before continuing.',
       );
+
       return false;
     }
 
@@ -152,8 +219,9 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
     if (!executiveMemberId) {
       Alert.alert(
         'Executive Required',
-        'Please assign an executive member before using this function.',
+        'Please assign an executive member before continuing.',
       );
+
       return false;
     }
 
@@ -168,44 +236,69 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
     if (!openMeeting) {
       Alert.alert(
         'No Current Meeting',
-        'Please start a new meeting before recording meeting transactions.',
+        'Please start a new meeting before recording transactions.',
       );
+
       return false;
     }
 
     return true;
   };
 
+  /*
+   * ============================================================
+   * GROUP / SETTINGS
+   * ============================================================
+   */
+
+  const handleConstitution = () => {
+    navigation.navigate('Constitution');
+  };
+
   const handleSetupRules = () => {
-    if (!requireGroup()) {
-      return;
-    }
+    if (!requireGroup()) return;
 
     navigation.navigate('SetupRules', {
       groupId: activeGroup!.id,
     });
   };
 
+  const handleBackupRestore = () => {
+    navigation.navigate('BackupRestore');
+  };
+
+  /*
+   * ============================================================
+   * MEMBERS
+   * ============================================================
+   */
+
   const handleAddMembers = () => {
-    if (!requireGroup()) {
-      return;
-    }
+    if (!requireGroup()) return;
 
     navigation.navigate('AddMembers', {
       groupId: activeGroup!.id,
     });
   };
 
-  const handleNewMeeting = () => {
-    if (!requireExecutive()) {
-      return;
-    }
+  /*
+   * ============================================================
+   * NEW MEETING
+   * ============================================================
+   */
 
+  const handleNewMeeting = () => {
+    if (!requireExecutive()) return;
+
+    /*
+     * Never create Meeting 2 while Meeting 1 is still open.
+     */
     if (openMeeting) {
       Alert.alert(
         'Meeting Already Open',
-        'The current meeting is still open. Continue the current meeting instead of starting another one.',
+        `Meeting #${openMeeting.meeting_number ?? ''} is still open. Continue the current meeting instead of starting another one.`,
       );
+
       return;
     }
 
@@ -215,40 +308,71 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
     });
   };
 
+  /*
+   * ============================================================
+   * CURRENT MEETING
+   * ============================================================
+   *
+   * Flow:
+   *
+   * Home
+   *   ↓
+   * Current Meeting
+   *   ↓
+   * Roll Call if incomplete
+   *   ↓
+   * Financial Transactions
+   *
+   * The same meetingId is passed all the way through.
+   */
   const handleCurrentMeeting = async () => {
-    if (!requireExecutive()) {
+    if (!requireExecutive()) return;
+
+    /*
+     * Refresh the meeting directly from DB so Home never
+     * uses a stale meeting object.
+     */
+    const meeting =
+      await getOpenMeeting(activeGroup!.id);
+
+    if (!meeting) {
+      setOpenMeeting(null);
+
+      Alert.alert(
+        'No Current Meeting',
+        'There is no open meeting. Start a new meeting first.',
+      );
+
       return;
     }
 
-    if (!openMeeting) {
-      Alert.alert(
-        'No Current Meeting',
-        'There is no open meeting for this group.',
-      );
-      return;
-    }
+    setOpenMeeting(meeting);
 
     try {
       const rollCallComplete =
         await isMeetingRollCallComplete(
-          openMeeting.id,
+          meeting.id,
         );
 
       if (!rollCallComplete) {
         navigation.navigate('MeetingRollCall', {
           groupId: activeGroup!.id,
-          meetingId: openMeeting.id,
+          meetingId: meeting.id,
           executiveMemberId: executiveMemberId!,
         });
 
         return;
       }
 
-      navigation.navigate('FinancialTransactions', {
-  groupId: activeGroup!.id,
-  meetingId: openMeeting.id,
-});
-
+      navigation.navigate(
+        'FinancialTransactions',
+        {
+          groupId: activeGroup!.id,
+          meetingId: meeting.id,
+          executiveMemberId: executiveMemberId!,
+          currency: dashboard.currency,
+        },
+      );
     } catch (error) {
       Alert.alert(
         'Unable to Continue Meeting',
@@ -259,109 +383,252 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
     }
   };
 
-  const handleSavings = () => {
-    if (!requireOpenMeeting()) {
+  /*
+   * ============================================================
+   * PREVIOUS MEETING
+   * ============================================================
+   */
+
+  const handlePreviousMeeting = () => {
+    if (!requireGroup()) return;
+
+    if (!lastMeeting) {
+      Alert.alert(
+        'No Previous Meeting',
+        'There is no concluded meeting yet.',
+      );
+
       return;
     }
+
+    navigation.navigate('MeetingSummary', {
+      groupId: activeGroup!.id,
+      meetingId: lastMeeting.id,
+      meetingNumber:
+        lastMeeting.meeting_number,
+    });
+  };
+
+  /*
+   * ============================================================
+   * TRANSACTION SCREENS
+   * ============================================================
+   */
+
+  const handleSavings = () => {
+    if (!requireOpenMeeting()) return;
 
     navigation.navigate('Savings', {
       groupId: activeGroup!.id,
       meetingId: openMeeting!.id,
       executiveMemberId: executiveMemberId!,
+      currency: dashboard.currency,
     });
   };
 
   const handleLoanDisbursement = () => {
-    if (!requireExecutive()) {
-      return;
-    }
+    if (!requireOpenMeeting()) return;
 
     navigation.navigate('LoanDisbursement', {
       groupId: activeGroup!.id,
+      meetingId: openMeeting!.id,
       executiveMemberId: executiveMemberId!,
+      currency: dashboard.currency,
     });
   };
 
   const handleFines = () => {
-    if (!requireExecutive()) {
-      return;
-    }
+    if (!requireOpenMeeting()) return;
 
     navigation.navigate('Fines', {
       groupId: activeGroup!.id,
+      meetingId: openMeeting!.id,
       executiveMemberId: executiveMemberId!,
+      currency: dashboard.currency,
     });
   };
 
   const handleInsurance = () => {
-    if (!requireExecutive()) {
-      return;
-    }
+    if (!requireOpenMeeting()) return;
 
     navigation.navigate('Insurance', {
       groupId: activeGroup!.id,
+      meetingId: openMeeting!.id,
       executiveMemberId: executiveMemberId!,
+      currency: dashboard.currency,
     });
   };
 
   const handleExternalFunds = () => {
-    if (!requireExecutive()) {
-      return;
-    }
+    if (!requireOpenMeeting()) return;
 
     navigation.navigate('ExternalFunds', {
       groupId: activeGroup!.id,
+      meetingId: openMeeting!.id,
       executiveMemberId: executiveMemberId!,
+      currency: dashboard.currency,
     });
   };
 
   const handleRepayment = () => {
-    if (!requireExecutive()) {
-      return;
-    }
+    if (!requireOpenMeeting()) return;
 
     navigation.navigate('Repayment', {
       groupId: activeGroup!.id,
+      meetingId: openMeeting!.id,
       executiveMemberId: executiveMemberId!,
+      currency: dashboard.currency,
     });
   };
 
   const handleLoans = () => {
-    if (!requireExecutive()) {
-      return;
-    }
+    if (!requireGroup()) return;
 
     navigation.navigate('Loans', {
       groupId: activeGroup!.id,
-      executiveMemberId: executiveMemberId!,
+      meetingId: openMeeting?.id ?? null,
+      executiveMemberId:
+        executiveMemberId ?? undefined,
+      currency: dashboard.currency,
     });
   };
 
   const handleMiscellaneousExpense = () => {
-    if (!requireExecutive()) {
-      return;
-    }
+    if (!requireOpenMeeting()) return;
 
-    navigation.navigate('MiscellaneousExpense', {
-      groupId: activeGroup!.id,
-      executiveMemberId: executiveMemberId!,
-    });
+    navigation.navigate(
+      'MiscellaneousExpense',
+      {
+        groupId: activeGroup!.id,
+        meetingId: openMeeting!.id,
+        executiveMemberId: executiveMemberId!,
+        currency: dashboard.currency,
+      },
+    );
   };
 
   const handleExpenditure = () => {
-    if (!requireExecutive()) {
-      return;
-    }
+    if (!requireOpenMeeting()) return;
 
     navigation.navigate('Expenditure', {
       groupId: activeGroup!.id,
-      meetingId: openMeeting?.id ?? 0,
+      meetingId: openMeeting!.id,
+      executiveMemberId: executiveMemberId!,
+      currency: dashboard.currency,
     });
   };
 
-  const handleBackupRestore = () => {
-    navigation.navigate('BackupRestore');
+  /*
+   * ============================================================
+   * DASHBOARD CARDS
+   * ============================================================
+   */
+
+  const handleSavingsCard = () => {
+    handleSavings();
   };
+
+  const handleLoansCard = () => {
+    handleLoans();
+  };
+
+  const handleMembersCard = () => {
+    handleAddMembers();
+  };
+
+  const handleFundCard = () => {
+    if (!requireOpenMeeting()) return;
+
+    navigation.navigate(
+      'FinancialTransactions',
+      {
+        groupId: activeGroup!.id,
+        meetingId: openMeeting!.id,
+        executiveMemberId: executiveMemberId!,
+        currency: dashboard.currency,
+      },
+    );
+  };
+
+  const handleInsuranceCard = () => {
+    handleInsurance();
+  };
+
+  const handleFinesCard = () => {
+    handleFines();
+  };
+
+  const cards = [
+    {
+      title: 'Total Savings',
+      value: money(
+        dashboard.currency,
+        dashboard.savings,
+      ),
+      icon: 'S',
+      iconBackground: '#dcfce7',
+      iconColor: '#16a34a',
+      action: handleSavingsCard,
+    },
+    {
+      title: 'Loans Out',
+      value: money(
+        dashboard.currency,
+        dashboard.loanFund,
+      ),
+      icon: 'L',
+      iconBackground: '#ffedd5',
+      iconColor: '#f97316',
+      action: handleLoansCard,
+    },
+    {
+      title: 'Members',
+      value: String(dashboard.members),
+      icon: 'M',
+      iconBackground: '#dbeafe',
+      iconColor: '#2563eb',
+      action: handleMembersCard,
+    },
+    {
+      title: 'Fund Balance',
+      value: money(
+        dashboard.currency,
+        dashboard.fundBalance,
+      ),
+      icon: 'F',
+      iconBackground: '#dcfce7',
+      iconColor: '#166534',
+      action: handleFundCard,
+    },
+    {
+      title: 'Insurance Fund',
+      value: money(
+        dashboard.currency,
+        dashboard.insuranceFund,
+      ),
+      icon: 'I',
+      iconBackground: '#fee2e2',
+      iconColor: '#dc2626',
+      action: handleInsuranceCard,
+    },
+    {
+      title: 'Fines Fund',
+      value: money(
+        dashboard.currency,
+        dashboard.fines,
+      ),
+      icon: 'N',
+      iconBackground: '#ffffff',
+      iconColor: '#374151',
+      action: handleFinesCard,
+    },
+  ];
+
+  /*
+   * ============================================================
+   * UI
+   * ============================================================
+   */
 
   return (
     <SafeAreaView style={styles.container}>
@@ -385,9 +652,7 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
         <View style={styles.headerButtons}>
           <TouchableOpacity
             style={styles.headerButton}
-            onPress={() =>
-              navigation.navigate('Constitution')
-            }
+            onPress={handleConstitution}
             activeOpacity={0.8}
           >
             <Text style={styles.headerButtonText}>
@@ -421,11 +686,30 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
       >
+        {/* GROUP */}
+        <View style={styles.groupBox}>
+          <Text style={styles.groupTitle}>
+            {activeGroup
+              ? `KYA ${activeGroup.group_number} • ${activeGroup.group_name}`
+              : 'No active group'}
+          </Text>
+
+          {activeGroup && (
+            <Text style={styles.groupLocation}>
+              {activeGroup.district},{' '}
+              {activeGroup.country}
+            </Text>
+          )}
+        </View>
+
+        {/* DASHBOARD CARDS */}
         <View style={styles.cardsGrid}>
-          {summaryCards.map((card) => (
-            <View
+          {cards.map((card) => (
+            <TouchableOpacity
               key={card.title}
               style={styles.card}
+              onPress={card.action}
+              activeOpacity={0.8}
             >
               <View
                 style={[
@@ -455,24 +739,122 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
               <Text style={styles.cardValue}>
                 {card.value}
               </Text>
-            </View>
+            </TouchableOpacity>
           ))}
         </View>
 
-        <View style={styles.activityContainer}>
+        {/* MEETING */}
+        <View style={styles.navigationSection}>
           <Text style={styles.sectionTitle}>
-            Recent Activity
+            Meeting
           </Text>
 
-          <View style={styles.emptyActivity}>
-            <Text style={styles.emptyIcon}>—</Text>
+          {!openMeeting ? (
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={handleNewMeeting}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.actionButtonText}>
+                Start New Meeting
+              </Text>
 
-            <Text style={styles.emptyText}>
-              No transactions yet
+              <Text style={styles.buttonSubtext}>
+                Create the next meeting
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.currentMeetingButton}
+              onPress={handleCurrentMeeting}
+              activeOpacity={0.8}
+            >
+              <Text
+                style={
+                  styles.currentMeetingButtonText
+                }
+              >
+                Current Meeting
+              </Text>
+
+              <Text
+                style={styles.currentMeetingSubtext}
+              >
+                Resume Meeting #
+                {openMeeting.meeting_number ?? ''}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {lastMeeting && (
+            <TouchableOpacity
+              style={styles.secondaryButton}
+              onPress={handlePreviousMeeting}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.secondaryButtonText}>
+                Previous Meeting
+                {lastMeeting.meeting_number
+                  ? ` #${lastMeeting.meeting_number}`
+                  : ''}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* DATABASE STATUS */}
+        <View style={styles.activityContainer}>
+          <Text style={styles.sectionTitle}>
+            Database Status
+          </Text>
+
+          <View style={styles.statusBox}>
+            <Text style={styles.statusText}>
+              {loading
+                ? 'Updating database totals...'
+                : 'Home is connected to the database.'}
+            </Text>
+
+            <Text style={styles.statusText}>
+              Current currency:{' '}
+              {dashboard.currency}
+            </Text>
+
+            <Text style={styles.statusText}>
+              Savings:{' '}
+              {money(
+                dashboard.currency,
+                dashboard.savings,
+              )}
+            </Text>
+
+            <Text style={styles.statusText}>
+              Loan fund:{' '}
+              {money(
+                dashboard.currency,
+                dashboard.loanFund,
+              )}
+            </Text>
+
+            <Text style={styles.statusText}>
+              Fines:{' '}
+              {money(
+                dashboard.currency,
+                dashboard.fines,
+              )}
+            </Text>
+
+            <Text style={styles.statusText}>
+              Insurance:{' '}
+              {money(
+                dashboard.currency,
+                dashboard.insuranceFund,
+              )}
             </Text>
           </View>
         </View>
 
+        {/* MEMBERS */}
         <View style={styles.navigationSection}>
           <Text style={styles.sectionTitle}>
             Group Management
@@ -484,40 +866,15 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
             activeOpacity={0.8}
           >
             <Text style={styles.actionButtonText}>
-              Add Members
+              Members
             </Text>
           </TouchableOpacity>
-
-          {!openMeeting && (
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={handleNewMeeting}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.actionButtonText}>
-                New Meeting
-              </Text>
-            </TouchableOpacity>
-          )}
-
-          {openMeeting && (
-            <TouchableOpacity
-              style={styles.currentMeetingButton}
-              onPress={handleCurrentMeeting}
-              activeOpacity={0.8}
-            >
-              <Text
-                style={styles.currentMeetingButtonText}
-              >
-                Current Meeting *
-              </Text>
-            </TouchableOpacity>
-          )}
         </View>
 
+        {/* FINANCIAL ACTIONS */}
         <View style={styles.navigationSection}>
           <Text style={styles.sectionTitle}>
-            Financial Actions
+            Financial Transactions
           </Text>
 
           <TouchableOpacity
@@ -537,6 +894,16 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
           >
             <Text style={styles.actionButtonText}>
               Loan Disbursement
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleRepayment}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.actionButtonText}>
+              Loan Repayment
             </Text>
           </TouchableOpacity>
 
@@ -572,16 +939,6 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
 
           <TouchableOpacity
             style={styles.actionButton}
-            onPress={handleRepayment}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.actionButtonText}>
-              Loan Repayment
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.actionButton}
             onPress={handleLoans}
             activeOpacity={0.8}
           >
@@ -610,6 +967,17 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
             </Text>
           </TouchableOpacity>
         </View>
+
+        {/* REFRESH */}
+        <TouchableOpacity
+          style={styles.refreshButton}
+          onPress={loadHome}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.refreshButtonText}>
+            Refresh Dashboard
+          </Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
@@ -686,7 +1054,23 @@ const styles = StyleSheet.create({
 
   content: {
     padding: 16,
-    paddingBottom: 32,
+    paddingBottom: 40,
+  },
+
+  groupBox: {
+    marginBottom: 14,
+  },
+
+  groupTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#166534',
+  },
+
+  groupLocation: {
+    marginTop: 3,
+    fontSize: 13,
+    color: '#6b7280',
   },
 
   cardsGrid: {
@@ -731,8 +1115,8 @@ const styles = StyleSheet.create({
     color: '#111827',
   },
 
-  activityContainer: {
-    marginTop: 8,
+  navigationSection: {
+    marginTop: 22,
   },
 
   sectionTitle: {
@@ -740,30 +1124,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#111827',
     marginBottom: 10,
-  },
-
-  emptyActivity: {
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 12,
-    paddingVertical: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  emptyIcon: {
-    fontSize: 24,
-    color: '#9ca3af',
-  },
-
-  emptyText: {
-    marginTop: 8,
-    fontSize: 14,
-    color: '#6b7280',
-  },
-
-  navigationSection: {
-    marginTop: 22,
   },
 
   actionButton: {
@@ -781,6 +1141,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
+  buttonSubtext: {
+    color: '#dcfce7',
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+
   currentMeetingButton: {
     backgroundColor: '#f59e0b',
     borderRadius: 10,
@@ -791,8 +1158,64 @@ const styles = StyleSheet.create({
 
   currentMeetingButtonText: {
     color: '#ffffff',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '800',
+    textAlign: 'center',
+  },
+
+  currentMeetingSubtext: {
+    color: '#ffffff',
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+
+  secondaryButton: {
+    borderWidth: 1,
+    borderColor: '#16a34a',
+    borderRadius: 10,
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    marginBottom: 10,
+  },
+
+  secondaryButtonText: {
+    color: '#16a34a',
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+
+  activityContainer: {
+    marginTop: 12,
+  },
+
+  statusBox: {
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    padding: 14,
+  },
+
+  statusText: {
+    fontSize: 13,
+    color: '#374151',
+    marginBottom: 6,
+  },
+
+  refreshButton: {
+    marginTop: 20,
+    borderWidth: 1,
+    borderColor: '#16a34a',
+    borderRadius: 10,
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+  },
+
+  refreshButtonText: {
+    color: '#16a34a',
+    fontSize: 15,
+    fontWeight: '700',
     textAlign: 'center',
   },
 });
