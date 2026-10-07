@@ -19,82 +19,68 @@ import LoanRepaymentScreen from './src/screens/LoanRepaymentScreen';
 import LoansScreen from './src/screens/LoansScreen';
 import MiscellaneousExpenseScreen from './src/screens/MiscellaneousExpenseScreen';
 import ExpenditureScreen from './src/screens/ExpenditureScreen';
+import BackupRestoreScreen from './src/screens/BackupRestoreScreen';
 
 export type RootStackParamList = {
   Home: undefined;
-
   Constitution: undefined;
-
+  BackupRestore: undefined;
   SetupRules: {
     groupId: number;
   };
-
   GroupManagement: {
-  groupId: number;
-  executiveMemberId: number;
-};
-  
+    groupId: number;
+    executiveMemberId: number;
+  };
   AddMembers: {
     groupId: number;
   };
-
   NewMeeting: {
     groupId: number;
     executiveMemberId: number;
   };
-
   MeetingRollCall: {
     groupId: number;
     meetingId: number;
     executiveMemberId: number;
   };
-
   FinancialTransactions: {
-  groupId: number;
-  meetingId: number;
-};
-  
+    groupId: number;
+    meetingId: number;
+  };
   Savings: {
-  groupId: number;
-  executiveMemberId: number;
-  meetingId: number;
-};
-
+    groupId: number;
+    executiveMemberId: number;
+    meetingId: number;
+  };
   LoanDisbursement: {
     groupId: number;
     executiveMemberId: number;
   };
-
   Fines: {
     groupId: number;
     executiveMemberId: number;
   };
-
   Insurance: {
     groupId: number;
     executiveMemberId: number;
   };
-
   ExternalFunds: {
     groupId: number;
     executiveMemberId: number;
   };
-
   Repayment: {
     groupId: number;
     executiveMemberId: number;
   };
-
   Loans: {
     groupId: number;
     executiveMemberId: number;
   };
-
   MiscellaneousExpense: {
     groupId: number;
     executiveMemberId: number;
   };
-
   Expenditure: {
     groupId: number;
     meetingId: number;
@@ -112,90 +98,24 @@ export default function App() {
           headerShown: false,
         }}
       >
-        <Stack.Screen
-          name="Home"
-          component={HomeScreen}
-        />
-
-        <Stack.Screen
-          name="Constitution"
-          component={ConstitutionScreen}
-        />
-
-        <Stack.Screen
-          name="SetupRules"
-          component={SetupRulesScreen}
-        />
-
-        <Stack.Screen
-  name="GroupManagement"
-  component={GroupManagementScreen}
-/>
-        
-        <Stack.Screen
-          name="AddMembers"
-          component={AddMembersScreen}
-        />
-
-        <Stack.Screen
-          name="NewMeeting"
-          component={NewMeetingScreen}
-        />
-
-        <Stack.Screen
-          name="MeetingRollCall"
-          component={RollCallScreen}
-        />
-
-        <Stack.Screen
-  name="FinancialTransactions"
-  component={FinancialTransactionsScreen}
-/>
-        
-        <Stack.Screen
-          name="Savings"
-          component={SavingsScreen}
-        />
-
-        <Stack.Screen
-          name="LoanDisbursement"
-          component={LoanDisbursementScreen}
-        />
-
-        <Stack.Screen
-          name="Fines"
-          component={FinesScreen}
-        />
-
-        <Stack.Screen
-          name="Insurance"
-          component={InsuranceScreen}
-        />
-
-        <Stack.Screen
-          name="ExternalFunds"
-          component={ExternalFundsScreen}
-        />
-
-        <Stack.Screen
-          name="Repayment"
-          component={LoanRepaymentScreen}
-        />
-
-        <Stack.Screen
-          name="Loans"
-          component={LoansScreen}
-        />
-
-        <Stack.Screen
-          name="MiscellaneousExpense"
-          component={MiscellaneousExpenseScreen}
-        />
-
-        <Stack.Screen
-          name="Expenditure"
-          component={ExpenditureScreen}
-        />
+        <Stack.Screen name="Home" component={HomeScreen} />
+        <Stack.Screen name="Constitution" component={ConstitutionScreen} />
+        <Stack.Screen name="BackupRestore" component={BackupRestoreScreen} />
+        <Stack.Screen name="SetupRules" component={SetupRulesScreen} />
+        <Stack.Screen name="GroupManagement" component={GroupManagementScreen} />
+        <Stack.Screen name="AddMembers" component={AddMembersScreen} />
+        <Stack.Screen name="NewMeeting" component={NewMeetingScreen} />
+        <Stack.Screen name="MeetingRollCall" component={RollCallScreen} />
+        <Stack.Screen name="FinancialTransactions" component={FinancialTransactionsScreen} />
+        <Stack.Screen name="Savings" component={SavingsScreen} />
+        <Stack.Screen name="LoanDisbursement" component={LoanDisbursementScreen} />
+        <Stack.Screen name="Fines" component={FinesScreen} />
+        <Stack.Screen name="Insurance" component={InsuranceScreen} />
+        <Stack.Screen name="ExternalFunds" component={ExternalFundsScreen} />
+        <Stack.Screen name="Repayment" component={LoanRepaymentScreen} />
+        <Stack.Screen name="Loans" component={LoansScreen} />
+        <Stack.Screen name="MiscellaneousExpense" component={MiscellaneousExpenseScreen} />
+        <Stack.Screen name="Expenditure" component={ExpenditureScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );
