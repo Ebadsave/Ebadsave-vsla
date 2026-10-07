@@ -244,11 +244,11 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
         return;
       }
 
-      navigation.navigate('Savings', {
-        groupId: activeGroup!.id,
-        meetingId: openMeeting.id,
-        executiveMemberId: executiveMemberId!,
-      });
+      navigation.navigate('FinancialTransactions', {
+  groupId: activeGroup!.id,
+  meetingId: openMeeting.id,
+});
+
     } catch (error) {
       Alert.alert(
         'Unable to Continue Meeting',
