@@ -359,6 +359,10 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
     });
   };
 
+  const handleBackupRestore = () => {
+    navigation.navigate('BackupRestore');
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -398,6 +402,16 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
           >
             <Text style={styles.headerButtonText}>
               Setup Rules
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.headerButton}
+            onPress={handleBackupRestore}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.headerButtonText}>
+              Backup
             </Text>
           </TouchableOpacity>
         </View>
@@ -654,6 +668,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     marginTop: 12,
     gap: 8,
+    flexWrap: 'wrap',
   },
 
   headerButton: {
