@@ -260,78 +260,145 @@ export async function restoreDatabaseBackup(
   error?: string;
 }> {
   try {
-    // Read backup file
-    const fileContent = await FileSystem.readAsStringAsync(
-      filePath,
-      {
-        encoding: FileSystem.EncodingType.UTF8,
-      }
-    );
+    // 1. Check that the backup file exists
+    const fileInfo = await FileSystem.getInfoAsync(filePath);
 
-    const backup = JSON.parse(fileContent) as BackupData;
+    if (!fileInfo.exists) {
+      throw new Error('Backup file could not be found');
+    }
 
-    // Validate backup structure
+    // 2. Read backup file
+    const fileContent = await FileSystem.readAsStringAsync(filePath, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
+
+    if (!fileContent.trim()) {
+      throw new Error('Backup file is empty');
+    }
+
+    // 3. Parse JSON
+    let backup: BackupData;
+
+    try {
+      backup = JSON.parse(fileContent) as BackupData;
+    } catch {
+      throw new Error('Backup file contains invalid JSON data');
+    }
+
+    // 4. Validate backup
     if (
+      !backup ||
       !backup.version ||
       !backup.timestamp ||
       backup.appName !== 'Ebadsave-VSLA'
     ) {
-      throw new Error('Invalid backup file format');
+      throw new Error(
+        'Invalid Ebadsave VSLA backup file'
+      );
     }
 
+    // 5. Open database
     const db = await SQLite.openDatabaseAsync(
       'ebadsave_vsla.db'
     );
 
     let tablesRestored = 0;
 
-    // Process each table
-    for (const table of BACKUP_TABLES) {
-      const rows = backup[table] || [];
+    // 6. Restore everything inside one transaction
+    await db.withTransactionAsync(async () => {
+      for (const table of BACKUP_TABLES) {
+        const rows = backup[table];
 
-      if (!Array.isArray(rows) || rows.length === 0) {
-        continue;
-      }
-
-      try {
-        // Clear existing data
-        await db.runAsync(`DELETE FROM ${table}`);
-
-        // Get column names from first row
-        const columns = Object.keys(rows[0]);
-        const placeholders = columns
-          .map(() => '?')
-          .join(', ');
-        const columnList = columns.join(', ');
-
-        // Insert restored data
-        for (const row of rows) {
-          const values = columns.map((col) => row[col]);
-
-          await db.runAsync(
-            `INSERT INTO ${table} (${columnList}) VALUES (${placeholders})`,
-            ...values
-          );
+        // No data for this table
+        if (!Array.isArray(rows)) {
+          continue;
         }
 
-        tablesRestored++;
-      } catch (tableError) {
-        console.warn(
-          `Warning: Could not restore table ${table}:`,
-          tableError
-        );
-        // Continue with next table
+        try {
+          // Confirm the table exists before touching it
+          await db.getFirstAsync(
+            `SELECT name FROM sqlite_master WHERE type='table' AND name=?`,
+            table
+          );
+
+          // Clear existing table
+          await db.runAsync(
+            `DELETE FROM "${table}"`
+          );
+
+          // Nothing to insert
+          if (rows.length === 0) {
+            tablesRestored++;
+            continue;
+          }
+
+          // Columns from backup
+          const columns = Object.keys(rows[0]);
+
+          if (columns.length === 0) {
+            tablesRestored++;
+            continue;
+          }
+
+          // Safely quote column names
+          const columnList = columns
+            .map((column) => `"${column.replace(/"/g, '""')}"`)
+            .join(', ');
+
+          const placeholders = columns
+            .map(() => '?')
+            .join(', ');
+
+          // Insert every row
+          for (const row of rows) {
+            const values = columns.map(
+              (column) => row[column] ?? null
+            );
+
+            await db.runAsync(
+              `INSERT INTO "${table}" (${columnList})
+               VALUES (${placeholders})`,
+              ...values
+            );
+          }
+
+          tablesRestored++;
+        } catch (tableError) {
+          console.error(
+            `Failed restoring table ${table}:`,
+            tableError
+          );
+
+          // Stop the whole restore.
+          // The transaction will roll back.
+          throw new Error(
+            `Failed to restore table "${table}". ${
+              tableError instanceof Error
+                ? tableError.message
+                : ''
+            }`
+          );
+        }
       }
-    }
+    });
 
     return {
       success: true,
-      message: `Backup restored successfully. ${tablesRestored} tables recovered.`,
+      message:
+        `Backup restored successfully. ` +
+        `${tablesRestored} tables restored.`,
       tablesRestored,
     };
   } catch (error) {
     const errorMessage =
-      error instanceof Error ? error.message : 'Unknown error during restore';
+      error instanceof Error
+        ? error.message
+        : 'Unknown error during restore';
+
+    console.error(
+      'Database restore failed:',
+      error
+    );
 
     return {
       success: false,
