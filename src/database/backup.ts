@@ -1,6 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 import * as FileSystem from 'expo-file-system';
-import * as Sharing from 'expo-sharing';
+import * as MailComposer from 'expo-mail-composer';
 
 const BACKUP_TABLES = [
   'groups',
@@ -119,44 +119,64 @@ export async function exportDatabaseBackup(): Promise<{
 }
 
 /**
- * Share backup file via device share sheet
+ * Send backup file via email
  */
-export async function shareBackupFile(
-  filePath: string
+export async function emailBackupFile(
+  filePath: string,
+  fileName: string
 ): Promise<{
   success: boolean;
   message: string;
   error?: string;
 }> {
   try {
-    const isAvailable = await Sharing.isAvailableAsync();
+    const isAvailable = await MailComposer.isAvailableAsync();
 
     if (!isAvailable) {
       return {
         success: false,
         message:
-          'Sharing is not available on this device',
-        error: 'SHARING_NOT_AVAILABLE',
+          'Email is not available on this device',
+        error: 'EMAIL_NOT_AVAILABLE',
       };
     }
 
-    await Sharing.shareAsync(filePath, {
-      mimeType: 'application/json',
-      dialogTitle: 'Share Ebadsave Backup',
-      UTI: 'com.adobe.pdf',
+    // Get file size for display
+    const fileInfo = await FileSystem.getInfoAsync(filePath);
+    const fileSize = fileInfo.exists && 'size' in fileInfo 
+      ? formatFileSize((fileInfo as any).size) 
+      : 'unknown';
+
+    const result = await MailComposer.composeAsync({
+      subject: `Ebadsave VSLA Backup - ${new Date().toLocaleDateString()}`,
+      body: `Dear User,\n\nPlease find attached your Ebadsave VSLA data backup.\n\nBackup Details:\n- File: ${fileName}\n- Size: ${fileSize}\n- Date: ${new Date().toLocaleString()}\n\nTo restore this backup after reinstalling the app:\n1. Open the app\n2. Go to Settings > Data Management\n3. Select "Restore Backup"\n4. Choose this backup file\n\nKeep this email safe for future reference.\n\nBest regards,\nEbadsave VSLA`,
+      attachments: [filePath],
     });
 
-    return {
-      success: true,
-      message: 'Backup shared successfully',
-    };
+    if (result.status === 'sent') {
+      return {
+        success: true,
+        message: 'Backup sent via email successfully',
+      };
+    } else if (result.status === 'saved') {
+      return {
+        success: true,
+        message: 'Backup email saved as draft',
+      };
+    } else {
+      return {
+        success: false,
+        message: 'Email was not sent',
+        error: result.status,
+      };
+    }
   } catch (error) {
     const errorMessage =
-      error instanceof Error ? error.message : 'Unknown error during share';
+      error instanceof Error ? error.message : 'Unknown error during email';
 
     return {
       success: false,
-      message: 'Failed to share backup',
+      message: 'Failed to send backup via email',
       error: errorMessage,
     };
   }
@@ -204,10 +224,14 @@ export async function listBackupFiles(): Promise<
           timestamp = `${date} ${time}`;
         }
 
+        const size = fileInfo.exists && 'size' in fileInfo 
+          ? (fileInfo as any).size 
+          : 0;
+
         return {
           name: fileName,
           path: filePath,
-          size: fileInfo.size || 0,
+          size,
           timestamp,
         };
       })
