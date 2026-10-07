@@ -40,7 +40,6 @@ export interface BackupData {
 
 /**
  * Export the entire database to a JSON backup file
- * Saves to device Documents directory
  */
 export async function exportDatabaseBackup(): Promise<{
   success: boolean;
@@ -58,33 +57,38 @@ export async function exportDatabaseBackup(): Promise<{
       appName: 'Ebadsave-VSLA',
     };
 
-    // Export all tables
     for (const table of BACKUP_TABLES) {
       try {
-        const rows = await db.getAllAsync(`SELECT * FROM ${table}`);
+        const rows = await db.getAllAsync(
+          `SELECT * FROM "${table}"`
+        );
+
         backup[table] = rows || [];
-      } catch (error) {
-        // Table might not exist yet, skip it
+      } catch {
+        // Table may not exist yet.
         backup[table] = [];
       }
     }
 
-    // Generate filename with timestamp
-    const dateStr = new Date()
+    const now = new Date();
+
+    const dateStr = now
       .toISOString()
       .split('T')[0]
       .replace(/-/g, '');
-    const timeStr = new Date()
+
+    const timeStr = now
       .toISOString()
       .split('T')[1]
       .split('.')[0]
       .replace(/:/g, '');
-    const fileName = `ebadsave_backup_${dateStr}_${timeStr}.json`;
 
-    // Determine save path - try Documents first, fallback to app cache
-    let filePath: string;
+    const fileName =
+      `ebadsave_backup_${dateStr}_${timeStr}.json`;
+
     const documentsDir =
-      FileSystem.documentDirectory || FileSystem.cacheDirectory;
+      FileSystem.documentDirectory ||
+      FileSystem.cacheDirectory;
 
     if (!documentsDir) {
       throw new Error(
@@ -92,23 +96,35 @@ export async function exportDatabaseBackup(): Promise<{
       );
     }
 
-    filePath = `${documentsDir}${fileName}`;
+    const filePath = `${documentsDir}${fileName}`;
 
-    // Write backup file
-    const jsonContent = JSON.stringify(backup, null, 2);
-    await FileSystem.writeAsStringAsync(filePath, jsonContent, {
-      encoding: FileSystem.EncodingType.UTF8,
-    });
+    const jsonContent = JSON.stringify(
+      backup,
+      null,
+      2
+    );
+
+    await FileSystem.writeAsStringAsync(
+      filePath,
+      jsonContent,
+      {
+        encoding: FileSystem.EncodingType.UTF8,
+      }
+    );
 
     return {
       success: true,
-      message: `Backup created successfully on ${new Date(backup.timestamp).toLocaleString()}`,
+      message:
+        `Backup created successfully on ` +
+        `${new Date(backup.timestamp).toLocaleString()}`,
       filePath,
       fileName,
     };
   } catch (error) {
     const errorMessage =
-      error instanceof Error ? error.message : 'Unknown error during backup';
+      error instanceof Error
+        ? error.message
+        : 'Unknown error during backup';
 
     return {
       success: false,
@@ -130,7 +146,8 @@ export async function emailBackupFile(
   error?: string;
 }> {
   try {
-    const isAvailable = await MailComposer.isAvailableAsync();
+    const isAvailable =
+      await MailComposer.isAvailableAsync();
 
     if (!isAvailable) {
       return {
@@ -141,49 +158,79 @@ export async function emailBackupFile(
       };
     }
 
-    // Get file size for display
-    const fileInfo = await FileSystem.getInfoAsync(filePath);
-    const fileSize = fileInfo.exists && 'size' in fileInfo 
-      ? formatFileSize((fileInfo as any).size) 
-      : 'unknown';
+    const fileInfo =
+      await FileSystem.getInfoAsync(filePath);
 
-    const result = await MailComposer.composeAsync({
-      subject: `Ebadsave VSLA Backup - ${new Date().toLocaleDateString()}`,
-      body: `Dear User,\n\nPlease find attached your Ebadsave VSLA data backup.\n\nBackup Details:\n- File: ${fileName}\n- Size: ${fileSize}\n- Date: ${new Date().toLocaleString()}\n\nTo restore this backup after reinstalling the app:\n1. Open the app\n2. Go to Settings > Data Management\n3. Select "Restore Backup"\n4. Choose this backup file\n\nKeep this email safe for future reference.\n\nBest regards,\nEbadsave VSLA`,
-      attachments: [filePath],
-    });
+    const fileSize =
+      fileInfo.exists && 'size' in fileInfo
+        ? formatFileSize(
+            (fileInfo as any).size
+          )
+        : 'unknown';
+
+    const result =
+      await MailComposer.composeAsync({
+        subject:
+          `Ebadsave VSLA Backup - ` +
+          `${new Date().toLocaleDateString()}`,
+
+        body:
+          `Dear User,\n\n` +
+          `Please find attached your Ebadsave VSLA data backup.\n\n` +
+          `Backup Details:\n` +
+          `- File: ${fileName}\n` +
+          `- Size: ${fileSize}\n` +
+          `- Date: ${new Date().toLocaleString()}\n\n` +
+          `To restore this backup after reinstalling the app:\n` +
+          `1. Open the app\n` +
+          `2. Go to Settings > Data Management\n` +
+          `3. Select "Restore Backup"\n` +
+          `4. Choose this backup file\n\n` +
+          `Keep this email safe for future reference.\n\n` +
+          `Best regards,\n` +
+          `Ebadsave VSLA`,
+
+        attachments: [filePath],
+      });
 
     if (result.status === 'sent') {
       return {
         success: true,
-        message: 'Backup sent via email successfully',
-      };
-    } else if (result.status === 'saved') {
-      return {
-        success: true,
-        message: 'Backup email saved as draft',
-      };
-    } else {
-      return {
-        success: false,
-        message: 'Email was not sent',
-        error: result.status,
+        message:
+          'Backup sent via email successfully',
       };
     }
-  } catch (error) {
-    const errorMessage =
-      error instanceof Error ? error.message : 'Unknown error during email';
+
+    if (result.status === 'saved') {
+      return {
+        success: true,
+        message:
+          'Backup email saved as draft',
+      };
+    }
 
     return {
       success: false,
-      message: 'Failed to send backup via email',
+      message: 'Email was not sent',
+      error: result.status,
+    };
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : 'Unknown error during email';
+
+    return {
+      success: false,
+      message:
+        'Failed to send backup via email',
       error: errorMessage,
     };
   }
 }
 
 /**
- * List all available backup files in Documents directory
+ * List all available backup files
  */
 export async function listBackupFiles(): Promise<
   Array<{
@@ -195,61 +242,89 @@ export async function listBackupFiles(): Promise<
 > {
   try {
     const documentsDir =
-      FileSystem.documentDirectory || FileSystem.cacheDirectory;
+      FileSystem.documentDirectory ||
+      FileSystem.cacheDirectory;
 
     if (!documentsDir) {
       return [];
     }
 
-    const files = await FileSystem.readDirectoryAsync(documentsDir);
-    const backupFiles = files.filter((file) =>
-      file.startsWith('ebadsave_backup_')
-    );
+    const files =
+      await FileSystem.readDirectoryAsync(
+        documentsDir
+      );
 
-    const fileDetails = await Promise.all(
-      backupFiles.map(async (fileName) => {
-        const filePath = `${documentsDir}${fileName}`;
-        const fileInfo =
-          await FileSystem.getInfoAsync(filePath);
+    const backupFiles =
+      files.filter((file) =>
+        file.startsWith('ebadsave_backup_')
+      );
 
-        // Extract timestamp from filename
-        const match = fileName.match(
-          /ebadsave_backup_(\d{8})_(\d{6})/
-        );
-        let timestamp = 'Unknown';
+    const fileDetails =
+      await Promise.all(
+        backupFiles.map(async (fileName) => {
+          const filePath =
+            `${documentsDir}${fileName}`;
 
-        if (match) {
-          const date = `${match[1].slice(0, 4)}-${match[1].slice(4, 6)}-${match[1].slice(6, 8)}`;
-          const time = `${match[2].slice(0, 2)}:${match[2].slice(2, 4)}:${match[2].slice(4, 6)}`;
-          timestamp = `${date} ${time}`;
-        }
+          const fileInfo =
+            await FileSystem.getInfoAsync(
+              filePath
+            );
 
-        const size = fileInfo.exists && 'size' in fileInfo 
-          ? (fileInfo as any).size 
-          : 0;
+          const match =
+            fileName.match(
+              /ebadsave_backup_(\d{8})_(\d{6})/
+            );
 
-        return {
-          name: fileName,
-          path: filePath,
-          size,
-          timestamp,
-        };
-      })
-    );
+          let timestamp = 'Unknown';
 
-    // Sort by timestamp descending (newest first)
+          if (match) {
+            const date =
+              `${match[1].slice(0, 4)}-` +
+              `${match[1].slice(4, 6)}-` +
+              `${match[1].slice(6, 8)}`;
+
+            const time =
+              `${match[2].slice(0, 2)}:` +
+              `${match[2].slice(2, 4)}:` +
+              `${match[2].slice(4, 6)}`;
+
+            timestamp =
+              `${date} ${time}`;
+          }
+
+          const size =
+            fileInfo.exists && 'size' in fileInfo
+              ? (fileInfo as any).size
+              : 0;
+
+          return {
+            name: fileName,
+            path: filePath,
+            size,
+            timestamp,
+          };
+        })
+      );
+
     return fileDetails.sort((a, b) =>
       b.timestamp.localeCompare(a.timestamp)
     );
   } catch (error) {
-    console.error('Error listing backup files:', error);
+    console.error(
+      'Error listing backups:',
+      error
+    );
+
     return [];
   }
 }
 
 /**
  * Restore database from a backup file
- * WARNING: This will overwrite all existing data
+ *
+ * WARNING:
+ * This replaces the current database data
+ * with the data contained in the backup.
  */
 export async function restoreDatabaseBackup(
   filePath: string
@@ -260,34 +335,60 @@ export async function restoreDatabaseBackup(
   error?: string;
 }> {
   try {
-    // 1. Check that the backup file exists
-    const fileInfo = await FileSystem.getInfoAsync(filePath);
+    // --------------------------------------------------
+    // 1. Check backup file
+    // --------------------------------------------------
+
+    const fileInfo =
+      await FileSystem.getInfoAsync(filePath);
 
     if (!fileInfo.exists) {
-      throw new Error('Backup file could not be found');
+      throw new Error(
+        'Backup file could not be found'
+      );
     }
 
-    // 2. Read backup file
-    const fileContent = await FileSystem.readAsStringAsync(filePath, {
-      encoding: FileSystem.EncodingType.UTF8,
-    });
+    // --------------------------------------------------
+    // 2. Read backup
+    // --------------------------------------------------
+
+    const fileContent =
+      await FileSystem.readAsStringAsync(
+        filePath,
+        {
+          encoding:
+            FileSystem.EncodingType.UTF8,
+        }
+      );
 
     if (!fileContent.trim()) {
-      throw new Error('Backup file is empty');
+      throw new Error(
+        'Backup file is empty'
+      );
     }
 
+    // --------------------------------------------------
     // 3. Parse JSON
+    // --------------------------------------------------
+
     let backup: BackupData;
 
     try {
-      backup = JSON.parse(fileContent) as BackupData;
+      backup =
+        JSON.parse(fileContent) as BackupData;
     } catch {
-      throw new Error('Backup file contains invalid JSON data');
+      throw new Error(
+        'Backup file contains invalid JSON data'
+      );
     }
 
+    // --------------------------------------------------
     // 4. Validate backup
+    // --------------------------------------------------
+
     if (
       !backup ||
+      typeof backup !== 'object' ||
       !backup.version ||
       !backup.timestamp ||
       backup.appName !== 'Ebadsave-VSLA'
@@ -297,63 +398,167 @@ export async function restoreDatabaseBackup(
       );
     }
 
+    // --------------------------------------------------
     // 5. Open database
-    const db = await SQLite.openDatabaseAsync(
-      'ebadsave_vsla.db'
-    );
+    // --------------------------------------------------
+
+    const db =
+      await SQLite.openDatabaseAsync(
+        'ebadsave_vsla.db'
+      );
 
     let tablesRestored = 0;
 
-    // 6. Restore everything inside one transaction
-    await db.withTransactionAsync(async () => {
-      for (const table of BACKUP_TABLES) {
-        const rows = backup[table];
+    // --------------------------------------------------
+    // 6. Determine which tables actually exist
+    // --------------------------------------------------
 
-        // No data for this table
-        if (!Array.isArray(rows)) {
-          continue;
+    const existingTables =
+      await db.getAllAsync<{
+        name: string;
+      }>(
+        `SELECT name
+         FROM sqlite_master
+         WHERE type = 'table'
+         AND name NOT LIKE 'sqlite_%'`
+      );
+
+    const existingTableNames =
+      new Set(
+        existingTables.map(
+          (table) => table.name
+        )
+      );
+
+    // --------------------------------------------------
+    // 7. Restore everything in one transaction
+    // --------------------------------------------------
+
+    await db.withTransactionAsync(
+      async () => {
+        /*
+         * Foreign keys can prevent clearing/restoring
+         * related tables in arbitrary order.
+         *
+         * Disable them while the restore is taking place.
+         */
+        await db.execAsync(
+          'PRAGMA foreign_keys = OFF;'
+        );
+
+        // ------------------------------------------------
+        // First clear existing data
+        // ------------------------------------------------
+
+        for (const table of BACKUP_TABLES) {
+          if (
+            !existingTableNames.has(table)
+          ) {
+            continue;
+          }
+
+          try {
+            await db.runAsync(
+              `DELETE FROM "${table}"`
+            );
+          } catch (error) {
+            throw new Error(
+              `Could not clear table "${table}". ` +
+              `${
+                error instanceof Error
+                  ? error.message
+                  : ''
+              }`
+            );
+          }
         }
 
-        try {
-          // Confirm the table exists before touching it
-          await db.getFirstAsync(
-            `SELECT name FROM sqlite_master WHERE type='table' AND name=?`,
-            table
-          );
+        // ------------------------------------------------
+        // Then restore backup data
+        // ------------------------------------------------
 
-          // Clear existing table
-          await db.runAsync(
-            `DELETE FROM "${table}"`
-          );
+        for (const table of BACKUP_TABLES) {
+          if (
+            !existingTableNames.has(table)
+          ) {
+            continue;
+          }
 
-          // Nothing to insert
+          const rows = backup[table];
+
+          /*
+           * If the backup does not contain this table,
+           * leave it empty.
+           */
+          if (!Array.isArray(rows)) {
+            continue;
+          }
+
+          /*
+           * Empty table is still considered restored.
+           */
           if (rows.length === 0) {
             tablesRestored++;
             continue;
           }
 
-          // Columns from backup
-          const columns = Object.keys(rows[0]);
+          const firstRow = rows[0];
+
+          if (
+            !firstRow ||
+            typeof firstRow !== 'object'
+          ) {
+            throw new Error(
+              `Invalid row data in table "${table}"`
+            );
+          }
+
+          const columns =
+            Object.keys(firstRow);
 
           if (columns.length === 0) {
             tablesRestored++;
             continue;
           }
 
-          // Safely quote column names
-          const columnList = columns
-            .map((column) => `"${column.replace(/"/g, '""')}"`)
-            .join(', ');
+          /*
+           * Safely quote column names.
+           */
+          const columnList =
+            columns
+              .map(
+                (column) =>
+                  `"${column.replace(
+                    /"/g,
+                    '""'
+                  )}"`
+              )
+              .join(', ');
 
-          const placeholders = columns
-            .map(() => '?')
-            .join(', ');
+          const placeholders =
+            columns
+              .map(() => '?')
+              .join(', ');
 
+          // ----------------------------------------------
           // Insert every row
+          // ----------------------------------------------
+
           for (const row of rows) {
-            const values = columns.map(
-              (column) => row[column] ?? null
-            );
+            if (
+              !row ||
+              typeof row !== 'object'
+            ) {
+              throw new Error(
+                `Invalid row in table "${table}"`
+              );
+            }
+
+            const values =
+              columns.map(
+                (column) =>
+                  row[column] ?? null
+              );
 
             await db.runAsync(
               `INSERT INTO "${table}" (${columnList})
@@ -363,24 +568,20 @@ export async function restoreDatabaseBackup(
           }
 
           tablesRestored++;
-        } catch (tableError) {
-          console.error(
-            `Failed restoring table ${table}:`,
-            tableError
-          );
-
-          // Stop the whole restore.
-          // The transaction will roll back.
-          throw new Error(
-            `Failed to restore table "${table}". ${
-              tableError instanceof Error
-                ? tableError.message
-                : ''
-            }`
-          );
         }
+
+        /*
+         * Turn foreign-key checking back on.
+         */
+        await db.execAsync(
+          'PRAGMA foreign_keys = ON;'
+        );
       }
-    });
+    );
+
+    // --------------------------------------------------
+    // 8. Success
+    // --------------------------------------------------
 
     return {
       success: true,
@@ -402,7 +603,8 @@ export async function restoreDatabaseBackup(
 
     return {
       success: false,
-      message: 'Backup restore failed',
+      message:
+        'Backup restore failed',
       error: errorMessage,
     };
   }
@@ -419,21 +621,28 @@ export async function deleteBackupFile(
   error?: string;
 }> {
   try {
-    await FileSystem.deleteAsync(filePath, {
-      idempotent: true,
-    });
+    await FileSystem.deleteAsync(
+      filePath,
+      {
+        idempotent: true,
+      }
+    );
 
     return {
       success: true,
-      message: 'Backup file deleted successfully',
+      message:
+        'Backup file deleted successfully',
     };
   } catch (error) {
     const errorMessage =
-      error instanceof Error ? error.message : 'Unknown error';
+      error instanceof Error
+        ? error.message
+        : 'Unknown error';
 
     return {
       success: false,
-      message: 'Failed to delete backup file',
+      message:
+        'Failed to delete backup file',
       error: errorMessage,
     };
   }
@@ -442,12 +651,31 @@ export async function deleteBackupFile(
 /**
  * Get human-readable file size
  */
-export function formatFileSize(bytes: number): string {
-  if (bytes === 0) return '0 Bytes';
+export function formatFileSize(
+  bytes: number
+): string {
+  if (bytes === 0) {
+    return '0 Bytes';
+  }
 
   const k = 1024;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
 
-  return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
-}
+  const sizes = [
+    'Bytes',
+    'KB',
+    'MB',
+    'GB',
+  ];
+
+  const i = Math.floor(
+    Math.log(bytes) / Math.log(k)
+  );
+
+  return (
+    Math.round(
+      (bytes / Math.pow(k, i)) * 100
+    ) / 100 +
+    ' ' +
+    sizes[i]
+  );
+  }
