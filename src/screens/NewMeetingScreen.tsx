@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   SafeAreaView,
+  TextInput,
   ScrollView,
   StyleSheet,
   Text,
@@ -19,6 +20,8 @@ import {
   startNewMeeting,
   closeMeeting,
   approveMeetingSummary,
+  createDatabaseBackup,
+  getMeetingCashReconciliation,
 } from '../database/database';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'NewMeeting'>;
@@ -43,6 +46,11 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
   const [starting, setStarting] = useState(false);
   const [approving, setApproving] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [backupCompleted, setBackupCompleted] = useState(false);
+  const [backupCreatedAt, setBackupCreatedAt] = useState('');
+  const [cashInBox, setCashInBox] = useState('');
+  const [cashCheck, setCashCheck] = useState<{ expectedCash: number; difference: number; balanced: boolean } | null>(null);
+  const [checkingCash, setCheckingCash] = useState(false);
 
   const [groupName, setGroupName] = useState('');
   const [previousMeeting, setPreviousMeeting] =
@@ -103,16 +111,8 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
     try {
       setStarting(true);
 
-      const meetingId = await startNewMeeting(
-  groupId,
-  executiveMemberId,
-);
+      await startNewMeeting(groupId, executiveMemberId);
 
-navigation.replace('MeetingRollCall', {
-  groupId,
-  meetingId,
-  executiveMemberId,
-});
       Alert.alert(
         'Meeting Started',
         'The new group meeting has been opened. Roll call will begin first.',
@@ -187,48 +187,83 @@ navigation.replace('MeetingRollCall', {
     );
   };
 
+  const handleCreateBackup = async () => {
+    try {
+      setClosing(true);
+      await createDatabaseBackup();
+      const createdAt = new Date().toISOString();
+      setBackupCreatedAt(createdAt);
+      setBackupCompleted(true);
+      Alert.alert('Backup Complete', 'The database backup was created successfully. You can now enter the cash in the box.');
+    } catch (error) {
+      setBackupCompleted(false);
+      setBackupCreatedAt('');
+      Alert.alert('Backup Failed', error instanceof Error ? error.message : 'The database backup could not be created.');
+    } finally {
+      setClosing(false);
+    }
+  };
+
+  const handleCheckCash = async () => {
+    const amount = Number(cashInBox);
+    if (!cashInBox.trim() || !Number.isFinite(amount) || amount < 0) {
+      Alert.alert('Cash Required', 'Enter the actual amount of cash in the box.');
+      return;
+    }
+    try {
+      setCheckingCash(true);
+      const result = await getMeetingCashReconciliation(openMeeting!.id, amount);
+      setCashCheck({ expectedCash: result.expectedCash, difference: result.difference, balanced: result.balanced });
+      if (!result.balanced) {
+        Alert.alert('Cash Does Not Balance', `Expected UGX ${result.expectedCash.toLocaleString()} but counted UGX ${amount.toLocaleString()}.`);
+      }
+    } catch (error) {
+      setCashCheck(null);
+      Alert.alert('Unable to Check Cash', error instanceof Error ? error.message : 'Cash reconciliation could not be calculated.');
+    } finally {
+      setCheckingCash(false);
+    }
+  };
+
   const handleCloseMeeting = async () => {
-    if (!openMeeting) {
+    if (!openMeeting) return;
+    if (!backupCompleted || !backupCreatedAt) {
+      Alert.alert('Backup Required', 'Create a successful database backup before ending the meeting.');
+      return;
+    }
+    const amount = Number(cashInBox);
+    if (!cashInBox.trim() || !Number.isFinite(amount) || amount < 0) {
+      Alert.alert('Cash Required', 'Enter and check the actual cash in the box before ending the meeting.');
+      return;
+    }
+    if (!cashCheck?.balanced) {
+      Alert.alert('Cash Must Balance', 'The expected cash and actual cash must match before the meeting can end.');
       return;
     }
 
-    Alert.alert(
-      'Close Meeting',
-      'Are you sure you want to close this meeting? The end-of-meeting process will begin.',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
+    Alert.alert('End Meeting', 'The backup is complete and cash balances. End this meeting now?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'End Meeting',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            setClosing(true);
+            await closeMeeting(openMeeting.id, executiveMemberId, amount, true, backupCreatedAt);
+            Alert.alert('Meeting Closed', 'The meeting has been concluded and recorded.');
+            setBackupCompleted(false);
+            setBackupCreatedAt('');
+            setCashInBox('');
+            setCashCheck(null);
+            await loadMeetingState();
+          } catch (error) {
+            Alert.alert('Unable to Close Meeting', error instanceof Error ? error.message : 'The meeting could not be closed.');
+          } finally {
+            setClosing(false);
+          }
         },
-        {
-          text: 'Close Meeting',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setClosing(true);
-
-              await closeMeeting(openMeeting.id, executiveMemberId);
-
-              Alert.alert(
-                'Meeting Closed',
-                'The meeting has been concluded and recorded.',
-              );
-
-              await loadMeetingState();
-            } catch (error) {
-              Alert.alert(
-                'Unable to Close Meeting',
-                error instanceof Error
-                  ? error.message
-                  : 'The meeting could not be closed.',
-              );
-            } finally {
-              setClosing(false);
-            }
-          },
-        },
-      ],
-    );
+      },
+    ]);
   };
 
   const formatAmount = (value: number | undefined) => {
@@ -277,20 +312,46 @@ navigation.replace('MeetingRollCall', {
               <Text style={styles.statusText}>OPEN</Text>
             </View>
 
-            <TouchableOpacity
-              style={styles.closeButton}
-              onPress={handleCloseMeeting}
-              disabled={closing}
-            >
-              {closing ? (
-                <ActivityIndicator color="#ffffff" />
-              ) : (
-                <Text style={styles.closeButtonText}>Close Meeting</Text>
+            <View style={styles.closeWorkflowCard}>
+              <Text style={styles.workflowTitle}>Close Meeting Checklist</Text>
+              <Text style={styles.workflowStep}>1. Backup database</Text>
+              <Text style={styles.workflowStatus}>{backupCompleted ? '✓ Backup completed' : 'Backup required'}</Text>
+              {!backupCompleted && (
+                <TouchableOpacity style={styles.closeButton} onPress={() => void handleCreateBackup()} disabled={closing}>
+                  {closing ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.closeButtonText}>Create Backup</Text>}
+                </TouchableOpacity>
               )}
-            </TouchableOpacity>
+
+              <Text style={styles.workflowStep}>2. Count cash in box</Text>
+              <TextInput
+                value={cashInBox}
+                onChangeText={(value) => { setCashInBox(value); setCashCheck(null); }}
+                keyboardType="decimal-pad"
+                placeholder="Enter actual cash in box"
+                placeholderTextColor="#9ca3af"
+                style={styles.cashInput}
+                editable={backupCompleted}
+              />
+              <TouchableOpacity style={[styles.checkCashButton, !backupCompleted && styles.disabledCloseButton]} onPress={() => void handleCheckCash()} disabled={!backupCompleted || checkingCash}>
+                {checkingCash ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.closeButtonText}>Check Cash</Text>}
+              </TouchableOpacity>
+
+              {cashCheck && (
+                <View style={cashCheck.balanced ? styles.cashBalancedBox : styles.cashMismatchBox}>
+                  <Text style={styles.workflowStatus}>{cashCheck.balanced ? '✓ CASH BALANCES' : '✗ CASH DOES NOT BALANCE'}</Text>
+                  <Text style={styles.cashDetail}>Expected: UGX {cashCheck.expectedCash.toLocaleString()}</Text>
+                  <Text style={styles.cashDetail}>Difference: UGX {Math.abs(cashCheck.difference).toLocaleString()}</Text>
+                </View>
+              )}
+
+              <Text style={styles.workflowStep}>3. End meeting</Text>
+              <TouchableOpacity style={[styles.closeButton, (!backupCompleted || !cashCheck?.balanced || closing) && styles.disabledCloseButton]} onPress={() => void handleCloseMeeting()} disabled={!backupCompleted || !cashCheck?.balanced || closing}>
+                {closing ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.closeButtonText}>End Meeting</Text>}
+              </TouchableOpacity>
+            </View>
 
             <Text style={styles.lockText}>
-              No second meeting can be started while this meeting is open.
+              The meeting cannot end until a backup succeeds and the cash in the box exactly matches the calculated expected cash.
             </Text>
           </View>
         ) : (
@@ -730,6 +791,16 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
   },
+  closeWorkflowCard: { marginTop: 16, padding: 14, borderRadius: 12, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#d1d5db' },
+  workflowTitle: { fontSize: 17, fontWeight: '800', color: '#111827', marginBottom: 10 },
+  workflowStep: { fontSize: 14, fontWeight: '700', color: '#374151', marginTop: 10, marginBottom: 6 },
+  workflowStatus: { fontSize: 13, fontWeight: '800', color: '#166534', marginBottom: 8 },
+  cashInput: { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 10, backgroundColor: '#ffffff', minHeight: 50, paddingHorizontal: 14, fontSize: 18, color: '#111827' },
+  checkCashButton: { backgroundColor: '#166534', borderRadius: 10, paddingVertical: 13, alignItems: 'center', marginTop: 8 },
+  disabledCloseButton: { opacity: 0.45 },
+  cashBalancedBox: { marginTop: 10, padding: 12, borderRadius: 10, backgroundColor: '#ecfdf5', borderWidth: 1, borderColor: '#16a34a' },
+  cashMismatchBox: { marginTop: 10, padding: 12, borderRadius: 10, backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#dc2626' },
+  cashDetail: { marginTop: 3, color: '#374151', fontSize: 13 },
   lockText: {
     marginTop: 12,
     textAlign: 'center',
