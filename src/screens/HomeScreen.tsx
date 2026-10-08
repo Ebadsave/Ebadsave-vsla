@@ -132,14 +132,21 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
     return true;
   };
 
-  const requireExecutive = () => {
-    if (!requireGroup()) return false;
-    if (!executiveMemberId) {
-      Alert.alert('Executive Required', 'Please assign an executive member first.');
-      return false;
-    }
-    return true;
-  };
+  const executiveRoles = [
+  'chairperson',
+  'vice chairperson',
+  'secretary',
+  'treasurer',
+  'money counter',
+  'key keeper',
+  'supervisor',
+];
+
+const executive = members.find(
+  (member: MemberRecord) =>
+    member.status?.toLowerCase() === 'active' &&
+    executiveRoles.includes(member.role?.trim().toLowerCase() || ''),
+);
 
   const openAddMembers = () => {
     if (!requireGroup()) return;
