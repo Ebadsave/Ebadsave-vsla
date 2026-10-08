@@ -1474,6 +1474,20 @@ status TEXT NOT NULL DEFAULT 'active',
 
   await addColumnIfMissing(
     db,
+    'meeting_closures',
+    'backup_completed',
+    'INTEGER NOT NULL DEFAULT 0',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'meeting_closures',
+    'backup_created_at',
+    'TEXT',
+  );
+
+  await addColumnIfMissing(
+    db,
     'vsla_setup_rules',
     'non_insurance_contribution',
     'REAL NOT NULL DEFAULT 0',
@@ -3408,6 +3422,7 @@ export async function recordNextOfKinBenefit(
 }
 
 export type HomeDashboardSummary = FinancialSummary & {
+  loansOut: number;
   members: number;
   currency: string;
   openMeetingId: number | null;
@@ -3425,10 +3440,48 @@ export async function getHomeDashboardSummary(
     `SELECT COUNT(*) AS count FROM members WHERE group_id = ? AND status = 'active'`,
     groupId,
   );
+
+  // Loans Out is the actual outstanding amount owed by members.
+  // It is NOT the Loan Fund balance.
+  const outstandingLoans = await db.getFirstAsync<{ total: number }>(
+    `SELECT COALESCE(SUM(balance), 0) AS total
+     FROM (
+       SELECT m.id, MAX(0,
+         COALESCE((SELECT SUM(ABS(ft.amount))
+           FROM financial_transactions ft
+           WHERE ft.group_id = ?
+             AND ft.member_id = m.id
+             AND ft.account_type = 'loan_fund'
+             AND ft.transaction_type = 'loan_issued'
+             AND ft.reversed = 0), 0)
+         + COALESCE((SELECT SUM(lic.interest_amount)
+           FROM loan_interest_charges lic
+           WHERE lic.group_id = ?
+             AND lic.member_id = m.id), 0)
+         - COALESCE((SELECT SUM(ft2.amount)
+           FROM financial_transactions ft2
+           WHERE ft2.group_id = ?
+             AND ft2.member_id = m.id
+             AND ft2.account_type = 'loan_repayment'
+             AND ft2.transaction_type = 'loan_repayment'
+             AND ft2.reversed = 0), 0)
+       ) AS balance
+       FROM members m
+       WHERE m.group_id = ?
+         AND m.status = 'active'
+     )`,
+    groupId,
+    groupId,
+    groupId,
+    groupId,
+  );
+
+  const loansOut = Number(outstandingLoans?.total) || 0;
   const open = await getOpenMeeting(groupId);
   const closed = await getLastConcludedMeeting(groupId);
   return {
     ...financial,
+    loansOut,
     members: Number(members?.count) || 0,
     currency: group.currency || 'UGX',
     openMeetingId: open?.id ?? null,
@@ -6263,7 +6316,9 @@ export async function getMeetingCashReconciliation(
 export async function closeMeeting(
   meetingId: number,
   executiveMemberId: number,
-  cashAtHand?: number | null,
+  cashAtHand: number,
+  backupCompleted: boolean,
+  backupCreatedAt: string,
 ): Promise<void> {
   const db = await getDatabase();
 
@@ -6284,6 +6339,16 @@ export async function closeMeeting(
     throw new Error(
       'Only an open meeting can be closed.',
     );
+  }
+
+  if (!backupCompleted || !backupCreatedAt) {
+    throw new Error(
+      'A successful database backup is required before the meeting can be closed.',
+    );
+  }
+
+  if (!Number.isFinite(cashAtHand) || cashAtHand < 0) {
+    throw new Error('Cash in box must be entered and must be zero or greater.');
   }
 
   const executive =
@@ -6369,10 +6434,16 @@ export async function closeMeeting(
     );
 
   const timestamp = now();
-  const reconciliation =
-    cashAtHand === undefined || cashAtHand === null
-      ? null
-      : await getMeetingCashReconciliation(meetingId, Number(cashAtHand));
+  const reconciliation = await getMeetingCashReconciliation(
+    meetingId,
+    Number(cashAtHand),
+  );
+
+  if (!reconciliation.balanced) {
+    throw new Error(
+      `Cash does not balance. Expected UGX ${reconciliation.expectedCash.toLocaleString()}, but cash in box is UGX ${reconciliation.cashAtHand.toLocaleString()}. Difference: UGX ${Math.abs(reconciliation.difference).toLocaleString()}.`,
+    );
+  }
 
   await db.runAsync(
     `INSERT INTO meeting_closures (
@@ -6385,9 +6456,11 @@ export async function closeMeeting(
       cash_at_hand,
       cash_expected,
       cash_balanced,
-      reconciliation_note
+      reconciliation_note,
+      backup_completed,
+      backup_created_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     meetingId,
     timestamp,
     lifetimeSummary.savings,
@@ -6396,12 +6469,10 @@ export async function closeMeeting(
     lifetimeSummary.insuranceFund,
     reconciliation?.cashAtHand ?? null,
     reconciliation?.expectedCash ?? null,
-    reconciliation ? (reconciliation.balanced ? 1 : 0) : 0,
-    reconciliation
-      ? (reconciliation.balanced
-        ? 'Cash at hand balances with the calculated closing cash.'
-        : `Cash difference: ${reconciliation.difference}`)
-      : 'Cash reconciliation not entered.',
+    reconciliation.balanced ? 1 : 0,
+    'Cash at hand balances with the calculated closing cash.',
+    1,
+    backupCreatedAt,
   );
 
   await db.runAsync(
