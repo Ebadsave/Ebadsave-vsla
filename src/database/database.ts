@@ -6347,7 +6347,9 @@ export async function closeMeeting(
     );
   }
 
-  if (!Number.isFinite(cashAtHand) || cashAtHand < 0) {
+  const cashAmount = Number(cashAtHand);
+
+  if (!Number.isFinite(cashAmount) || cashAmount < 0) {
     throw new Error('Cash in box must be entered and must be zero or greater.');
   }
 
@@ -6436,7 +6438,7 @@ export async function closeMeeting(
   const timestamp = now();
   const reconciliation = await getMeetingCashReconciliation(
     meetingId,
-    Number(cashAtHand),
+    cashAmount,
   );
 
   if (!reconciliation.balanced) {
