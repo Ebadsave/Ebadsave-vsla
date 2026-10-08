@@ -117,7 +117,6 @@ const EXECUTIVE_POSTS = [
   'Treasurer',
   'Money Counter',
   'Key Keeper',
-  'Supervisor',
 ] as const;
 
 function canonicalExecutivePost(role: string): string | null {
@@ -133,7 +132,6 @@ function canonicalExecutivePost(role: string): string | null {
   if (value === 'treasurer') return 'Treasurer';
   if (value === 'money counter' || value === 'money counters') return 'Money Counter';
   if (value === 'key keeper' || value === 'key keepers') return 'Key Keeper';
-  if (value === 'supervisor') return 'Supervisor';
 
   return normalizeText(role);
 }
@@ -5040,7 +5038,12 @@ async function recalculateFinancialAccountsForGroup(
     if (row.account_type === 'savings') balances.savings += value;
     if (row.account_type === 'loan_repayment') balances.loan_repayment += value;
     if (row.account_type === 'social_fund') balances.social_fund += value;
-    if (row.account_type === 'fines') balances.fines += value;
+    if (
+      row.account_type === 'fines' &&
+      row.transaction_type === 'fine_payment'
+    ) {
+      balances.fines += value;
+    }
     if (row.account_type === 'external_fund') balances.external_fund += value;
     if (row.account_type === 'expenditure_fund') balances.expenditure_fund += value;
     if (row.account_type === 'insurance_fund') balances.insurance_fund += value;
@@ -5732,6 +5735,134 @@ export async function approveMeetingSummary(
 }
 
 /* ============================================================
+   AUTOMATIC MEMBER FINES
+   ============================================================
+
+   Assessed fines are member liabilities only. They do NOT increase the
+   group's cash/fines balance until the member actually pays the fine.
+*/
+
+async function hasAutomaticFine(
+  db: SQLite.SQLiteDatabase,
+  groupId: number,
+  memberId: number,
+  meetingId: number,
+  reason: string,
+): Promise<boolean> {
+  const existing = await db.getFirstAsync<{ id: number }>(
+    `SELECT id
+     FROM financial_transactions
+     WHERE group_id = ?
+       AND member_id = ?
+       AND meeting_id = ?
+       AND account_type = 'fines'
+       AND transaction_type = 'fine'
+       AND reason = ?
+       AND reversed = 0
+     LIMIT 1`,
+    groupId, memberId, meetingId, reason,
+  );
+  return Boolean(existing);
+}
+
+async function addAutomaticFineIfNeeded(
+  groupId: number, memberId: number, meetingId: number,
+  amount: number, reason: string,
+): Promise<void> {
+  if (!Number.isFinite(amount) || amount <= 0) return;
+  const db = await getDatabase();
+  if (await hasAutomaticFine(db, groupId, memberId, meetingId, reason)) return;
+  await recordFine(groupId, amount, reason, memberId, meetingId);
+}
+
+async function applyAutomaticAttendanceFine(
+  groupId: number, memberId: number, meetingId: number,
+  attendanceStatus: 'present' | 'late' | 'absent',
+): Promise<void> {
+  const setup = await getVSLASetupRules(groupId);
+  if (attendanceStatus === 'late') {
+    await addAutomaticFineIfNeeded(groupId, memberId, meetingId, Number(setup?.late_fine ?? 0), 'Late attendance fine');
+  }
+  if (attendanceStatus === 'absent') {
+    await addAutomaticFineIfNeeded(groupId, memberId, meetingId, Number(setup?.absence_fine ?? 0), 'Absence fine');
+  }
+}
+
+async function applyAutomaticMeetingActivityFines(
+  groupId: number, meetingId: number,
+): Promise<void> {
+  const db = await getDatabase();
+  const setup = await getVSLASetupRules(groupId);
+  if (!setup) return;
+
+  const members = await db.getAllAsync<{ id: number }>(
+    `SELECT id FROM members WHERE group_id = ? AND status = 'active' ORDER BY id ASC`,
+    groupId,
+  );
+
+  for (const member of members) {
+    const savings = await db.getFirstAsync<{ total: number }>(
+      `SELECT COALESCE(SUM(amount), 0) AS total
+       FROM financial_transactions
+       WHERE group_id = ? AND member_id = ? AND meeting_id = ?
+         AND account_type = 'savings' AND transaction_type = 'savings_contribution' AND reversed = 0`,
+      groupId, member.id, meetingId,
+    );
+
+    if (Number(setup.non_saving_fine) > 0 && Number(savings?.total ?? 0) <= 0) {
+      await addAutomaticFineIfNeeded(groupId, member.id, meetingId, Number(setup.non_saving_fine), 'Non-saving fine');
+    }
+
+    const currentMeeting = await db.getFirstAsync<{ meeting_number: number }>(
+      `SELECT meeting_number FROM group_meetings WHERE id = ? LIMIT 1`,
+      meetingId,
+    );
+
+    const priorLoan = await db.getFirstAsync<{ issued: number; repaid: number }>(
+      `SELECT
+         COALESCE(SUM(CASE WHEN t.transaction_type = 'loan_issued' THEN ABS(t.amount) ELSE 0 END), 0) AS issued,
+         COALESCE(SUM(CASE WHEN t.transaction_type = 'loan_repayment' THEN t.amount ELSE 0 END), 0) AS repaid
+       FROM financial_transactions t
+       LEFT JOIN group_meetings gm ON gm.id = t.meeting_id
+       WHERE t.group_id = ?
+         AND t.member_id = ?
+         AND t.reversed = 0
+         AND (gm.meeting_number < ? OR t.meeting_id IS NULL)`,
+      groupId, member.id, Number(currentMeeting?.meeting_number ?? 0),
+    );
+
+    const priorLoanBalance = Math.max(
+      0,
+      Number(priorLoan?.issued ?? 0) - Number(priorLoan?.repaid ?? 0),
+    );
+
+    const repayment = await db.getFirstAsync<{ total: number }>(
+      `SELECT COALESCE(SUM(amount), 0) AS total
+       FROM financial_transactions
+       WHERE group_id = ? AND member_id = ? AND meeting_id = ?
+         AND account_type = 'loan_repayment' AND transaction_type = 'loan_repayment' AND reversed = 0`,
+      groupId, member.id, meetingId,
+    );
+
+    if (Number(setup.non_loan_repayment_fine) > 0 && priorLoanBalance > 0 && Number(repayment?.total ?? 0) <= 0) {
+      await addAutomaticFineIfNeeded(groupId, member.id, meetingId, Number(setup.non_loan_repayment_fine), 'Non-loan-repayment fine');
+    }
+
+    const insurance = await db.getFirstAsync<{ total: number }>(
+      `SELECT COALESCE(SUM(amount), 0) AS total
+       FROM financial_transactions
+       WHERE group_id = ? AND member_id = ? AND meeting_id = ?
+         AND account_type = 'insurance_fund' AND transaction_type = 'insurance_contribution' AND reversed = 0`,
+      groupId, member.id, meetingId,
+    );
+
+    if (Number(setup.non_insurance_contribution) > 0 && Number(insurance?.total ?? 0) <= 0) {
+      await addAutomaticFineIfNeeded(groupId, member.id, meetingId, Number(setup.non_insurance_contribution), 'Non-insurance-contribution fine');
+    }
+  }
+}
+
+/* ============================================================
    MEETING ROLL CALL / ATTENDANCE
    ============================================================ */
 
@@ -5866,6 +5997,13 @@ export async function recordMeetingAttendance(
     now(),
     markedBy,
     normalizeText(notes),
+  );
+
+  await applyAutomaticAttendanceFine(
+    meeting.group_id,
+    memberId,
+    meetingId,
+    status as 'present' | 'late' | 'absent',
   );
 }
 
@@ -6387,6 +6525,11 @@ export async function closeMeeting(
    * Savings + Fines + Loan Repayment + Social Fund
    * - Miscellaneous Expense
    */
+  await applyAutomaticMeetingActivityFines(
+    meeting.group_id,
+    meetingId,
+  );
+
   const todaySummary =
     await getMeetingTransactionSummary(
       meetingId,
@@ -6715,3 +6858,168 @@ export async function getInsuranceBenefitAvailability(
     slots,
   };
 }
+
+/* ============================================================
+   SUPERVISOR REPORTS — READ ONLY
+   ============================================================
+
+   These functions read the local SQLite data. A secure cross-phone
+   Supervisor link will be added through a backend/hosting layer later.
+*/
+
+export type SupervisorDetailedMemberReport = {
+  member_id: number;
+  member_number: string;
+  full_name: string;
+  gender: string;
+  age: number;
+  phone: string | null;
+  cell: string;
+  district: string;
+  role: string;
+  assigned_roles: string;
+  attendance_present: number;
+  attendance_late: number;
+  attendance_absent: number;
+  total_savings: number;
+  loan_balance: number;
+  loan_due_date: string | null;
+  insurance_contributions: number;
+  fines_assessed: number;
+  fines_paid: number;
+  fines_outstanding: number;
+};
+
+export type SupervisorAggregatedReport = {
+  group: GroupRecord;
+  rules: VSLASetupRuleRecord | null;
+  member_count: number;
+  active_member_count: number;
+  present_count: number;
+  late_count: number;
+  absent_count: number;
+  total_savings: number;
+  total_loan_fund: number;
+  total_loan_repayment: number;
+  total_loan_balance: number;
+  total_insurance_fund: number;
+  total_fines_assessed: number;
+  total_fines_paid: number;
+  total_fines_outstanding: number;
+  detailed_members: SupervisorDetailedMemberReport[];
+  generated_at: string;
+};
+
+export async function getSupervisorDetailedReport(
+  groupId: number,
+): Promise<SupervisorDetailedMemberReport[]> {
+  const db = await getDatabase();
+  const members = await db.getAllAsync<{
+    id: number; member_number: string; full_name: string; gender: string;
+    age: number; phone: string | null; cell: string; district: string;
+    role: string; assigned_roles: string;
+  }>(
+    `SELECT id, member_number, full_name, gender, age, phone, cell, district, role, assigned_roles
+     FROM members WHERE group_id = ? AND status = 'active' ORDER BY member_number ASC`,
+    groupId,
+  );
+
+  const report: SupervisorDetailedMemberReport[] = [];
+  for (const member of members) {
+    const attendance = await db.getFirstAsync<{ present: number; late: number; absent: number }>(
+      `SELECT
+         COALESCE(SUM(CASE WHEN attendance_status = 'present' THEN 1 ELSE 0 END), 0) AS present,
+         COALESCE(SUM(CASE WHEN attendance_status = 'late' THEN 1 ELSE 0 END), 0) AS late,
+         COALESCE(SUM(CASE WHEN attendance_status = 'absent' THEN 1 ELSE 0 END), 0) AS absent
+       FROM meeting_attendance WHERE group_id = ? AND member_id = ?`,
+      groupId, member.id,
+    );
+    const savings = await db.getFirstAsync<{ total: number }>(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM financial_transactions
+       WHERE group_id = ? AND member_id = ? AND account_type = 'savings'
+       AND transaction_type = 'savings_contribution' AND reversed = 0`,
+      groupId, member.id,
+    );
+    const loan = await getMemberLoanBalance(groupId, member.id);
+    const insurance = await db.getFirstAsync<{ total: number }>(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM financial_transactions
+       WHERE group_id = ? AND member_id = ? AND account_type = 'insurance_fund'
+       AND transaction_type = 'insurance_contribution' AND reversed = 0`,
+      groupId, member.id,
+    );
+    const fines = await getMemberFines(groupId, member.id);
+    const statement = await db.getFirstAsync<{ individual_loan_due_date: string | null }>(
+      `SELECT individual_loan_due_date FROM member_statement_records
+       WHERE member_id = ? ORDER BY id DESC LIMIT 1`,
+      member.id,
+    );
+
+    report.push({
+      member_id: member.id,
+      member_number: member.member_number,
+      full_name: member.full_name,
+      gender: member.gender,
+      age: member.age,
+      phone: member.phone,
+      cell: member.cell,
+      district: member.district,
+      role: member.role,
+      assigned_roles: member.assigned_roles,
+      attendance_present: Number(attendance?.present ?? 0),
+      attendance_late: Number(attendance?.late ?? 0),
+      attendance_absent: Number(attendance?.absent ?? 0),
+      total_savings: Number(savings?.total ?? 0),
+      loan_balance: Number(loan.balance ?? 0),
+      loan_due_date: statement?.individual_loan_due_date ?? null,
+      insurance_contributions: Number(insurance?.total ?? 0),
+      fines_assessed: fines.reduce((sum, fine) => sum + fine.original_amount, 0),
+      fines_paid: fines.reduce((sum, fine) => sum + fine.amount_paid, 0),
+      fines_outstanding: fines.reduce((sum, fine) => sum + fine.outstanding_amount, 0),
+    });
+  }
+  return report;
+}
+
+export async function getSupervisorAggregatedReport(
+  groupId: number,
+): Promise<SupervisorAggregatedReport> {
+  const group = await getGroupById(groupId);
+  if (!group) throw new Error('Group not found.');
+
+  const db = await getDatabase();
+  const rules = await getVSLASetupRules(groupId);
+  const detailed = await getSupervisorDetailedReport(groupId);
+  const summary = await getFinancialSummary(groupId);
+  const attendance = await db.getFirstAsync<{ present: number; late: number; absent: number }>(
+    `SELECT
+       COALESCE(SUM(CASE WHEN attendance_status = 'present' THEN 1 ELSE 0 END), 0) AS present,
+       COALESCE(SUM(CASE WHEN attendance_status = 'late' THEN 1 ELSE 0 END), 0) AS late,
+       COALESCE(SUM(CASE WHEN attendance_status = 'absent' THEN 1 ELSE 0 END), 0) AS absent
+     FROM meeting_attendance WHERE group_id = ?`,
+    groupId,
+  );
+  const memberCount = await db.getFirstAsync<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM members WHERE group_id = ?`, groupId,
+  );
+
+  return {
+    group,
+    rules,
+    member_count: Number(memberCount?.count ?? 0),
+    active_member_count: detailed.length,
+    present_count: Number(attendance?.present ?? 0),
+    late_count: Number(attendance?.late ?? 0),
+    absent_count: Number(attendance?.absent ?? 0),
+    total_savings: detailed.reduce((sum, m) => sum + m.total_savings, 0),
+    total_loan_fund: summary.loanFund,
+    total_loan_repayment: summary.loanRepayment,
+    total_loan_balance: detailed.reduce((sum, m) => sum + m.loan_balance, 0),
+    total_insurance_fund: summary.insuranceFund,
+    total_fines_assessed: detailed.reduce((sum, m) => sum + m.fines_assessed, 0),
+    total_fines_paid: detailed.reduce((sum, m) => sum + m.fines_paid, 0),
+    total_fines_outstanding: detailed.reduce((sum, m) => sum + m.fines_outstanding, 0),
+    detailed_members: detailed,
+    generated_at: now(),
+  };
+}
+
