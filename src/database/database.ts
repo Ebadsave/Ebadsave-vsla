@@ -6316,9 +6316,9 @@ export async function getMeetingCashReconciliation(
 export async function closeMeeting(
   meetingId: number,
   executiveMemberId: number,
-  cashAtHand: number,
-  backupCompleted: boolean,
-  backupCreatedAt: string,
+  cashAtHand?: number | null,
+  backupCompleted?: boolean,
+  backupCreatedAt?: string,
 ): Promise<void> {
   const db = await getDatabase();
 
