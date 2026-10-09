@@ -25,10 +25,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: 4. Install dependencies
+            - name: 4. Install dependencies
         run: |
           echo "========== NPM INSTALL =========="
           npm install
+          npm install firebase
 
       - name: 5. Install Expo packages
         run: |
