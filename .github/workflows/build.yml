@@ -1,91 +1,85 @@
 name: Build Ebadsave VSLA Release APK
 
 'on':
-push:
-branches:
-- main
-workflow_dispatch:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
-build:
-runs-on: ubuntu-latest
-steps:
-- name: Checkout repository
-uses: actions/checkout@v4
+  build:
+    runs-on: ubuntu-latest
 
-  - name: Setup Node.js
-    uses: actions/setup-node@v4
-    with:
-      node-version: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  - name: Setup Java 17
-    uses: actions/setup-java@v4
-    with:
-      distribution: temurin
-      java-version: '17'
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-  - name: Install dependencies
-    run: npm install
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-        - name: Install dependencies
+      - name: Install dependencies
         run: |
-          echo "========== NPM INSTALL =========="
           npm install
           npm install firebase
           npm install @react-native-async-storage/async-storage
 
       - name: Install Expo packages
         run: |
-          echo "========== EXPO PACKAGES + FIREBASE =========="
-          npx expo install expo-crypto
-          npx expo install expo-image-picker
-          npx expo install expo-secure-store
+          npx expo install expo-crypto expo-image-picker expo-secure-store
 
-  - name: TypeScript check
-    run: npx tsc --noEmit
+      - name: TypeScript check
+        run: npx tsc --noEmit
 
-  - name: Check Expo configuration
-    run: npx expo config --type public
+      - name: Check Expo configuration
+        run: npx expo config --type public
 
-  - name: Generate Android project
-    run: npx expo prebuild --platform android --non-interactive
+      - name: Generate Android project
+        run: npx expo prebuild --platform android --non-interactive
 
-  - name: Check application icon
-    run: |
-      test -f assets/icon/app_icon.png || {
-        echo "ERROR: Ebadsave icon was not found."
-        exit 1
-      }
+      - name: Check application icon
+        run: |
+          if [ ! -f assets/icon/app_icon.png ]; then
+            echo "ERROR: Ebadsave icon was not found."
+            exit 1
+          fi
 
-  - name: Build RELEASE APK
-    run: |
-      cd android
-      ./gradlew assembleRelease --no-daemon --stacktrace
+      - name: Build RELEASE APK
+        run: |
+          cd android
+          ./gradlew assembleRelease --no-daemon --stacktrace
 
-  - name: Verify and check APK size
-    run: |
-      APK="android/app/build/outputs/apk/release/app-release.apk"
+      - name: Verify APK and check size
+        run: |
+          APK="android/app/build/outputs/apk/release/app-release.apk"
 
-      if [ ! -f "$APK" ]; then
-        echo "ERROR: Release APK was not created."
-        find android/app/build/outputs -type f -name "*.apk" || true
-        exit 1
-      fi
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: Release APK was not created."
+            find android/app/build/outputs -type f -name "*.apk" || true
+            exit 1
+          fi
 
-      ls -lh "$APK"
+          ls -lh "$APK"
 
-      SIZE=$(stat -c%s "$APK")
-      LIMIT=$((30 * 1024 * 1024))
+          SIZE=$(stat -c%s "$APK")
+          LIMIT=$((30 * 1024 * 1024))
 
-      if [ "$SIZE" -ge "$LIMIT" ]; then
-        echo "WARNING: APK is 30 MiB or larger."
-      else
-        echo "SUCCESS: APK is smaller than 30 MiB."
-      fi
+          if [ "$SIZE" -ge "$LIMIT" ]; then
+            echo "WARNING: APK is 30 MiB or larger."
+          else
+            echo "SUCCESS: APK is smaller than 30 MiB."
+          fi
 
-  - name: Upload RELEASE APK
-    uses: actions/upload-artifact@v4
-    with:
-      name: Ebadsave-vsla-release-apk
-      path: android/app/build/outputs/apk/release/app-release.apk
-      if-no-files-found: error
+      - name: Upload RELEASE APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ebadsave-vsla-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
