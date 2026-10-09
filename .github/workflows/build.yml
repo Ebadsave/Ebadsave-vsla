@@ -27,12 +27,19 @@ uses: actions/checkout@v4
   - name: Install dependencies
     run: npm install
 
-  - name: Install Firebase
-    run: npm install firebase
+        - name: Install dependencies
+        run: |
+          echo "========== NPM INSTALL =========="
+          npm install
+          npm install firebase
+          npm install @react-native-async-storage/async-storage
 
-  - name: Install Expo packages
-    run: |
-      npx expo install expo-crypto expo-image-picker
+      - name: Install Expo packages
+        run: |
+          echo "========== EXPO PACKAGES + FIREBASE =========="
+          npx expo install expo-crypto
+          npx expo install expo-image-picker
+          npx expo install expo-secure-store
 
   - name: TypeScript check
     run: npx tsc --noEmit
