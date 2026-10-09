@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "664954049701",
+    "project_id": "onesandfourhole",
+    "storage_bucket": "onesandfourhole.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:664954049701:android:cb8c9e5ea31846d359a94c",
+        "android_client_info": {
+          "package_name": "com.ebadsave.vsla"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBIhePEUIrPh_2-2Pcs4t3Tc0Niuuma7P8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
