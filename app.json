@@ -1,30 +1,31 @@
 {
-  "expo": {
-    "name": "Ebadsave VSLA",
-    "slug": "ebadsave-vsla",
-    "version": "1.0.0",
-    "orientation": "portrait",
-    "icon": "./assets/icon/app_icon.png",
-    "userInterfaceStyle": "light",
-    "android": {
-      "package": "com.ebadsave.vsla",
-      "versionCode": 1,
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/icon/app_icon.png",
-        "backgroundColor": "#FFFFFF"
-      }
-    },
-    "plugins": [
-      [
-        "expo-build-properties",
-        {
-          "android": {
-            "buildArchs": [
-              "armeabi-v7a"
-            ]
-          }
-        }
-      ]
-    ]
-  }
+"expo": {
+"name": "Ebadsave VSLA",
+"slug": "ebadsave-vsla",
+"version": "1.0.0",
+"orientation": "portrait",
+"icon": "./assets/icon/app_icon.png",
+"userInterfaceStyle": "light",
+"android": {
+"package": "com.ebadsave.vsla",
+"versionCode": 1,
+"googleServicesFile": "./google-services.json",
+"adaptiveIcon": {
+"foregroundImage": "./assets/icon/app_icon.png",
+"backgroundColor": "#FFFFFF"
+}
+},
+"plugins": [
+[
+"expo-build-properties",
+{
+"android": {
+"buildArchs": [
+"armeabi-v7a"
+]
+}
+}
+]
+]
+}
 }
