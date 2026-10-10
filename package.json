@@ -19,6 +19,7 @@
     "expo-file-system": "~18.0.0",
     "expo-mail-composer": "~14.0.0",
     "expo-sqlite": "~16.0.0",
+    "expo-crypto": "~14.0.2",
     "firebase": "^12.0.0",
     "react": "19.1.0",
     "react-native": "0.81.4",
@@ -29,4 +30,6 @@
     "@types/react": "~19.1.10",
     "typescript": "~5.9.2"
   }
+}
+{import * as Crypto from 'expo-crypto';
 }
