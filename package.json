@@ -31,5 +31,4 @@
     "typescript": "~5.9.2"
   }
 }
-{import * as Crypto from 'expo-crypto';
-}
+
