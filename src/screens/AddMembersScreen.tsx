@@ -59,10 +59,16 @@ function getMemberPost(member: MemberRecord): string {
   return matchingRole || 'Member';
 }
 
-function isValidUgandanPhone(phoneValue: string): boolean {
-  const compact = phoneValue.trim().replace(/[\s()-]/g, '');
-  if (!compact) return true;
-  return /^0[0-9]{9}$/.test(compact) || /^\+256[0-9]{9}$/.test(compact) || /^256[0-9]{9}$/.test(compact);
+function normalizeInternationalPhone(phoneValue: string): string {
+  // Uganda international/E.164 format only: +256 followed by 9 digits.
+  // Formatting spaces, hyphens and parentheses are removed before saving.
+  return phoneValue.trim().replace(/[\s()-]/g, '');
+}
+
+function isValidInternationalPhone(phoneValue: string): boolean {
+  const compact = normalizeInternationalPhone(phoneValue);
+  if (!compact) return true; // Phone is optional.
+  return /^\+256[0-9]{9}$/.test(compact);
 }
 
 export default function AddMembersScreen({ navigation, route }: Props) {
@@ -179,10 +185,10 @@ export default function AddMembersScreen({ navigation, route }: Props) {
       return;
     }
 
-    if (!isValidUgandanPhone(phone)) {
+    if (!isValidInternationalPhone(phone)) {
       Alert.alert(
         'Invalid Phone Number',
-        'Use a Ugandan mobile number such as 0772123456 or +256772123456, or leave it blank.',
+        'Enter the international format +256 followed by 9 digits, for example +256772123456. Local formats such as 0772123456 are not accepted. You may leave the phone blank.',
       );
       return;
     }
@@ -191,8 +197,26 @@ export default function AddMembersScreen({ navigation, route }: Props) {
     const cleanConfirmPasscode = confirmPasscode.trim();
     const passcodePattern = /^[A-Za-z1-9./$-]{4}$/;
 
-    if (editingMemberId === null && !cleanPasscode) {
-      Alert.alert('Passcode Required', 'Assign a four-character personal passcode to every new member.');
+    const normalizedPhone = normalizeInternationalPhone(phone);
+
+    const existingMember = editingMemberId === null
+      ? undefined
+      : members.find((item) => Number(item.id) === Number(editingMemberId));
+    const phoneIsNewForMember = Boolean(normalizedPhone) && !existingMember?.phone;
+
+    if (normalizedPhone && !cleanPasscode && (editingMemberId === null || phoneIsNewForMember)) {
+      Alert.alert(
+        'Passcode Required',
+        'A member with a phone number must have a four-character personal passcode. Members without phone numbers do not need one.',
+      );
+      return;
+    }
+
+    if (!normalizedPhone && (cleanPasscode || cleanConfirmPasscode)) {
+      Alert.alert(
+        'Passcode Not Needed',
+        'Leave the passcode fields blank for a member without a phone number. Add an international phone number first if this member needs app authorization.',
+      );
       return;
     }
 
@@ -230,7 +254,7 @@ export default function AddMembersScreen({ navigation, route }: Props) {
           fullName: cleanName,
           gender: cleanGender,
           age: cleanAge,
-          phone: phone.trim(),
+          phone: normalizedPhone,
           cell: cleanCell,
           district: cleanDistrict,
         });
@@ -241,7 +265,7 @@ export default function AddMembersScreen({ navigation, route }: Props) {
           role === 'Member' ? [] : [role],
         );
 
-        if (cleanPasscode) {
+        if (normalizedPhone && cleanPasscode) {
           await setMemberPasscode(editingMemberId, cleanPasscode);
         }
 
@@ -258,7 +282,7 @@ export default function AddMembersScreen({ navigation, route }: Props) {
           cleanName,
           cleanGender,
           cleanAge,
-          phone.trim(),
+          normalizedPhone,
           cleanCell,
           cleanDistrict,
         );
@@ -271,9 +295,12 @@ export default function AddMembersScreen({ navigation, route }: Props) {
           role === 'Member' ? [] : [role],
         );
 
-        // New members receive a personal passcode at registration.
-        // A member without a phone may keep a passcode but cannot authorize app access.
-        await setMemberPasscode(memberId, cleanPasscode);
+        // Passcodes are required only for members who have a phone number.
+        // The database stores only a salted hash. No-phone members remain valid
+        // group members but cannot authorize app access.
+        if (normalizedPhone && cleanPasscode) {
+          await setMemberPasscode(memberId, cleanPasscode);
+        }
 
         await load();
         clearForm();
@@ -393,7 +420,7 @@ export default function AddMembersScreen({ navigation, route }: Props) {
               label="Phone (optional)"
               value={phone}
               onChangeText={setPhone}
-              placeholder="Enter phone number"
+              placeholder="+256772123456"
               keyboardType="phone-pad"
             />
 
@@ -432,7 +459,7 @@ export default function AddMembersScreen({ navigation, route }: Props) {
             />
 
             <Text style={styles.helperText}>
-              Each member should have a personal passcode. For an existing member, enter a passcode here if one has not been assigned; leave both fields blank only to keep an existing passcode. Members without a phone number cannot be used to authorize app access. Never share passcodes.
+              Members with phone numbers must have a four-character personal passcode. Members without phone numbers do not need one and cannot authorize app access. Phone numbers must use international format, for example +256772123456. For an existing member, leave both passcode fields blank to retain an existing passcode; enter a new one when assigning or changing it. Never share passcodes.
             </Text>
 
             <Text style={styles.label}>Member Role / Executive Post (choose one)</Text>
