@@ -119,14 +119,25 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
     try {
       setStarting(true);
 
-      await startNewMeeting(groupId, executiveMemberId);
+      const meetingId = await startNewMeeting(groupId, executiveMemberId);
 
-      Alert.alert(
-        'Meeting Started',
-        'The new group meeting has been opened. Roll call will begin first.',
-      );
+      // Confirm the database actually created the open meeting before moving
+      // to roll call. This avoids leaving the user on a screen that looks stuck.
+      const createdMeeting = await getOpenMeeting(groupId);
+      if (!createdMeeting || Number(createdMeeting.id) !== Number(meetingId)) {
+        throw new Error('The meeting was not found after creation. Please refresh and try again.');
+      }
 
-      await loadMeetingState();
+      setOpenMeeting(createdMeeting);
+      setBackupReceipt(null);
+      setCashInBox('');
+      setCashCheck(null);
+
+      navigation.navigate('MeetingRollCall', {
+        groupId,
+        meetingId: Number(createdMeeting.id),
+        executiveMemberId,
+      });
     } catch (error) {
       Alert.alert(
         'Unable to Start Meeting',
@@ -392,6 +403,17 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
             <View style={styles.statusBox}>
               <Text style={styles.statusText}>OPEN</Text>
             </View>
+
+            <TouchableOpacity
+              style={styles.startButton}
+              onPress={() => navigation.navigate('MeetingRollCall', {
+                groupId,
+                meetingId: Number(openMeeting.id),
+                executiveMemberId,
+              })}
+            >
+              <Text style={styles.startButtonText}>Open Meeting / Continue Roll Call</Text>
+            </TouchableOpacity>
 
             <View style={styles.closeWorkflowCard}>
               <Text style={styles.workflowTitle}>Close Meeting Checklist</Text>
