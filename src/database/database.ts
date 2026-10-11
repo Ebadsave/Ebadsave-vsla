@@ -1,5 +1,8 @@
 import * as SQLite from 'expo-sqlite';
 import * as Crypto from 'expo-crypto';
+import { signInAnonymously } from 'firebase/auth';
+import { doc, runTransaction } from 'firebase/firestore';
+import { auth, db as firestoreDb } from '../firestore/firestore';
 function generateLocalId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 }
@@ -14,6 +17,7 @@ export type GroupRecord = {
   status: string;
   created_at: string;
   last_activity_at: string;
+  firebase_registration_id?: string | null;
 };
 
 export type MemberRecord = {
@@ -525,7 +529,8 @@ const GROUP_SELECT = `
     country,
     status,
     created_at,
-    last_activity_at
+    last_activity_at,
+    firebase_registration_id
   FROM groups
 `;
 
@@ -884,7 +889,19 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
 currency TEXT NOT NULL DEFAULT 'UGX',
 status TEXT NOT NULL DEFAULT 'active',
       created_at TEXT NOT NULL,
-      last_activity_at TEXT NOT NULL
+      last_activity_at TEXT NOT NULL,
+      firebase_registration_id TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS group_registration_attempts (
+      id TEXT PRIMARY KEY,
+      group_name TEXT NOT NULL,
+      district TEXT NOT NULL,
+      country TEXT NOT NULL,
+      group_number INTEGER,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS members (
@@ -1522,6 +1539,8 @@ status TEXT NOT NULL DEFAULT 'active',
 
   await refreshGroupDormancy(db);
 
+  await addColumnIfMissing(db, 'groups', 'firebase_registration_id', 'TEXT');
+
   await addColumnIfMissing(db, 'meeting_closures', 'cash_at_hand', 'REAL');
   await addColumnIfMissing(db, 'meeting_closures', 'cash_expected', 'REAL');
   await addColumnIfMissing(db, 'meeting_closures', 'cash_balanced', 'INTEGER NOT NULL DEFAULT 0');
@@ -1573,7 +1592,7 @@ export type EbadsaveBackup = {
 };
 
 const BACKUP_TABLES = [
-  'groups', 'members', 'deleted_member_numbers', 'member_next_of_kin',
+  'groups', 'group_registration_attempts', 'members', 'deleted_member_numbers', 'member_next_of_kin',
   'next_of_kin_change_history', 'next_of_kin_benefits', 'group_rules',
   'vsla_setup_rules', 'group_meetings', 'member_credentials',
   'member_auth_attempts', 'member_transaction_signatures', 'app_access_sessions',
@@ -1749,6 +1768,15 @@ export async function createGroup(
   country: string,
   isTestGroup: boolean = false,
 ): Promise<number> {
+  if (!isTestGroup) {
+    const registered = await registerGroupWithFirebase({
+      groupName,
+      district,
+      country,
+    });
+    return registered.id;
+  }
+
   const db = await getDatabase();
 
   const cleanName =
@@ -1832,24 +1860,416 @@ export async function registerGroup(input: {
   country: string;
   isTestGroup?: boolean;
 }): Promise<GroupRecord> {
-  const groupId =
-    await createGroup(
+  // Test numbers are deliberately local and isolated from production KYA numbers.
+  // Every production group must receive its number from the central Firebase registry.
+  if (input.isTestGroup === true) {
+    const groupId = await createGroup(
       input.groupName,
       input.district,
       input.country,
-      input.isTestGroup === true,
+      true,
     );
-
-  const group =
-    await getGroupById(groupId);
-
-  if (!group) {
-    throw new Error(
-      'Group was created but could not be loaded.',
-    );
+    const testGroup = await getGroupById(groupId);
+    if (!testGroup) throw new Error('Test group was created but could not be loaded.');
+    return testGroup;
   }
 
-  return group;
+  return registerGroupWithFirebase(input);
+}
+
+/**
+ * Registers a production group only after Firestore atomically reserves its KYA number.
+ * Existing public database functions remain available; production registration routes
+ * through this function so an offline device cannot invent a globally unique number.
+ */
+export async function registerGroupWithFirebase(input: {
+  groupName: string;
+  district: string;
+  country: string;
+}): Promise<GroupRecord> {
+  const cleanName = normalizeText(input.groupName);
+  const cleanDistrict = normalizeText(input.district);
+  const cleanCountry = normalizeText(input.country);
+
+  if (!cleanName) throw new Error('Group name is required.');
+  if (!cleanDistrict) throw new Error('District is required.');
+  if (!cleanCountry) throw new Error('Country is required.');
+
+  const localDb = await getDatabase();
+  await ensureFirebaseRegistrationAuth();
+
+  // Reserve all existing locally registered production numbers first. If another
+  // device already owns a number for a different group, stop and report the conflict.
+  const existingGroups = await getAllGroups();
+  for (const existing of existingGroups) {
+    await reserveExistingLocalGroup(existing, localDb);
+  }
+
+  const timestamp = now();
+  const pending = await getOrCreatePendingGroupRegistration(
+    localDb,
+    cleanName,
+    cleanDistrict,
+    cleanCountry,
+    timestamp,
+  );
+
+  const registrationId = pending.id;
+  const groupNumber = await reserveNextKyaNumberOnFirebase({
+    registrationId,
+    groupName: cleanName,
+    district: cleanDistrict,
+    country: cleanCountry,
+    createdAt: pending.created_at,
+  });
+
+  await localDb.runAsync(
+    `UPDATE group_registration_attempts
+     SET group_number = ?, updated_at = ?
+     WHERE id = ?`,
+    groupNumber,
+    now(),
+    registrationId,
+  );
+
+  let localGroup = await localDb.getFirstAsync<{ id: number; status: string }>(
+    `SELECT id, status FROM groups WHERE firebase_registration_id = ? LIMIT 1`,
+    registrationId,
+  );
+
+  if (!localGroup) {
+    const createdAt = pending.created_at || now();
+    const result = await localDb.runAsync(
+      `INSERT INTO groups (
+        group_number, group_name, district, country, status,
+        created_at, last_activity_at, firebase_registration_id
+      ) VALUES (?, ?, ?, ?, 'pending_registration', ?, ?, ?)`,
+      groupNumber,
+      cleanName,
+      cleanDistrict,
+      cleanCountry,
+      createdAt,
+      now(),
+      registrationId,
+    );
+    localGroup = { id: Number(result.lastInsertRowId), status: 'pending_registration' };
+  }
+
+  const groupId = localGroup.id;
+
+  // These setup functions are idempotent for an existing group, so a retry after
+  // interruption can finish the same registration without creating another group.
+  await ensureFinancialAccountsForGroup(localDb, groupId);
+  await insertDefaultConstitution(localDb, groupId);
+  await createDefaultVSLASetupRules(localDb, groupId);
+
+  // Finalize the central Firebase registration BEFORE marking the local group
+  // active. If the network or Firestore operation fails, the local group remains
+  // pending_registration and cannot be used as a successfully registered group.
+  // Retrying uses the same pending registration ID and reserved KYA number.
+  await finalizeFirebaseGroupRegistration(registrationId, groupNumber, {
+    groupName: cleanName,
+    district: cleanDistrict,
+    country: cleanCountry,
+  });
+
+  await localDb.runAsync(
+    `UPDATE groups SET status = 'active', last_activity_at = ? WHERE id = ?`,
+    now(),
+    groupId,
+  );
+
+  await localDb.runAsync(
+    `UPDATE group_registration_attempts SET status = 'completed', updated_at = ? WHERE id = ?`,
+    now(),
+    registrationId,
+  );
+
+  const result = await getGroupById(groupId);
+  if (!result) throw new Error('Group was registered but could not be loaded.');
+  return result;
+}
+
+async function ensureFirebaseRegistrationAuth(): Promise<void> {
+  if (auth.currentUser) return;
+  try {
+    await signInAnonymously(auth);
+  } catch (error) {
+    console.error('Firebase registration authentication failed:', error);
+    throw new Error(
+      'Internet and Firebase authentication are required to register a production group. Enable Anonymous sign-in in Firebase Authentication, then try again.',
+    );
+  }
+}
+
+function normalizeGroupIdentity(value: unknown): string {
+  return normalizeText(typeof value === 'string' ? value : '').toLocaleLowerCase();
+}
+
+function groupReservationId(groupNumber: number): string {
+  return `KYA_${groupNumber}`;
+}
+
+function reservationIsReusable(data: Record<string, any>, timestamp = Date.now()): boolean {
+  if (data.status !== 'dormant') return false;
+  const lastActivity = new Date(String(data.last_activity_at ?? '')).getTime();
+  return Number.isFinite(lastActivity) && lastActivity <= timestamp - 90 * 24 * 60 * 60 * 1000;
+}
+
+function legacyRegistrationId(group: GroupRecord): string {
+  const identity = [
+    parseGroupNumber(group.group_number),
+    group.group_name,
+    group.district,
+    group.country,
+  ].join('_').toLowerCase().replace(/[^a-z0-9_-]+/g, '_').slice(0, 180);
+  return `legacy_${identity}`;
+}
+
+async function reserveExistingLocalGroup(
+  group: GroupRecord,
+  localDb: SQLite.SQLiteDatabase,
+): Promise<void> {
+  const number = parseGroupNumber(group.group_number);
+  if (number < GROUP_START || number > GROUP_END) return;
+
+  const shouldReserve =
+    group.status === 'active' ||
+    group.status === 'deleted' ||
+    (group.status === 'dormant' && !reservationIsReusable({
+      status: 'dormant',
+      last_activity_at: group.last_activity_at,
+    }));
+
+  // A dormant group inactive for 90 days may have its number reassigned.
+  // Deleted production groups remain reserved permanently. For an expired dormant
+  // group, mark only its own matching central reservation as dormant; never overwrite
+  // a reservation that now belongs to a different group.
+  const registrationId = group.firebase_registration_id || legacyRegistrationId(group);
+  const reservationRef = doc(firestoreDb, 'kya_group_number_reservations', groupReservationId(number));
+
+  if (!shouldReserve) {
+    // Only an actually dormant group can release its reservation after 90 days.
+    // Pending registrations must remain reserved so another registration cannot
+    // take their number while a retry is recovering the original attempt.
+    if (group.status === 'dormant') {
+      await runTransaction(firestoreDb, async (transaction) => {
+        const snapshot = await transaction.get(reservationRef);
+        if (!snapshot.exists()) return;
+        const current = snapshot.data() as Record<string, any>;
+        const sameIdentity =
+          normalizeGroupIdentity(current.group_name) === normalizeGroupIdentity(group.group_name) &&
+          normalizeGroupIdentity(current.district) === normalizeGroupIdentity(group.district) &&
+          normalizeGroupIdentity(current.country) === normalizeGroupIdentity(group.country);
+        if (sameIdentity) {
+          transaction.set(reservationRef, {
+            status: 'dormant',
+            last_activity_at: group.last_activity_at,
+            updated_at: now(),
+          }, { merge: true });
+        }
+      });
+    }
+    return;
+  }
+
+  const remoteGroupRef = doc(firestoreDb, 'vsla_groups', registrationId);
+
+  const finalRegistrationId = await runTransaction(firestoreDb, async (transaction) => {
+    const reservationSnapshot = await transaction.get(reservationRef);
+    if (reservationSnapshot.exists()) {
+      const current = reservationSnapshot.data() as Record<string, any>;
+      const sameIdentity =
+        normalizeGroupIdentity(current.group_name) === normalizeGroupIdentity(group.group_name) &&
+        normalizeGroupIdentity(current.district) === normalizeGroupIdentity(group.district) &&
+        normalizeGroupIdentity(current.country) === normalizeGroupIdentity(group.country);
+
+      if (!sameIdentity) {
+        throw new Error(
+          `KYA ${number} is already reserved in Firebase for a different group. Registration is blocked to protect existing records. Resolve the duplicate KYA number before continuing.`,
+        );
+      }
+
+      const existingRegistrationId = String(current.registration_id || registrationId);
+      const existingRemoteGroupRef = doc(firestoreDb, 'vsla_groups', existingRegistrationId);
+      const syncedData = {
+        registration_id: existingRegistrationId,
+        group_number: number,
+        group_name: group.group_name,
+        district: group.district,
+        country: group.country,
+        status: group.status,
+        created_at: group.created_at,
+        last_activity_at: group.last_activity_at,
+        updated_at: now(),
+        migrated_from_local_database: true,
+      };
+      transaction.set(reservationRef, syncedData, { merge: true });
+      transaction.set(existingRemoteGroupRef, syncedData, { merge: true });
+      return existingRegistrationId;
+    }
+
+    const syncedData = {
+      registration_id: registrationId,
+      group_number: number,
+      group_name: group.group_name,
+      district: group.district,
+      country: group.country,
+      status: group.status,
+      created_at: group.created_at,
+      last_activity_at: group.last_activity_at,
+      updated_at: now(),
+      migrated_from_local_database: true,
+    };
+    transaction.set(reservationRef, syncedData);
+    transaction.set(remoteGroupRef, syncedData, { merge: true });
+    return registrationId;
+  });
+
+  if (finalRegistrationId !== group.firebase_registration_id) {
+    await localDb.runAsync(
+      `UPDATE groups SET firebase_registration_id = ? WHERE id = ?`,
+      finalRegistrationId,
+      group.id,
+    );
+  }
+}
+
+async function getOrCreatePendingGroupRegistration(
+  localDb: SQLite.SQLiteDatabase,
+  groupName: string,
+  district: string,
+  country: string,
+  timestamp: string,
+): Promise<{ id: string; created_at: string }> {
+  const pending = await localDb.getFirstAsync<{ id: string; created_at: string }>(
+    `SELECT id, created_at FROM group_registration_attempts
+     WHERE status = 'pending' AND group_name = ? AND district = ? AND country = ?
+     ORDER BY created_at DESC LIMIT 1`,
+    groupName,
+    district,
+    country,
+  );
+  if (pending) return pending;
+
+  const id = generateLocalId();
+  await localDb.runAsync(
+    `INSERT INTO group_registration_attempts (
+      id, group_name, district, country, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
+    id,
+    groupName,
+    district,
+    country,
+    timestamp,
+    timestamp,
+  );
+  return { id, created_at: timestamp };
+}
+
+async function reserveNextKyaNumberOnFirebase(input: {
+  registrationId: string;
+  groupName: string;
+  district: string;
+  country: string;
+  createdAt: string;
+}): Promise<number> {
+  const registrationRef = doc(firestoreDb, 'vsla_group_registrations', input.registrationId);
+
+  return runTransaction(firestoreDb, async (transaction) => {
+    const registrationSnapshot = await transaction.get(registrationRef);
+    if (registrationSnapshot.exists()) {
+      const existingRegistration = registrationSnapshot.data() as Record<string, any>;
+      const existingNumber = Number(existingRegistration.group_number);
+      if (existingNumber >= GROUP_START && existingNumber <= GROUP_END) {
+        const existingReservationRef = doc(
+          firestoreDb,
+          'kya_group_number_reservations',
+          groupReservationId(existingNumber),
+        );
+        const existingReservationSnapshot = await transaction.get(existingReservationRef);
+        const reservation = existingReservationSnapshot.exists()
+          ? existingReservationSnapshot.data() as Record<string, any>
+          : null;
+        if (reservation?.registration_id === input.registrationId) return existingNumber;
+        throw new Error('This registration attempt no longer owns its reserved KYA number. Please contact support before retrying.');
+      }
+    }
+
+    const currentTime = Date.now();
+    let chosenNumber: number | null = null;
+    let chosenReservationRef: ReturnType<typeof doc> | null = null;
+
+    for (let number = GROUP_START; number <= GROUP_END; number += 1) {
+      const reservationRef = doc(
+        firestoreDb,
+        'kya_group_number_reservations',
+        groupReservationId(number),
+      );
+      const snapshot = await transaction.get(reservationRef);
+      if (!snapshot.exists() || reservationIsReusable(snapshot.data() as Record<string, any>, currentTime)) {
+        chosenNumber = number;
+        chosenReservationRef = reservationRef;
+        break;
+      }
+    }
+
+    if (chosenNumber === null || !chosenReservationRef) {
+      throw new Error('No production KYA number is available between KYA 2010 and KYA 9090.');
+    }
+
+    const reservationData = {
+      group_number: chosenNumber,
+      registration_id: input.registrationId,
+      group_name: input.groupName,
+      district: input.district,
+      country: input.country,
+      status: 'pending_registration',
+      created_at: input.createdAt,
+      last_activity_at: now(),
+      updated_at: now(),
+    };
+
+    transaction.set(chosenReservationRef, reservationData);
+    transaction.set(registrationRef, {
+      ...reservationData,
+      registration_id: input.registrationId,
+    });
+    transaction.set(doc(firestoreDb, 'vsla_groups', input.registrationId), reservationData, { merge: true });
+    return chosenNumber;
+  });
+}
+
+async function finalizeFirebaseGroupRegistration(
+  registrationId: string,
+  groupNumber: number,
+  details: { groupName: string; district: string; country: string },
+): Promise<void> {
+  const reservationRef = doc(firestoreDb, 'kya_group_number_reservations', groupReservationId(groupNumber));
+  const registrationRef = doc(firestoreDb, 'vsla_group_registrations', registrationId);
+  const remoteGroupRef = doc(firestoreDb, 'vsla_groups', registrationId);
+
+  await runTransaction(firestoreDb, async (transaction) => {
+    const reservationSnapshot = await transaction.get(reservationRef);
+    if (!reservationSnapshot.exists()) throw new Error(`KYA ${groupNumber} reservation was not found in Firebase.`);
+    const reservation = reservationSnapshot.data() as Record<string, any>;
+    if (reservation.registration_id !== registrationId) {
+      throw new Error(`KYA ${groupNumber} is no longer reserved for this registration.`);
+    }
+    const activeData = {
+      group_number: groupNumber,
+      registration_id: registrationId,
+      group_name: details.groupName,
+      district: details.district,
+      country: details.country,
+      status: 'active',
+      last_activity_at: now(),
+      updated_at: now(),
+    };
+    transaction.set(reservationRef, activeData, { merge: true });
+    transaction.set(registrationRef, { ...activeData, status: 'completed' }, { merge: true });
+    transaction.set(remoteGroupRef, activeData, { merge: true });
+  });
 }
 
 export async function deleteGroup(
@@ -2011,7 +2431,7 @@ export async function updateGroup(
        updated_at = ?
      WHERE group_id = ?
      AND article_number = 1`,
-    `This group shall operate as ${cleanName}. Its purpose is to encourage members to save together, grow together, access appropriate financial services, support one another, and improve the financial wellbeing of members.`,
+    `This group shall operate as ${cleanName}, located in ${cleanDistrict}, ${cleanCountry}, under the unique group number KYA ${existingGroup.group_number}. Its purpose is to encourage members to save together, grow together, access appropriate financial services, support one another, and improve the financial wellbeing of members.`,
     timestamp,
     groupId,
   );
@@ -2036,13 +2456,26 @@ async function insertDefaultConstitution(
   db: SQLite.SQLiteDatabase,
   groupId: number,
 ): Promise<void> {
+  const groupIdentity = await db.getFirstAsync<{
+    group_number: string | number;
+    group_name: string;
+    district: string;
+    country: string;
+  }>(
+    `SELECT group_number, group_name, district, country FROM groups WHERE id = ? LIMIT 1`,
+    groupId,
+  );
+  const articleOne = groupIdentity
+    ? `This group shall operate as ${groupIdentity.group_name}, located in ${groupIdentity.district}, ${groupIdentity.country}, under the unique group number KYA ${parseGroupNumber(groupIdentity.group_number)}. Its purpose is to encourage members to save together, grow together, access appropriate financial services, support one another, and improve the financial wellbeing of members.`
+    : 'This group shall operate under its registered group name and unique KYA number. Its purpose is to encourage members to save together, grow together, access appropriate financial services, support one another, and improve the financial wellbeing of members.';
+
   const articles: Array<
     [number, string, string]
   > = [
     [
       1,
       'Name and Purpose',
-      'This group shall operate as Ebadsave VSLA. Its purpose is to encourage members to save together, grow together, access appropriate financial services, support one another, and improve the financial wellbeing of members.',
+      articleOne,
     ],
     [
       2,
