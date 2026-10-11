@@ -92,23 +92,36 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
 
       const members = await getMembersByGroupId(group.id);
 
-      const executiveRoles = [
+      // updateMemberRoles() stores the general role as 'executive' and the
+      // actual post in assigned_roles. Older records may store the post in
+      // role directly, so accept both formats without changing any records.
+      const executiveRoles = new Set([
         'chairperson',
+        'chair',
+        'vice chair',
         'vice chairperson',
+        'vice-chair',
         'secretary',
         'treasurer',
         'money counter',
         'key keeper',
         'supervisor',
-      ];
+      ]);
 
-      const executive = members.find(
-        (member: MemberRecord) =>
-          member.status?.toLowerCase() === 'active' &&
-          executiveRoles.includes(
-            member.role?.trim().toLowerCase() || '',
-          ),
-      );
+      const executive = members.find((member: MemberRecord) => {
+        if (member.status?.toLowerCase() !== 'active') return false;
+
+        const legacyRole = member.role?.trim().toLowerCase() || '';
+        const assignedPosts = (member.assigned_roles || '')
+          .split(',')
+          .map((post) => post.trim().toLowerCase())
+          .filter(Boolean);
+
+        // Do not treat the generic value 'executive' alone as a post. A
+        // member must have an actual executive post assigned.
+        return executiveRoles.has(legacyRole) ||
+          assignedPosts.some((post) => executiveRoles.has(post));
+      });
 
       setExecutiveMemberId(executive?.id ?? null);
 
