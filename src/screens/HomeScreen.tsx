@@ -204,10 +204,11 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
       return;
     }
 
-    navigation.navigate('FinancialTransactions', {
+    // Return to the meeting control screen so the user can continue roll call
+    // and still reach the existing close-meeting checklist.
+    navigation.navigate('NewMeeting', {
       groupId: activeGroup!.id,
-      meetingId: meeting.id,
-      currency: dashboard.currency,
+      executiveMemberId: executiveMemberId!,
     });
   };
 
@@ -327,6 +328,13 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
             }
           >
             <Text style={styles.headerButtonText}>Setup Rules</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.headerButton}
+            onPress={() => navigation.navigate('BackupRestore')}
+          >
+            <Text style={styles.headerButtonText}>Backup & Restore</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -507,6 +515,7 @@ const styles = StyleSheet.create({
 
   headerButtons: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     marginTop: 12,
     gap: 8,
   },
