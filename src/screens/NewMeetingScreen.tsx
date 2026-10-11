@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import * as FileSystem from 'expo-file-system';
 
 import { RootStackParamList } from '../../App';
 import {
@@ -20,9 +21,9 @@ import {
   startNewMeeting,
   closeMeeting,
   approveMeetingSummary,
-  createDatabaseBackup,
   getMeetingCashReconciliation,
 } from '../database/database';
+import { exportDatabaseBackup } from '../database/backup';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'NewMeeting'>;
 
@@ -46,8 +47,14 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
   const [starting, setStarting] = useState(false);
   const [approving, setApproving] = useState(false);
   const [closing, setClosing] = useState(false);
-  const [backupCompleted, setBackupCompleted] = useState(false);
-  const [backupCreatedAt, setBackupCreatedAt] = useState('');
+  const [backupReceipt, setBackupReceipt] = useState<{
+    meetingId: number;
+    createdAt: string;
+    filePath: string;
+    fileName: string;
+    fileSize: number;
+  } | null>(null);
+  const backupCompleted = backupReceipt !== null;
   const [cashInBox, setCashInBox] = useState('');
   const [cashCheck, setCashCheck] = useState<{ expectedCash: number; difference: number; balanced: boolean } | null>(null);
   const [checkingCash, setCheckingCash] = useState(false);
@@ -68,6 +75,7 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
 
       const currentOpenMeeting = await getOpenMeeting(groupId);
       setOpenMeeting(currentOpenMeeting);
+      setBackupReceipt((current) => current && current.meetingId === Number(currentOpenMeeting?.id) ? current : null);
 
       const previous = await getLastConcludedMeeting(groupId);
       setPreviousMeeting(previous as PreviousMeeting | null);
@@ -188,20 +196,93 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
   };
 
   const handleCreateBackup = async () => {
+    if (!openMeeting) {
+      Alert.alert('No Open Meeting', 'Open a meeting before creating its closing backup.');
+      return;
+    }
+
     try {
       setClosing(true);
-      await createDatabaseBackup();
-      const createdAt = new Date().toISOString();
-      setBackupCreatedAt(createdAt);
-      setBackupCompleted(true);
-      Alert.alert('Backup Complete', 'The database backup was created successfully. You can now enter the cash in the box.');
+      setBackupReceipt(null);
+      setCashCheck(null);
+
+      // This exporter writes a file and reads it back to verify it. A success
+      // flag alone is not accepted as proof that a backup file exists.
+      const result = await exportDatabaseBackup();
+      if (!result.success || !result.filePath || !result.fileName) {
+        throw new Error(result.error || result.message || 'The backup could not be verified.');
+      }
+
+      const info = await FileSystem.getInfoAsync(result.filePath);
+      if (!info.exists || !('size' in info) || Number(info.size) <= 0) {
+        throw new Error('The backup file is missing or empty. The meeting cannot be closed.');
+      }
+
+      const contents = await FileSystem.readAsStringAsync(result.filePath, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+      const parsed = JSON.parse(contents) as {
+        version?: number;
+        created_at?: string;
+        tables?: Record<string, unknown>;
+      };
+      const meetings = parsed.tables?.group_meetings;
+      if (
+        parsed.version !== 1 ||
+        typeof parsed.created_at !== 'string' ||
+        !Array.isArray(meetings) ||
+        !meetings.some((item: any) => Number(item?.id) === Number(openMeeting.id) && item?.status === 'open')
+      ) {
+        throw new Error('The saved backup could not be verified for this open meeting. No closing receipt was recorded.');
+      }
+
+      const receipt = {
+        meetingId: Number(openMeeting.id),
+        createdAt: new Date().toISOString(),
+        filePath: result.filePath,
+        fileName: result.fileName,
+        fileSize: Number(info.size),
+      };
+      setBackupReceipt(receipt);
+      Alert.alert(
+        'Backup Verified',
+        `A verified backup file has been saved for Meeting #${openMeeting.meeting_number ?? openMeeting.id}. You can now enter the cash in the box.`,
+      );
     } catch (error) {
-      setBackupCompleted(false);
-      setBackupCreatedAt('');
-      Alert.alert('Backup Failed', error instanceof Error ? error.message : 'The database backup could not be created.');
+      setBackupReceipt(null);
+      Alert.alert('Backup Failed', error instanceof Error ? error.message : 'The database backup could not be created and verified.');
     } finally {
       setClosing(false);
     }
+  };
+
+  const verifyBackupReceiptBeforeClose = async () => {
+    if (!openMeeting || !backupReceipt || backupReceipt.meetingId !== Number(openMeeting.id)) {
+      throw new Error('A verified backup receipt for this meeting is required before closing.');
+    }
+    const info = await FileSystem.getInfoAsync(backupReceipt.filePath);
+    if (!info.exists || !('size' in info) || Number(info.size) <= 0 || Number(info.size) !== backupReceipt.fileSize) {
+      throw new Error('The verified backup file is missing or has changed. Create a new backup before closing the meeting.');
+    }
+    const contents = await FileSystem.readAsStringAsync(backupReceipt.filePath, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
+    const parsed = JSON.parse(contents) as { version?: number; created_at?: string; tables?: Record<string, unknown> };
+    const meetings = parsed.tables?.group_meetings;
+    if (
+      parsed.version !== 1 ||
+      typeof parsed.created_at !== 'string' ||
+      !Array.isArray(meetings) ||
+      !meetings.some((item: any) => Number(item?.id) === Number(openMeeting.id) && item?.status === 'open')
+    ) {
+      throw new Error('The backup file no longer verifies for this meeting. Create a new backup before closing.');
+    }
+    return JSON.stringify({
+      ...backupReceipt,
+      verified: true,
+      meetingId: Number(openMeeting.id),
+      verifiedAtClose: new Date().toISOString(),
+    });
   };
 
   const handleCheckCash = async () => {
@@ -227,8 +308,8 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
 
   const handleCloseMeeting = async () => {
     if (!openMeeting) return;
-    if (!backupCompleted || !backupCreatedAt) {
-      Alert.alert('Backup Required', 'Create a successful database backup before ending the meeting.');
+    if (!backupCompleted || !backupReceipt) {
+      Alert.alert('Backup Required', 'Create and verify a backup file for this meeting before ending it.');
       return;
     }
     const amount = Number(cashInBox);
@@ -249,10 +330,10 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
         onPress: async () => {
           try {
             setClosing(true);
-            await closeMeeting(openMeeting.id, executiveMemberId, amount, true, backupCreatedAt);
+            const verifiedReceipt = await verifyBackupReceiptBeforeClose();
+            await closeMeeting(openMeeting.id, executiveMemberId, amount, true, verifiedReceipt);
             Alert.alert('Meeting Closed', 'The meeting has been concluded and recorded.');
-            setBackupCompleted(false);
-            setBackupCreatedAt('');
+            setBackupReceipt(null);
             setCashInBox('');
             setCashCheck(null);
             await loadMeetingState();
@@ -351,7 +432,7 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
             </View>
 
             <Text style={styles.lockText}>
-              The meeting cannot end until a backup succeeds and the cash in the box exactly matches the calculated expected cash.
+              The meeting cannot end until a newly saved backup file is verified for this meeting, its receipt is recorded, and the cash in the box exactly matches the calculated expected cash.
             </Text>
           </View>
         ) : (
