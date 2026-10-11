@@ -19,7 +19,9 @@ import {
   getMembersByGroupId,
   registerMember,
   updateMember,
-  updateMemberRole,
+  updateMemberRoles,
+  getOccupiedExecutivePosts,
+  setMemberPasscode,
   type GroupRecord,
   type MemberRecord,
 } from '../database/database';
@@ -32,13 +34,36 @@ type Props = {
 const EXECUTIVE_ROLES = [
   'Member',
   'Chairperson',
-  'Vice Chairperson',
+  'Vice Chair',
   'Secretary',
   'Treasurer',
   'Money Counter',
   'Key Keeper',
-  'Supervisor',
 ];
+
+function getMemberPost(member: MemberRecord): string {
+  const assigned = (member.assigned_roles || '')
+    .split(',')
+    .map((item) => item.trim())
+    .find((item) => EXECUTIVE_ROLES.some(
+      (option) => option !== 'Member' && option.toLowerCase() === item.toLowerCase(),
+    ));
+
+  if (assigned) return assigned;
+
+  const savedRole = (member.role || '').trim();
+  const matchingRole = EXECUTIVE_ROLES.find(
+    (item) => item.toLowerCase() === savedRole.toLowerCase(),
+  );
+
+  return matchingRole || 'Member';
+}
+
+function isValidUgandanPhone(phoneValue: string): boolean {
+  const compact = phoneValue.trim().replace(/[\s()-]/g, '');
+  if (!compact) return true;
+  return /^0[0-9]{9}$/.test(compact) || /^\+256[0-9]{9}$/.test(compact) || /^256[0-9]{9}$/.test(compact);
+}
 
 export default function AddMembersScreen({ navigation, route }: Props) {
   const groupId = Number(route?.params?.groupId || 0);
@@ -57,6 +82,9 @@ export default function AddMembersScreen({ navigation, route }: Props) {
   const [cell, setCell] = useState('');
   const [district, setDistrict] = useState('');
   const [role, setRole] = useState('Member');
+  const [passcode, setPasscode] = useState('');
+  const [confirmPasscode, setConfirmPasscode] = useState('');
+  const [isSuperUser, setIsSuperUser] = useState(false);
 
   const load = useCallback(async () => {
     if (!groupId) return;
@@ -94,6 +122,9 @@ export default function AddMembersScreen({ navigation, route }: Props) {
     setCell('');
     setDistrict('');
     setRole('Member');
+    setPasscode('');
+    setConfirmPasscode('');
+    setIsSuperUser(false);
   };
 
   const editMember = (member: MemberRecord) => {
@@ -105,13 +136,10 @@ export default function AddMembersScreen({ navigation, route }: Props) {
     setCell(member.cell || '');
     setDistrict(member.district || '');
 
-    const savedRole = member.role?.trim() || 'Member';
-
-    const matchingRole = EXECUTIVE_ROLES.find(
-      (item) => item.toLowerCase() === savedRole.toLowerCase(),
-    );
-
-    setRole(matchingRole || 'Member');
+    setRole(getMemberPost(member));
+    setPasscode('');
+    setConfirmPasscode('');
+    setIsSuperUser(Number(member.is_super_user || 0) === 1);
   };
 
   const saveMember = async () => {
@@ -151,8 +179,51 @@ export default function AddMembersScreen({ navigation, route }: Props) {
       return;
     }
 
+    if (!isValidUgandanPhone(phone)) {
+      Alert.alert(
+        'Invalid Phone Number',
+        'Use a Ugandan mobile number such as 0772123456 or +256772123456, or leave it blank.',
+      );
+      return;
+    }
+
+    const cleanPasscode = passcode.trim();
+    const cleanConfirmPasscode = confirmPasscode.trim();
+    const passcodePattern = /^[A-Za-z1-9./$-]{4}$/;
+
+    if (editingMemberId === null && !cleanPasscode) {
+      Alert.alert('Passcode Required', 'Assign a four-character personal passcode to every new member.');
+      return;
+    }
+
+    if (cleanPasscode || cleanConfirmPasscode) {
+      if (!passcodePattern.test(cleanPasscode)) {
+        Alert.alert(
+          'Invalid Passcode',
+          'Passcode must contain exactly four characters. Allowed characters are letters, digits 1–9, dot, slash, dollar sign, and hyphen.',
+        );
+        return;
+      }
+      if (cleanPasscode !== cleanConfirmPasscode) {
+        Alert.alert('Passcodes Do Not Match', 'Enter the same passcode in both fields.');
+        return;
+      }
+    }
+
     try {
       setSaving(true);
+
+      // Enforce one post per executive and prevent two members holding the same post.
+      const selectedPost = isSuperUser && role === 'Member' ? 'Chairperson' : role;
+      if (selectedPost !== 'Member') {
+        const occupiedPosts = await getOccupiedExecutivePosts(
+          groupId,
+          editingMemberId ?? undefined,
+        );
+        if (occupiedPosts[selectedPost] !== undefined) {
+          throw new Error(`${selectedPost} is already assigned to another active member in this group.`);
+        }
+      }
 
       if (editingMemberId !== null) {
         await updateMember(editingMemberId, {
@@ -164,7 +235,15 @@ export default function AddMembersScreen({ navigation, route }: Props) {
           district: cleanDistrict,
         });
 
-        await updateMemberRole(editingMemberId, role);
+        await updateMemberRoles(
+          editingMemberId,
+          isSuperUser,
+          role === 'Member' ? [] : [role],
+        );
+
+        if (cleanPasscode) {
+          await setMemberPasscode(editingMemberId, cleanPasscode);
+        }
 
         await load();
         clearForm();
@@ -185,8 +264,16 @@ export default function AddMembersScreen({ navigation, route }: Props) {
         );
 
         // Keep the existing automatic member-number generation.
-        // Only assign the selected role after registration.
-        await updateMemberRole(memberId, role);
+        // A member can be ordinary, or hold exactly one executive post.
+        await updateMemberRoles(
+          memberId,
+          false,
+          role === 'Member' ? [] : [role],
+        );
+
+        // New members receive a personal passcode at registration.
+        // A member without a phone may keep a passcode but cannot authorize app access.
+        await setMemberPasscode(memberId, cleanPasscode);
 
         await load();
         clearForm();
@@ -324,7 +411,31 @@ export default function AddMembersScreen({ navigation, route }: Props) {
               placeholder="Enter district"
             />
 
-            <Text style={styles.label}>Executive Role</Text>
+            <Field
+              label={editingMemberId === null ? 'Personal Passcode (required)' : 'Personal Passcode (enter if missing or to change)'}
+              value={passcode}
+              onChangeText={(value) => setPasscode(value.slice(0, 4))}
+              placeholder="Exactly 4 characters"
+              keyboardType="default"
+              secureTextEntry
+              autoCapitalize="none"
+            />
+
+            <Field
+              label="Confirm Passcode"
+              value={confirmPasscode}
+              onChangeText={(value) => setConfirmPasscode(value.slice(0, 4))}
+              placeholder="Re-enter the same passcode"
+              keyboardType="default"
+              secureTextEntry
+              autoCapitalize="none"
+            />
+
+            <Text style={styles.helperText}>
+              Each member should have a personal passcode. For an existing member, enter a passcode here if one has not been assigned; leave both fields blank only to keep an existing passcode. Members without a phone number cannot be used to authorize app access. Never share passcodes.
+            </Text>
+
+            <Text style={styles.label}>Member Role / Executive Post (choose one)</Text>
 
             <View style={styles.roleContainer}>
               {EXECUTIVE_ROLES.map((item) => {
@@ -383,6 +494,9 @@ export default function AddMembersScreen({ navigation, route }: Props) {
           </View>
 
           <View style={styles.card}>
+            <Text style={styles.helperText}>
+              To assign a passcode to an existing member, tap Edit and enter a four-character passcode. Each executive can hold only one post, and each post can belong to only one active member.
+            </Text>
             <View style={styles.listHeader}>
               <Text style={styles.sectionTitle}>Active Members</Text>
 
@@ -416,7 +530,7 @@ export default function AddMembersScreen({ navigation, route }: Props) {
                     </Text>
 
                     <Text style={styles.roleText}>
-                      Role: {member.role || 'Member'}
+                      Role: {getMemberPost(member)}
                     </Text>
                   </View>
 
@@ -455,12 +569,16 @@ function Field({
   onChangeText,
   placeholder,
   keyboardType,
+  secureTextEntry,
+  autoCapitalize,
 }: {
   label: string;
   value: string;
   onChangeText: (value: string) => void;
   placeholder: string;
   keyboardType?: 'default' | 'number-pad' | 'phone-pad';
+  secureTextEntry?: boolean;
+  autoCapitalize?: 'none' | 'words';
 }) {
   return (
     <View style={styles.field}>
@@ -473,7 +591,9 @@ function Field({
         placeholder={placeholder}
         placeholderTextColor="#9ca3af"
         keyboardType={keyboardType || 'default'}
-        autoCapitalize="words"
+        autoCapitalize={autoCapitalize || 'words'}
+        secureTextEntry={secureTextEntry}
+        maxLength={secureTextEntry ? 4 : undefined}
       />
     </View>
   );
@@ -555,6 +675,13 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#111827',
     backgroundColor: '#fff',
+  },
+
+  helperText: {
+    marginTop: 8,
+    color: '#6b7280',
+    fontSize: 12,
+    lineHeight: 17,
   },
 
   roleContainer: {
