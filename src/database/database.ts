@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import * as FileSystem from 'expo-file-system';
 import * as Crypto from 'expo-crypto';
 import { signInAnonymously } from 'firebase/auth';
 import { doc, runTransaction } from 'firebase/firestore';
@@ -6908,7 +6909,90 @@ export async function closeMeeting(
 
   if (!backupCompleted || !backupCreatedAt) {
     throw new Error(
-      'A successful database backup is required before the meeting can be closed.',
+      'A successful, verified database backup file is required before the meeting can be closed.',
+    );
+  }
+
+  // The database layer independently verifies the on-device backup receipt.
+  // A UI boolean or timestamp alone is not proof that a real backup exists.
+  let backupReceipt: {
+    meetingId?: number;
+    createdAt?: string;
+    filePath?: string;
+    fileName?: string;
+    fileSize?: number;
+    verified?: boolean;
+    verifiedAtClose?: string;
+  };
+  try {
+    backupReceipt = JSON.parse(backupCreatedAt) as typeof backupReceipt;
+  } catch {
+    throw new Error(
+      'The backup receipt is invalid. Create and verify a new backup before closing the meeting.',
+    );
+  }
+
+  if (
+    !backupReceipt ||
+    backupReceipt.verified !== true ||
+    Number(backupReceipt.meetingId) !== Number(meetingId) ||
+    typeof backupReceipt.createdAt !== 'string' ||
+    !Number.isFinite(Date.parse(backupReceipt.createdAt)) ||
+    typeof backupReceipt.verifiedAtClose !== 'string' ||
+    !Number.isFinite(Date.parse(backupReceipt.verifiedAtClose)) ||
+    typeof backupReceipt.filePath !== 'string' ||
+    !backupReceipt.filePath.startsWith(FileSystem.documentDirectory || FileSystem.cacheDirectory || '\0') ||
+    typeof backupReceipt.fileName !== 'string' ||
+    !backupReceipt.fileName.startsWith('ebadsave_backup_') ||
+    !backupReceipt.fileName.endsWith('.json') ||
+    !Number.isFinite(backupReceipt.fileSize) ||
+    Number(backupReceipt.fileSize) <= 0
+  ) {
+    throw new Error(
+      'The backup receipt does not match this meeting or a valid backup file. Create a new verified backup before closing.',
+    );
+  }
+
+  const backupInfo = await FileSystem.getInfoAsync(backupReceipt.filePath);
+  if (
+    !backupInfo.exists ||
+    !('size' in backupInfo) ||
+    Number(backupInfo.size) <= 0 ||
+    Number(backupInfo.size) !== Number(backupReceipt.fileSize)
+  ) {
+    throw new Error(
+      'The verified backup file is missing or has changed. Create a new backup before closing the meeting.',
+    );
+  }
+
+  let savedBackup: {
+    version?: number;
+    created_at?: string;
+    tables?: Record<string, unknown>;
+  };
+  try {
+    const backupContents = await FileSystem.readAsStringAsync(backupReceipt.filePath, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
+    savedBackup = JSON.parse(backupContents) as typeof savedBackup;
+  } catch {
+    throw new Error(
+      'The saved backup cannot be read or is not valid JSON. Create a new backup before closing the meeting.',
+    );
+  }
+
+  const backedUpMeetings = savedBackup.tables?.group_meetings;
+  if (
+    savedBackup.version !== 1 ||
+    typeof savedBackup.created_at !== 'string' ||
+    !Number.isFinite(Date.parse(savedBackup.created_at)) ||
+    !Array.isArray(backedUpMeetings) ||
+    !backedUpMeetings.some((row: any) =>
+      Number(row?.id) === Number(meetingId) && row?.status === 'open'
+    )
+  ) {
+    throw new Error(
+      'The saved backup does not contain this meeting in its open state. Create a new verified backup before closing.',
     );
   }
 
