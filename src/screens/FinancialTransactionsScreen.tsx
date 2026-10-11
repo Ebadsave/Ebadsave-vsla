@@ -12,8 +12,10 @@ import {
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import * as FileSystem from 'expo-file-system';
 
 import { RootStackParamList } from '../../App';
+import { exportDatabaseBackup } from '../database/backup';
 
 import {
   closeMeeting,
@@ -106,6 +108,7 @@ export default function FinancialTransactionsScreen() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [endingMeeting, setEndingMeeting] = useState(false);
+  const [cashAtHand, setCashAtHand] = useState('');
 
   const [showMembers, setShowMembers] = useState(false);
   const [showFineTypes, setShowFineTypes] = useState(false);
@@ -832,9 +835,59 @@ export default function FinancialTransactionsScreen() {
             setEndingMeeting(true);
 
             try {
+              const cleanedCash = cashAtHand.replace(/,/g, '').trim();
+              if (!cleanedCash) {
+                throw new Error('Enter the actual cash counted in the cash box before ending the meeting.');
+              }
+              const cashAmount = Number(cleanedCash);
+              if (!Number.isFinite(cashAmount) || cashAmount < 0) {
+                throw new Error('Cash in box must be a valid amount of zero or greater.');
+              }
+
+              // Create and read back a real backup while this meeting is still open.
+              const backupResult = await exportDatabaseBackup();
+              if (!backupResult.success || !backupResult.filePath || !backupResult.fileName) {
+                throw new Error(backupResult.error || backupResult.message || 'A verified backup could not be created.');
+              }
+
+              const backupInfo = await FileSystem.getInfoAsync(backupResult.filePath);
+              if (!backupInfo.exists || !('size' in backupInfo) || Number(backupInfo.size) <= 0) {
+                throw new Error('The backup file could not be verified. The meeting remains open.');
+              }
+              const backupContents = await FileSystem.readAsStringAsync(backupResult.filePath, {
+                encoding: FileSystem.EncodingType.UTF8,
+              });
+              let parsedBackup: { version?: number; created_at?: string; tables?: Record<string, unknown> };
+              try {
+                parsedBackup = JSON.parse(backupContents) as typeof parsedBackup;
+              } catch {
+                throw new Error('The saved backup could not be read as valid JSON. The meeting remains open.');
+              }
+              const backedUpMeetings = parsedBackup.tables?.group_meetings;
+              if (
+                parsedBackup.version !== 1 ||
+                !Array.isArray(backedUpMeetings) ||
+                !backedUpMeetings.some((row: any) => Number(row?.id) === Number(meetingId) && row?.status === 'open')
+              ) {
+                throw new Error('The verified backup does not contain this meeting in its open state. The meeting remains open.');
+              }
+
+              const receipt = {
+                meetingId,
+                createdAt: parsedBackup.created_at || new Date().toISOString(),
+                verifiedAtClose: new Date().toISOString(),
+                filePath: backupResult.filePath,
+                fileName: backupResult.fileName,
+                fileSize: Number(backupInfo.size),
+                verified: true,
+              };
+
               await closeMeeting(
                 meetingId,
                 executive.id,
+                cashAmount,
+                true,
+                JSON.stringify(receipt),
               );
 
               Alert.alert(
@@ -1542,6 +1595,22 @@ export default function FinancialTransactionsScreen() {
           </Text>
         </TouchableOpacity>
 
+        {/* CASH RECONCILIATION: required before meeting closure */}
+        <View style={styles.cashReconciliationCard}>
+          <Text style={styles.sectionTitle}>Cash Reconciliation</Text>
+          <Text style={styles.emptyText}>
+            Count the actual cash remaining in the cash box. The database will compare it with the meeting records before allowing closure.
+          </Text>
+          <TextInput
+            style={styles.cashInput}
+            value={cashAtHand}
+            onChangeText={setCashAtHand}
+            keyboardType="decimal-pad"
+            placeholder="Actual cash in box (UGX)"
+            editable={!saving && !endingMeeting}
+          />
+        </View>
+
         {/* END MEETING */}
         <TouchableOpacity
           style={[
@@ -1656,6 +1725,28 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     borderWidth: 1,
     borderColor: '#16a34a',
+  },
+
+  cashReconciliationCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    padding: 14,
+    marginTop: 8,
+    marginBottom: 14,
+  },
+
+  cashInput: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: '#9ca3af',
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 12,
+    marginTop: 12,
+    color: '#111827',
+    fontSize: 16,
   },
 
   sectionTitle: {
