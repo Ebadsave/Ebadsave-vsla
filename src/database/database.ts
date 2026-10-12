@@ -80,10 +80,12 @@ export type VSLASetupRuleRecord = {
   non_insurance_contribution: number;
   allow_social_fund_for_loans: number;
   allow_external_fund_for_loans: number;
+  allow_fines_for_loans: number;
   meeting_frequency: string;
   cycle_duration_months: number;
   leadership_term_months: number;
   share_out_enabled: number;
+  share_out_methodology: 'savings_based' | 'share_based';
   created_at: string;
   updated_at: string;
 };
@@ -258,10 +260,12 @@ export type VSLASetupRuleUpdates = {
   nonInsuranceContribution?: number;
   allowSocialFundForLoans?: boolean | number;
   allowExternalFundForLoans?: boolean | number;
+  allowFinesForLoans?: boolean | number;
   meetingFrequency?: string;
   cycleDurationMonths?: number;
   leadershipTermMonths?: number;
   shareOutEnabled?: boolean | number;
+  shareOutMethodology?: 'savings_based' | 'share_based';
 };
 export type SyncQueueRecord = {
   id: number;
@@ -724,10 +728,11 @@ async function createDefaultVSLASetupRules(
       cycle_duration_months,
       leadership_term_months,
       share_out_enabled,
+      share_out_methodology,
       created_at,
       updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     groupId,
     1000,
     1,
@@ -746,6 +751,7 @@ async function createDefaultVSLASetupRules(
     12,
     12,
     1,
+    'savings_based',
     timestamp,
     timestamp,
   );
@@ -1031,10 +1037,12 @@ status TEXT NOT NULL DEFAULT 'active',
       non_insurance_contribution REAL NOT NULL DEFAULT 0,
       allow_social_fund_for_loans INTEGER NOT NULL DEFAULT 0,
       allow_external_fund_for_loans INTEGER NOT NULL DEFAULT 0,
+      allow_fines_for_loans INTEGER NOT NULL DEFAULT 1,
       meeting_frequency TEXT NOT NULL DEFAULT 'weekly',
       cycle_duration_months INTEGER NOT NULL DEFAULT 12,
       leadership_term_months INTEGER NOT NULL DEFAULT 12,
       share_out_enabled INTEGER NOT NULL DEFAULT 1,
+      share_out_methodology TEXT NOT NULL DEFAULT 'savings_based',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (group_id) REFERENCES groups(id)
@@ -1563,6 +1571,21 @@ status TEXT NOT NULL DEFAULT 'active',
     'vsla_setup_rules',
     'allow_external_fund_for_loans',
     'INTEGER NOT NULL DEFAULT 0',
+  );
+
+  // Default to the existing accounting treatment for previously installed groups.
+  await addColumnIfMissing(
+    db,
+    'vsla_setup_rules',
+    'allow_fines_for_loans',
+    'INTEGER NOT NULL DEFAULT 1',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'vsla_setup_rules',
+    'share_out_methodology',
+    "TEXT NOT NULL DEFAULT 'savings_based'",
   );
 
   await addColumnIfMissing(
@@ -2867,6 +2890,11 @@ export async function updateVSLASetupRules(
       ? Number(current.allow_external_fund_for_loans ?? 0)
       : data.allowExternalFundForLoans ? 1 : 0;
 
+  const allowFinesForLoans =
+    data.allowFinesForLoans === undefined
+      ? Number(current.allow_fines_for_loans ?? 1)
+      : data.allowFinesForLoans ? 1 : 0;
+
   const meetingFrequency =
     normalizeText(
       data.meetingFrequency ??
@@ -2887,6 +2915,18 @@ export async function updateVSLASetupRules(
       : data.shareOutEnabled
         ? 1
         : 0;
+
+  const shareOutMethodology =
+    data.shareOutMethodology ??
+    current.share_out_methodology ??
+    'savings_based';
+
+  if (
+    shareOutMethodology !== 'savings_based' &&
+    shareOutMethodology !== 'share_based'
+  ) {
+    throw new Error('Select a valid share-out methodology.');
+  }
 
   if (
     !Number.isFinite(shareValue) ||
@@ -3055,10 +3095,12 @@ export async function updateVSLASetupRules(
        non_loan_repayment_fine = ?,
        allow_social_fund_for_loans = ?,
        allow_external_fund_for_loans = ?,
+       allow_fines_for_loans = ?,
        meeting_frequency = ?,
        cycle_duration_months = ?,
        leadership_term_months = ?,
        share_out_enabled = ?,
+       share_out_methodology = ?,
        updated_at = ?
      WHERE group_id = ?`,
     shareValue,
@@ -3076,10 +3118,12 @@ export async function updateVSLASetupRules(
     nonLoanRepaymentFine,
     allowSocialFundForLoans,
     allowExternalFundForLoans,
+    allowFinesForLoans,
     meetingFrequency,
     cycleDurationMonths,
     leadershipTermMonths,
     shareOutEnabled,
+    shareOutMethodology,
     timestamp,
     groupId,
   );
@@ -5600,6 +5644,8 @@ export async function getMeetingTransactionSummary(
     Number(setup?.allow_social_fund_for_loans ?? 0) === 1;
   const allowExternalFundForLoans =
     Number(setup?.allow_external_fund_for_loans ?? 0) === 1;
+  const allowFinesForLoans =
+    Number(setup?.allow_fines_for_loans ?? 1) === 1;
 
   const rows = await db.getAllAsync<{
     account_type: string;
@@ -5710,7 +5756,7 @@ export async function getMeetingTransactionSummary(
   // Loan disbursements reduce the available Loan Fund.
   const loanFundCollections =
     savings +
-    fines +
+    (allowFinesForLoans ? fines : 0) +
     loanRepayment +
     (allowSocialFundForLoans ? socialFund : 0) +
     (allowExternalFundForLoans ? externalFund : 0) +
@@ -5798,11 +5844,13 @@ async function recalculateFinancialAccountsForGroup(
     Number(setup?.allow_social_fund_for_loans ?? 0) === 1;
   const allowExternalFundForLoans =
     Number(setup?.allow_external_fund_for_loans ?? 0) === 1;
+  const allowFinesForLoans =
+    Number(setup?.allow_fines_for_loans ?? 1) === 1;
 
   balances.loan_fund = Math.max(
     0,
     balances.savings +
-      balances.fines +
+      (allowFinesForLoans ? balances.fines : 0) +
       (allowSocialFundForLoans ? balances.social_fund : 0) +
       (allowExternalFundForLoans ? balances.external_fund : 0) +
       balances.loan_fund +
@@ -7186,13 +7234,18 @@ export async function getMeetingCashReconciliation(
     Number(setup?.allow_external_fund_for_loans ?? 0) === 1
       ? 0
       : summary.externalFund;
+  const finesNotAllocatedToLoans =
+    Number(setup?.allow_fines_for_loans ?? 1) === 1
+      ? 0
+      : summary.fines;
   // Cash reconciliation includes every fund physically collected, even when
-  // Social Fund or External Fund is not eligible to finance loans.
+  // fines, Social Fund, or External Fund are kept separate from the Loan Fund.
   const expectedCash = Math.max(
     0,
     Number(meeting.loan_fund_at_start || 0) +
       Number(meeting.insurance_fund_at_start || 0) +
       summary.loanFundCollections +
+      finesNotAllocatedToLoans +
       socialFundNotAllocatedToLoans +
       externalFundNotAllocatedToLoans -
       summary.loanDisbursement +
