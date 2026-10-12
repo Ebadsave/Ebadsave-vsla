@@ -323,6 +323,11 @@ export type MeetingTransactionSummary = {
   fines: number;
   loanRepayment: number;
   socialFund: number;
+  externalFund: number;
+  directLoanFundIncome: number;
+  loanDisbursement: number;
+  loanFundCollections: number;
+  totalCollected: number;
   miscellaneousExpense: number;
   loanFund: number;
   insuranceFund: number;
@@ -348,6 +353,21 @@ export type FinancialCollectionItem = {
   amount: number;
   reason: string;
   transaction_id: number | null;
+};
+
+export type FinancialCollectionCorrectionRecord = {
+  id: number;
+  group_id: number;
+  meeting_id: number;
+  collection_id: number;
+  collection_item_id: number;
+  original_transaction_id: number;
+  replacement_transaction_id: number | null;
+  original_amount: number;
+  corrected_amount: number;
+  editor_member_id: number;
+  reason: string;
+  corrected_at: string;
 };
 
 export type MemberPassbookRecord = {
@@ -1155,6 +1175,28 @@ status TEXT NOT NULL DEFAULT 'active',
       FOREIGN KEY (transaction_id) REFERENCES financial_transactions(id)
     );
 
+    CREATE TABLE IF NOT EXISTS financial_collection_corrections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      meeting_id INTEGER NOT NULL,
+      collection_id INTEGER NOT NULL,
+      collection_item_id INTEGER NOT NULL,
+      original_transaction_id INTEGER NOT NULL,
+      replacement_transaction_id INTEGER,
+      original_amount REAL NOT NULL,
+      corrected_amount REAL NOT NULL,
+      editor_member_id INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      corrected_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
+      FOREIGN KEY (collection_id) REFERENCES financial_collections(id),
+      FOREIGN KEY (collection_item_id) REFERENCES financial_collection_items(id),
+      FOREIGN KEY (original_transaction_id) REFERENCES financial_transactions(id),
+      FOREIGN KEY (replacement_transaction_id) REFERENCES financial_transactions(id),
+      FOREIGN KEY (editor_member_id) REFERENCES members(id)
+    );
+
     CREATE TABLE IF NOT EXISTS financial_transactions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       group_id INTEGER NOT NULL,
@@ -1546,6 +1588,7 @@ status TEXT NOT NULL DEFAULT 'active',
   await addColumnIfMissing(db, 'meeting_closures', 'cash_expected', 'REAL');
   await addColumnIfMissing(db, 'meeting_closures', 'cash_balanced', 'INTEGER NOT NULL DEFAULT 0');
   await addColumnIfMissing(db, 'meeting_closures', 'reconciliation_note', "TEXT NOT NULL DEFAULT ''");
+  await addColumnIfMissing(db, 'financial_collection_items', 'is_corrected', 'INTEGER NOT NULL DEFAULT 0');
 
   /*
    * Existing meetings from an older database did not have
@@ -4418,6 +4461,154 @@ export async function getFinancialCollectionItems(
   );
 }
 
+/**
+ * Correct one collection item from a previously closed meeting.
+ * The original transaction is reversed rather than deleted, a replacement
+ * transaction is recorded when the corrected amount is greater than zero,
+ * and every correction is retained in an append-only audit table.
+ * Current/open meetings are deliberately not editable through this function.
+ */
+export async function correctHistoricalFinancialCollectionItem(
+  collectionItemId: number,
+  correctedAmount: number,
+  editorMemberId: number,
+  reason: string,
+): Promise<FinancialCollectionCorrectionRecord> {
+  const db = await getDatabase();
+  const correctionReason = normalizeText(reason);
+
+  if (!Number.isInteger(collectionItemId) || collectionItemId <= 0) {
+    throw new Error('A valid collection item is required.');
+  }
+  if (!Number.isFinite(correctedAmount) || correctedAmount < 0) {
+    throw new Error('The corrected amount must be zero or greater.');
+  }
+  if (!Number.isInteger(editorMemberId) || editorMemberId <= 0) {
+    throw new Error('The editor must be identified for the audit history.');
+  }
+  if (!correctionReason) {
+    throw new Error('A reason is required for every historical correction.');
+  }
+
+  const item = await db.getFirstAsync<FinancialCollectionItem & {
+    group_id: number;
+    meeting_id: number | null;
+    member_id: number | null;
+    collection_status: string;
+    meeting_status: string | null;
+    transaction_reversed: number | null;
+  }>(
+    `SELECT fci.*, fc.group_id, fc.meeting_id, fc.member_id,
+            fc.status AS collection_status, gm.status AS meeting_status,
+            ft.reversed AS transaction_reversed
+     FROM financial_collection_items fci
+     JOIN financial_collections fc ON fc.id = fci.collection_id
+     LEFT JOIN group_meetings gm ON gm.id = fc.meeting_id
+     LEFT JOIN financial_transactions ft ON ft.id = fci.transaction_id
+     WHERE fci.id = ? LIMIT 1`,
+    collectionItemId,
+  );
+  if (!item) throw new Error('The collection item could not be found.');
+  if (item.meeting_id === null || item.meeting_status !== 'closed') {
+    throw new Error('Only collections from previously recorded, closed meetings can be corrected.');
+  }
+  if (!item.transaction_id || item.transaction_reversed === 1) {
+    throw new Error('The collection has no active original transaction to correct.');
+  }
+  const editor = await db.getFirstAsync<{ id: number; group_id: number }>(
+    `SELECT id, group_id FROM members WHERE id = ? LIMIT 1`,
+    editorMemberId,
+  );
+  if (!editor || editor.group_id !== item.group_id) {
+    throw new Error('The editor must be a member of the same group.');
+  }
+
+  const originalTransactionId = item.transaction_id;
+  const originalAmount = Number(item.amount);
+  const timestamp = now();
+  let replacementTransactionId: number | null = null;
+
+  await db.withTransactionAsync(async () => {
+    // Reverse the prior entry and retain it in the ledger; never delete it.
+    await reverseFinancialTransaction(
+      originalTransactionId,
+      `Historical collection correction: ${correctionReason}`,
+      editorMemberId,
+    );
+
+    if (correctedAmount > 0) {
+      replacementTransactionId = await recordFinancialIncome(
+        item.group_id,
+        item.account_type,
+        correctedAmount,
+        `Corrected historical collection: ${correctionReason}`,
+        item.member_id,
+        item.meeting_id,
+        `${item.account_type}_collection_correction`,
+        item.collection_id,
+      );
+    }
+
+    await db.runAsync(
+      `UPDATE financial_collection_items
+       SET amount = ?, reason = ?, transaction_id = ?, is_corrected = 1
+       WHERE id = ?`,
+      correctedAmount,
+      `Corrected: ${correctionReason}`,
+      replacementTransactionId,
+      collectionItemId,
+    );
+    await db.runAsync(
+      `UPDATE financial_collections
+       SET total_amount = MAX(0, total_amount - ? + ?)
+       WHERE id = ?`,
+      originalAmount,
+      correctedAmount,
+      item.collection_id,
+    );
+    await db.runAsync(
+      `INSERT INTO financial_collection_corrections (
+        group_id, meeting_id, collection_id, collection_item_id,
+        original_transaction_id, replacement_transaction_id,
+        original_amount, corrected_amount, editor_member_id, reason, corrected_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      item.group_id,
+      item.meeting_id,
+      item.collection_id,
+      collectionItemId,
+      originalTransactionId,
+      replacementTransactionId,
+      originalAmount,
+      correctedAmount,
+      editorMemberId,
+      correctionReason,
+      timestamp,
+    );
+  });
+
+  const saved = await db.getFirstAsync<FinancialCollectionCorrectionRecord>(
+    `SELECT * FROM financial_collection_corrections
+     WHERE collection_item_id = ? AND corrected_at = ?
+     ORDER BY id DESC LIMIT 1`,
+    collectionItemId,
+    timestamp,
+  );
+  if (!saved) throw new Error('Correction was not saved to the audit history.');
+  return saved;
+}
+
+export async function getFinancialCollectionCorrectionHistory(
+  collectionItemId: number,
+): Promise<FinancialCollectionCorrectionRecord[]> {
+  const db = await getDatabase();
+  return db.getAllAsync<FinancialCollectionCorrectionRecord>(
+    `SELECT * FROM financial_collection_corrections
+     WHERE collection_item_id = ?
+     ORDER BY corrected_at ASC, id ASC`,
+    collectionItemId,
+  );
+}
+
 /* ============================================================
    BASIC FINANCIAL OPERATIONS
    ============================================================ */
@@ -5354,17 +5545,21 @@ export async function getMeetingTransactionSummary(
   const rows = await db.getAllAsync<{
     account_type: string;
     transaction_type: string;
+    original_transaction_type: string | null;
     amount: number;
     member_id: number | null;
   }>(
     `SELECT
-       account_type,
-       transaction_type,
-       amount,
-       member_id
-     FROM financial_transactions
-     WHERE meeting_id = ?
-       AND reversed = 0`,
+       ft.account_type,
+       ft.transaction_type,
+       original.transaction_type AS original_transaction_type,
+       ft.amount,
+       ft.member_id
+     FROM financial_transactions ft
+     LEFT JOIN financial_transactions original
+       ON ft.transaction_type = 'reversal'
+      AND original.id = ft.reversed_transaction_id
+     WHERE ft.meeting_id = ? AND ft.reversed = 0`,
     meetingId,
   );
 
@@ -5372,61 +5567,104 @@ export async function getMeetingTransactionSummary(
   let fines = 0;
   let loanRepayment = 0;
   let socialFund = 0;
+  let externalFund = 0;
+  let directLoanFundIncome = 0;
+  let loanDisbursement = 0;
   let miscellaneousExpense = 0;
   let insuranceFund = 0;
+  let totalCollected = 0;
 
   for (const row of rows) {
     const amount = Number(row.amount) || 0;
+    const effectiveType = row.transaction_type === 'reversal'
+      ? (row.original_transaction_type || 'reversal')
+      : row.transaction_type;
 
-    if (row.account_type === 'savings') {
+    if (row.account_type === 'savings' && effectiveType !== 'reversal' && effectiveType !== 'loan_issued') {
       savings += amount;
+      totalCollected += amount;
     }
 
+    // A fine assessment is not cash collected. Fine-payment reversals
+    // are mapped to their original transaction type and subtract normally.
     if (
       row.account_type === 'fines' &&
       row.member_id !== null &&
-      row.transaction_type === 'fine_payment'
+      effectiveType === 'fine_payment'
     ) {
       fines += amount;
+      totalCollected += amount;
     }
 
     if (
       row.account_type === 'loan_repayment' &&
-      row.transaction_type === 'loan_repayment'
+      effectiveType === 'loan_repayment'
     ) {
       loanRepayment += amount;
+      totalCollected += amount;
     }
 
-    if (row.account_type === 'social_fund') {
+    if (row.account_type === 'social_fund' && effectiveType !== 'reversal') {
       socialFund += amount;
+      totalCollected += amount;
+    }
+
+    if (row.account_type === 'external_fund' && effectiveType !== 'reversal') {
+      externalFund += amount;
+      totalCollected += amount;
     }
 
     if (
-      row.account_type === 'expenditure_fund' &&
-      row.transaction_type === 'expenditure'
+      row.account_type === 'loan_fund' &&
+      effectiveType === 'loan_issued'
     ) {
-      miscellaneousExpense += Math.abs(amount);
+      // Loan disbursements are negative. A positive reversal reduces the
+      // net disbursement amount rather than being counted as a collection.
+      loanDisbursement -= amount;
+    } else if (
+      row.account_type === 'loan_fund' &&
+      effectiveType !== 'reversal' &&
+      effectiveType !== 'loan_issued'
+    ) {
+      directLoanFundIncome += amount;
+      totalCollected += amount;
     }
 
     if (row.account_type === 'insurance_fund') {
       insuranceFund += amount;
+      if (effectiveType === 'insurance_contribution') {
+        totalCollected += amount;
+      }
+    }
+
+    if (
+      row.account_type === 'expenditure_fund' &&
+      effectiveType === 'expenditure'
+    ) {
+      // Expenses are negative; a reversal offsets the original expense.
+      miscellaneousExpense -= amount;
     }
   }
+
+  // Loan Fund collections exclude Insurance, which is a separate fund.
+  // The fund is increased by savings, paid fines and other Loan Fund
+  // collections, then reduced by loan disbursements.
+  const loanFundCollections =
+    savings + fines + loanRepayment + socialFund + externalFund + directLoanFundIncome;
+  const loanFund = Math.max(0, loanFundCollections - loanDisbursement);
 
   return {
     savings,
     fines,
     loanRepayment,
     socialFund,
+    externalFund,
+    directLoanFundIncome,
+    loanDisbursement,
+    loanFundCollections,
+    totalCollected,
     miscellaneousExpense,
-    loanFund: Math.max(
-      0,
-      savings +
-        fines +
-        loanRepayment +
-        socialFund -
-        miscellaneousExpense,
-    ),
+    loanFund,
     insuranceFund,
     transactionCount: rows.length,
   };
@@ -5478,9 +5716,10 @@ async function recalculateFinancialAccountsForGroup(
     if (row.account_type === 'loan_fund' && row.transaction_type !== 'loan_issued') balances.loan_fund += value;
   }
 
-  // The Group Loan Fund is the cash pool available for lending:
-  // savings + fines + social fund + external/direct loan-fund income
-  // + repayments - loans issued - expenditures.
+  // Loan Fund follows the agreed formula:
+  // savings + paid fines + all other Loan Fund collections - loan disbursements.
+  // Insurance is separate. Expenditure Fund is also tracked separately and
+  // is not subtracted from the Loan Fund formula.
   const issued = await db.getFirstAsync<{ total: number }>(
     `SELECT COALESCE(SUM(ABS(amount)), 0) AS total
      FROM financial_transactions
@@ -5498,8 +5737,7 @@ async function recalculateFinancialAccountsForGroup(
       balances.external_fund +
       balances.loan_fund +
       balances.loan_repayment -
-      issuedAmount +
-      balances.expenditure_fund,
+      issuedAmount,
   );
 
   const timestamp = now();
@@ -6869,11 +7107,14 @@ export async function getMeetingCashReconciliation(
   if (!meeting) throw new Error('Meeting not found.');
 
   const summary = await getMeetingTransactionSummary(meetingId);
+  // Actual expected cash includes the starting Loan Fund, all Loan Fund
+  // collections, insurance net movement, less loan disbursements and expenses.
   const expectedCash = Math.max(
     0,
     Number(meeting.loan_fund_at_start || 0) +
-      summary.savings + summary.fines + summary.loanRepayment +
-      summary.socialFund + summary.insuranceFund - summary.miscellaneousExpense,
+      Number(meeting.insurance_fund_at_start || 0) +
+      summary.loanFundCollections - summary.loanDisbursement +
+      summary.insuranceFund - summary.miscellaneousExpense,
   );
   const difference = Number((cashAtHand - expectedCash).toFixed(2));
   return { expectedCash, cashAtHand, difference, balanced: Math.abs(difference) < 0.01 };
@@ -7029,12 +7270,10 @@ export async function closeMeeting(
   }
 
   /*
-   * Meeting closing uses the previous concluded Loan Fund as the
-   * starting balance, then adds only this meeting's transactions.
-   *
-   * Today's change:
-   * Savings + Fines + Loan Repayment + Social Fund
-   * - Miscellaneous Expense
+   * Loan Fund closing calculation:
+   * previous Loan Fund balance + savings + paid fines + all other
+   * Loan Fund collections - loan disbursements.
+   * Insurance remains a separate fund and is not added to Loan Fund.
    */
   await applyAutomaticMeetingActivityFines(
     meeting.group_id,
@@ -7072,11 +7311,8 @@ export async function closeMeeting(
   const closingLoanFund = Math.max(
     0,
     previousLoanFund +
-      todaySummary.savings +
-      todaySummary.fines +
-      todaySummary.loanRepayment +
-      todaySummary.socialFund -
-      todaySummary.miscellaneousExpense,
+      todaySummary.loanFundCollections -
+      todaySummary.loanDisbursement,
   );
 
   /*
