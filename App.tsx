@@ -67,7 +67,9 @@ export type RootStackParamList = {
 
   LoanDisbursement: {
     groupId: number;
-    executiveMemberId: number;
+    meetingId: number;
+    executiveMemberId?: number;
+    currency?: string;
   };
 
   Fines: {
