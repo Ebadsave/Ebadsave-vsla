@@ -18,6 +18,8 @@ import {
   getGroupById,
   getOpenMeeting,
   getLastConcludedMeeting,
+  getMeetingSummary,
+  getMeetingTransactionSummary,
   startNewMeeting,
   closeMeeting,
   approveMeetingSummary,
@@ -35,6 +37,11 @@ type PreviousMeeting = {
   status: string;
   loan_fund?: number;
   insurance_fund?: number;
+  total_collected?: number;
+  meeting_savings?: number;
+  meeting_fines?: number;
+  other_loan_fund_collections?: number;
+  loan_disbursement?: number;
   summary_approved?: number;
   previous_meeting_reviewed?: number;
   previous_meeting_editable?: number;
@@ -45,6 +52,7 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
 
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [openingRollCall, setOpeningRollCall] = useState(false);
   const [approving, setApproving] = useState(false);
   const [closing, setClosing] = useState(false);
   const [backupReceipt, setBackupReceipt] = useState<{
@@ -78,7 +86,27 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
       setBackupReceipt((current) => current && current.meetingId === Number(currentOpenMeeting?.id) ? current : null);
 
       const previous = await getLastConcludedMeeting(groupId);
-      setPreviousMeeting(previous as PreviousMeeting | null);
+      if (previous) {
+        const [closedSummary, transactionSummary] = await Promise.all([
+          getMeetingSummary(previous.id),
+          getMeetingTransactionSummary(previous.id),
+        ]);
+        setPreviousMeeting({
+          ...(previous as PreviousMeeting),
+          loan_fund: closedSummary?.loan_fund ?? 0,
+          insurance_fund: closedSummary?.insurance_fund ?? transactionSummary.insuranceFund,
+          total_collected: transactionSummary.totalCollected,
+          meeting_savings: transactionSummary.savings,
+          meeting_fines: transactionSummary.fines,
+          other_loan_fund_collections: Math.max(
+            0,
+            transactionSummary.loanFundCollections - transactionSummary.savings - transactionSummary.fines,
+          ),
+          loan_disbursement: transactionSummary.loanDisbursement,
+        });
+      } else {
+        setPreviousMeeting(null);
+      }
     } catch (error) {
       Alert.alert(
         'Error',
@@ -95,56 +123,86 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
     loadMeetingState();
   }, [loadMeetingState]);
 
-  const handleStartMeeting = async () => {
-    if (openMeeting) {
-      Alert.alert(
-        'Meeting Already Open',
-        'A meeting is already in progress for this group.',
-      );
-      return;
+  const openRollCallForMeeting = async (meeting: any) => {
+    if (!meeting?.id) {
+      throw new Error('The open meeting could not be identified. Refresh the meeting screen and try again.');
     }
+    setOpenMeeting(meeting);
+    setBackupReceipt((current) => current && current.meetingId === Number(meeting.id) ? current : null);
+    navigation.navigate('MeetingRollCall', {
+      groupId,
+      meetingId: Number(meeting.id),
+      executiveMemberId,
+    });
+  };
 
-    // A first meeting has no previous meeting and can start immediately.
-    if (
-      previousMeeting &&
-      previousMeeting.summary_approved !== 1
-    ) {
-      Alert.alert(
-        'Previous Meeting Not Approved',
-        'Approve the previous meeting summary before starting a new meeting.',
-      );
-      return;
+  const handleOpenExistingMeeting = async () => {
+    try {
+      setOpeningRollCall(true);
+      // Re-read SQLite on every tap. The screen can have stale state after
+      // returning from Roll Call or if the meeting was created previously.
+      const current = await getOpenMeeting(groupId);
+      if (!current) {
+        await loadMeetingState();
+        Alert.alert('No Open Meeting', 'No open meeting was found. Use Start First Meeting to create it.');
+        return;
+      }
+      await openRollCallForMeeting(current);
+    } catch (error) {
+      Alert.alert('Unable to Open Meeting', error instanceof Error ? error.message : 'Roll Call could not be opened.');
+    } finally {
+      setOpeningRollCall(false);
     }
+  };
+
+  const handleStartMeeting = async () => {
+    if (starting || openingRollCall) return;
 
     try {
       setStarting(true);
 
+      // Avoid the apparent "stuck" state when a previous tap already created
+      // Meeting #1 but the screen state has not refreshed yet.
+      const alreadyOpen = await getOpenMeeting(groupId);
+      if (alreadyOpen) {
+        await openRollCallForMeeting(alreadyOpen);
+        return;
+      }
+
+      const latestPrevious = await getLastConcludedMeeting(groupId);
+      if (latestPrevious && latestPrevious.summary_approved !== 1) {
+        await loadMeetingState();
+        Alert.alert(
+          'Previous Meeting Not Approved',
+          'Approve the previous meeting summary before starting a new meeting.',
+        );
+        return;
+      }
+
       const meetingId = await startNewMeeting(groupId, executiveMemberId);
 
-      // Confirm the database actually created the open meeting before moving
-      // to roll call. This avoids leaving the user on a screen that looks stuck.
-      const createdMeeting = await getOpenMeeting(groupId);
+      // Confirm using the database, not a local boolean. If the immediate
+      // read races with the insert, retry once after refreshing the state.
+      let createdMeeting = await getOpenMeeting(groupId);
       if (!createdMeeting || Number(createdMeeting.id) !== Number(meetingId)) {
-        throw new Error('The meeting was not found after creation. Please refresh and try again.');
+        await loadMeetingState();
+        createdMeeting = await getOpenMeeting(groupId);
+      }
+      if (!createdMeeting || Number(createdMeeting.id) !== Number(meetingId)) {
+        throw new Error('Meeting creation could not be confirmed in the database. Refresh and try again; do not create another meeting until checking the current meeting list.');
       }
 
       setOpenMeeting(createdMeeting);
       setBackupReceipt(null);
       setCashInBox('');
       setCashCheck(null);
-
-      navigation.navigate('MeetingRollCall', {
-        groupId,
-        meetingId: Number(createdMeeting.id),
-        executiveMemberId,
-      });
+      await openRollCallForMeeting(createdMeeting);
     } catch (error) {
       Alert.alert(
         'Unable to Start Meeting',
-        error instanceof Error
-          ? error.message
-          : 'The meeting could not be started.',
+        error instanceof Error ? error.message : 'The meeting could not be started.',
       );
+      await loadMeetingState();
     } finally {
       setStarting(false);
     }
@@ -406,13 +464,14 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
 
             <TouchableOpacity
               style={styles.startButton}
-              onPress={() => navigation.navigate('MeetingRollCall', {
-                groupId,
-                meetingId: Number(openMeeting.id),
-                executiveMemberId,
-              })}
+              onPress={() => void handleOpenExistingMeeting()}
+              disabled={openingRollCall || starting}
             >
-              <Text style={styles.startButtonText}>Open Meeting / Continue Roll Call</Text>
+              {openingRollCall ? (
+                <ActivityIndicator color="#ffffff" />
+              ) : (
+                <Text style={styles.startButtonText}>Open Meeting / Continue Roll Call</Text>
+              )}
             </TouchableOpacity>
 
             <View style={styles.closeWorkflowCard}>
@@ -500,7 +559,42 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
                   </Text>
 
                   <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>Loan Fund</Text>
+                    <Text style={styles.summaryLabel}>Total Amount Collected</Text>
+                    <Text style={styles.summaryValue}>
+                      {formatAmount(previousMeeting.total_collected)}
+                    </Text>
+                  </View>
+
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Savings Collected</Text>
+                    <Text style={styles.summaryValue}>
+                      {formatAmount(previousMeeting.meeting_savings)}
+                    </Text>
+                  </View>
+
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Fines Collected</Text>
+                    <Text style={styles.summaryValue}>
+                      {formatAmount(previousMeeting.meeting_fines)}
+                    </Text>
+                  </View>
+
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Other Loan Fund Collections</Text>
+                    <Text style={styles.summaryValue}>
+                      {formatAmount(previousMeeting.other_loan_fund_collections)}
+                    </Text>
+                  </View>
+
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Loan Disbursements</Text>
+                    <Text style={styles.summaryValue}>
+                      {formatAmount(previousMeeting.loan_disbursement)}
+                    </Text>
+                  </View>
+
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Closing Loan Fund</Text>
                     <Text style={styles.summaryValue}>
                       {formatAmount(previousMeeting.loan_fund)}
                     </Text>
