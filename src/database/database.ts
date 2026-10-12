@@ -78,6 +78,8 @@ export type VSLASetupRuleRecord = {
   non_saving_fine: number;
   non_loan_repayment_fine: number;
   non_insurance_contribution: number;
+  allow_social_fund_for_loans: number;
+  allow_external_fund_for_loans: number;
   meeting_frequency: string;
   cycle_duration_months: number;
   leadership_term_months: number;
@@ -254,6 +256,8 @@ export type VSLASetupRuleUpdates = {
   nonSavingFine?: number;
   nonLoanRepaymentFine?: number;
   nonInsuranceContribution?: number;
+  allowSocialFundForLoans?: boolean | number;
+  allowExternalFundForLoans?: boolean | number;
   meetingFrequency?: string;
   cycleDurationMonths?: number;
   leadershipTermMonths?: number;
@@ -1025,6 +1029,8 @@ status TEXT NOT NULL DEFAULT 'active',
       non_saving_fine REAL NOT NULL DEFAULT 0,
       non_loan_repayment_fine REAL NOT NULL DEFAULT 0,
       non_insurance_contribution REAL NOT NULL DEFAULT 0,
+      allow_social_fund_for_loans INTEGER NOT NULL DEFAULT 0,
+      allow_external_fund_for_loans INTEGER NOT NULL DEFAULT 0,
       meeting_frequency TEXT NOT NULL DEFAULT 'weekly',
       cycle_duration_months INTEGER NOT NULL DEFAULT 12,
       leadership_term_months INTEGER NOT NULL DEFAULT 12,
@@ -1543,6 +1549,20 @@ status TEXT NOT NULL DEFAULT 'active',
     'vsla_setup_rules',
     'non_insurance_contribution',
     'REAL NOT NULL DEFAULT 0',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'vsla_setup_rules',
+    'allow_social_fund_for_loans',
+    'INTEGER NOT NULL DEFAULT 0',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'vsla_setup_rules',
+    'allow_external_fund_for_loans',
+    'INTEGER NOT NULL DEFAULT 0',
   );
 
   await addColumnIfMissing(
@@ -2837,6 +2857,16 @@ export async function updateVSLASetupRules(
       ? Number(data.nonInsuranceContribution)
       : Number(current.non_insurance_contribution ?? 0);
 
+  const allowSocialFundForLoans =
+    data.allowSocialFundForLoans === undefined
+      ? Number(current.allow_social_fund_for_loans ?? 0)
+      : data.allowSocialFundForLoans ? 1 : 0;
+
+  const allowExternalFundForLoans =
+    data.allowExternalFundForLoans === undefined
+      ? Number(current.allow_external_fund_for_loans ?? 0)
+      : data.allowExternalFundForLoans ? 1 : 0;
+
   const meetingFrequency =
     normalizeText(
       data.meetingFrequency ??
@@ -3023,6 +3053,8 @@ export async function updateVSLASetupRules(
        non_insurance_contribution = ?,
        non_saving_fine = ?,
        non_loan_repayment_fine = ?,
+       allow_social_fund_for_loans = ?,
+       allow_external_fund_for_loans = ?,
        meeting_frequency = ?,
        cycle_duration_months = ?,
        leadership_term_months = ?,
@@ -3042,6 +3074,8 @@ export async function updateVSLASetupRules(
     nonInsuranceContribution,
     nonSavingFine,
     nonLoanRepaymentFine,
+    allowSocialFundForLoans,
+    allowExternalFundForLoans,
     meetingFrequency,
     cycleDurationMonths,
     leadershipTermMonths,
@@ -4038,6 +4072,7 @@ async function addPassbookEntry(
   entryType: string,
   amount: number,
   description: string,
+  createdAt: string = now(),
 ): Promise<void> {
   const previous =
     await db.getFirstAsync<{
@@ -4076,7 +4111,7 @@ async function addPassbookEntry(
     amount,
     balanceAfter,
     description,
-    now(),
+    createdAt,
   );
 }
 
@@ -5114,6 +5149,18 @@ export async function recordFine(
     timestamp,
   );
 
+  await addPassbookEntry(
+    db,
+    groupId,
+    memberId,
+    meetingId,
+    result.lastInsertRowId,
+    'fine_assessed',
+    amount,
+    `${normalizeText(reason)} (fine assessed)`,
+    timestamp,
+  );
+
   await recordGroupActivity(groupId);
 
   return result.lastInsertRowId;
@@ -5542,6 +5589,18 @@ export async function getMeetingTransactionSummary(
 ): Promise<MeetingTransactionSummary> {
   const db = await getDatabase();
 
+  const meeting = await db.getFirstAsync<{ group_id: number }>(
+    `SELECT group_id FROM group_meetings WHERE id = ? LIMIT 1`,
+    meetingId,
+  );
+  const setup = meeting
+    ? await getVSLASetupRules(meeting.group_id)
+    : null;
+  const allowSocialFundForLoans =
+    Number(setup?.allow_social_fund_for_loans ?? 0) === 1;
+  const allowExternalFundForLoans =
+    Number(setup?.allow_external_fund_for_loans ?? 0) === 1;
+
   const rows = await db.getAllAsync<{
     account_type: string;
     transaction_type: string;
@@ -5646,11 +5705,16 @@ export async function getMeetingTransactionSummary(
     }
   }
 
-  // Loan Fund collections exclude Insurance, which is a separate fund.
-  // The fund is increased by savings, paid fines and other Loan Fund
-  // collections, then reduced by loan disbursements.
+  // Insurance remains separate. Social Fund and External Fund collections
+  // enter the Loan Fund only when the group's Setup Rules explicitly allow it.
+  // Loan disbursements reduce the available Loan Fund.
   const loanFundCollections =
-    savings + fines + loanRepayment + socialFund + externalFund + directLoanFundIncome;
+    savings +
+    fines +
+    loanRepayment +
+    (allowSocialFundForLoans ? socialFund : 0) +
+    (allowExternalFundForLoans ? externalFund : 0) +
+    directLoanFundIncome;
   const loanFund = Math.max(0, loanFundCollections - loanDisbursement);
 
   return {
@@ -5729,12 +5793,18 @@ async function recalculateFinancialAccountsForGroup(
   );
   const issuedAmount = Number(issued?.total) || 0;
 
+  const setup = await getVSLASetupRules(groupId);
+  const allowSocialFundForLoans =
+    Number(setup?.allow_social_fund_for_loans ?? 0) === 1;
+  const allowExternalFundForLoans =
+    Number(setup?.allow_external_fund_for_loans ?? 0) === 1;
+
   balances.loan_fund = Math.max(
     0,
     balances.savings +
       balances.fines +
-      balances.social_fund +
-      balances.external_fund +
+      (allowSocialFundForLoans ? balances.social_fund : 0) +
+      (allowExternalFundForLoans ? balances.external_fund : 0) +
       balances.loan_fund +
       balances.loan_repayment -
       issuedAmount,
@@ -7107,14 +7177,27 @@ export async function getMeetingCashReconciliation(
   if (!meeting) throw new Error('Meeting not found.');
 
   const summary = await getMeetingTransactionSummary(meetingId);
-  // Actual expected cash includes the starting Loan Fund, all Loan Fund
-  // collections, insurance net movement, less loan disbursements and expenses.
+  const setup = await getVSLASetupRules(meeting.group_id);
+  const socialFundNotAllocatedToLoans =
+    Number(setup?.allow_social_fund_for_loans ?? 0) === 1
+      ? 0
+      : summary.socialFund;
+  const externalFundNotAllocatedToLoans =
+    Number(setup?.allow_external_fund_for_loans ?? 0) === 1
+      ? 0
+      : summary.externalFund;
+  // Cash reconciliation includes every fund physically collected, even when
+  // Social Fund or External Fund is not eligible to finance loans.
   const expectedCash = Math.max(
     0,
     Number(meeting.loan_fund_at_start || 0) +
       Number(meeting.insurance_fund_at_start || 0) +
-      summary.loanFundCollections - summary.loanDisbursement +
-      summary.insuranceFund - summary.miscellaneousExpense,
+      summary.loanFundCollections +
+      socialFundNotAllocatedToLoans +
+      externalFundNotAllocatedToLoans -
+      summary.loanDisbursement +
+      summary.insuranceFund -
+      summary.miscellaneousExpense,
   );
   const difference = Number((cashAtHand - expectedCash).toFixed(2));
   return { expectedCash, cashAtHand, difference, balanced: Math.abs(difference) < 0.01 };
