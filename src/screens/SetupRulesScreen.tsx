@@ -41,13 +41,16 @@ nonLoanRepaymentFine: 0,
 nonInsuranceContribution: 0,
 allowSocialFundForLoans: false,
 allowExternalFundForLoans: false,
+allowFinesForLoans: true,
 meetingFrequency: 'weekly',
 cycleDurationMonths: 12,
 leadershipTermMonths: 12,
 shareOutEnabled: true,
+shareOutMethodology: 'savings_based',
 };
 
 export default function SetupRulesScreen({
+navigation,
 route,
 }: Props) {
 const { groupId } = route.params;
@@ -97,6 +100,7 @@ const current = await getVSLASetupRules(groupId);
     nonInsuranceContribution: current.non_insurance_contribution,
     allowSocialFundForLoans: Boolean(current.allow_social_fund_for_loans),
     allowExternalFundForLoans: Boolean(current.allow_external_fund_for_loans),
+    allowFinesForLoans: Number(current.allow_fines_for_loans ?? 1) === 1,
     meetingFrequency:  
       current.meeting_frequency,  
     cycleDurationMonths:  
@@ -105,6 +109,7 @@ const current = await getVSLASetupRules(groupId);
       current.leadership_term_months,  
     shareOutEnabled:  
       Boolean(current.share_out_enabled),  
+    shareOutMethodology: current.share_out_methodology === 'share_based' ? 'share_based' : 'savings_based',
   });  
 } catch (error) {  
   Alert.alert(  
@@ -129,7 +134,7 @@ setRules((current) => ({
 }));
 }
 
-async function saveRules() {
+async function saveRules(continueToNext = false) {
 if (
 Number(rules.shareValue) <= 0 ||
 Number(rules.minimumSharesPerMeeting) <= 0 ||
@@ -184,20 +189,26 @@ try {
     nonInsuranceContribution: Number(rules.nonInsuranceContribution),
     allowSocialFundForLoans: Boolean(rules.allowSocialFundForLoans),
     allowExternalFundForLoans: Boolean(rules.allowExternalFundForLoans),
+    allowFinesForLoans: Boolean(rules.allowFinesForLoans),
     cycleDurationMonths:  
       Number(rules.cycleDurationMonths),  
     leadershipTermMonths:  
       Number(rules.leadershipTermMonths),  
     shareOutEnabled:  
       Boolean(rules.shareOutEnabled),  
+    shareOutMethodology: rules.shareOutMethodology === 'share_based' ? 'share_based' : 'savings_based',
   });  
 
   await loadRules();  
 
-  Alert.alert(  
-    'Saved',  
-    'Setup rules updated successfully.',  
-  );  
+  if (continueToNext) {
+    navigation.navigate('Home');
+  } else {
+    Alert.alert(  
+      'Saved',  
+      'Setup rules updated successfully.',  
+    );
+  }  
 } catch (error) {  
   Alert.alert(  
     'Error',  
@@ -460,6 +471,35 @@ Setup Rules
       />
     </View>
 
+    <Text style={styles.label}>Fine Collection Allocation (Members' Agreement)</Text>
+    <Text style={styles.description}>
+      Record the decision agreed by group members. This applies to all fine types: absence, lateness, non-saving, non-loan repayment, and non-insurance contribution.
+    </Text>
+    <View style={styles.methodOptions}>
+      <TouchableOpacity
+        style={[styles.methodOption, Boolean(rules.allowFinesForLoans) && styles.methodOptionActive]}
+        onPress={() => updateRule('allowFinesForLoans', true)}
+      >
+        <Text style={[styles.methodOptionTitle, Boolean(rules.allowFinesForLoans) && styles.methodOptionTitleActive]}>
+          Add collected fines to Loan Fund
+        </Text>
+        <Text style={[styles.methodOptionDescription, Boolean(rules.allowFinesForLoans) && styles.methodOptionTitleActive]}>
+          Paid fines increase the money available for lending.
+        </Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.methodOption, !Boolean(rules.allowFinesForLoans) && styles.methodOptionActive]}
+        onPress={() => updateRule('allowFinesForLoans', false)}
+      >
+        <Text style={[styles.methodOptionTitle, !Boolean(rules.allowFinesForLoans) && styles.methodOptionTitleActive]}>
+          Keep fines separate
+        </Text>
+        <Text style={[styles.methodOptionDescription, !Boolean(rules.allowFinesForLoans) && styles.methodOptionTitleActive]}>
+          Paid fines remain in the separate Fines Fund and do not finance loans.
+        </Text>
+      </TouchableOpacity>
+    </View>
+
     <Text style={styles.label}>  
       Absence Fine  
     </Text>  
@@ -614,6 +654,27 @@ Setup Rules
       placeholder="12"  
     />  
 
+    <Text style={styles.label}>Share-Out Methodology</Text>
+    <Text style={styles.description}>Choose how the member's savings portion is estimated. This estimate does not include group profits or approved deductions.</Text>
+    <View style={styles.methodOptions}>
+      <TouchableOpacity
+        style={[styles.methodOption, rules.shareOutMethodology === 'savings_based' && styles.methodOptionActive]}
+        onPress={() => updateRule('shareOutMethodology', 'savings_based')}
+        disabled={saving}
+      >
+        <Text style={[styles.methodOptionTitle, rules.shareOutMethodology === 'savings_based' && styles.methodOptionTitleActive]}>Savings-based</Text>
+        <Text style={[styles.methodOptionDescription, rules.shareOutMethodology === 'savings_based' && styles.methodOptionTitleActive]}>Uses the member's recorded savings as the principal estimate.</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.methodOption, rules.shareOutMethodology === 'share_based' && styles.methodOptionActive]}
+        onPress={() => updateRule('shareOutMethodology', 'share_based')}
+        disabled={saving}
+      >
+        <Text style={[styles.methodOptionTitle, rules.shareOutMethodology === 'share_based' && styles.methodOptionTitleActive]}>Share-based</Text>
+        <Text style={[styles.methodOptionDescription, rules.shareOutMethodology === 'share_based' && styles.methodOptionTitleActive]}>Uses whole shares estimated from the configured share value.</Text>
+      </TouchableOpacity>
+    </View>
+
     <View style={styles.row}>  
       <View style={styles.rowText}>  
         <Text style={styles.label}>  
@@ -644,25 +705,22 @@ Setup Rules
     </View>  
   </View>  
 
-  <TouchableOpacity  
-    style={[  
-      styles.saveButton,  
-      saving &&  
-        styles.saveButtonDisabled,  
-    ]}  
-    onPress={saveRules}  
-    disabled={saving}  
-  >  
-    {saving ? (  
-      <ActivityIndicator  
-        color="#ffffff"  
-      />  
-    ) : (  
-      <Text style={styles.saveButtonText}>  
-        Save Setup Rules  
-      </Text>  
-    )}  
-  </TouchableOpacity>  
+  <View style={styles.navigationButtons}>
+    <TouchableOpacity
+      style={[styles.navigationButton, styles.backButton]}
+      onPress={() => navigation.goBack()}
+      disabled={saving}
+    >
+      <Text style={styles.backButtonText}>Back</Text>
+    </TouchableOpacity>
+    <TouchableOpacity
+      style={[styles.navigationButton, styles.nextButton, saving && styles.saveButtonDisabled]}
+      onPress={() => saveRules(true)}
+      disabled={saving}
+    >
+      {saving ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.nextButtonText}>Next</Text>}
+    </TouchableOpacity>
+  </View>  
 </ScrollView>
 
 );
@@ -803,6 +861,66 @@ saveButtonDisabled: {
 opacity: 0.7,
 },
 
+navigationButtons: {
+  flexDirection: 'row',
+  gap: 12,
+  marginTop: 20,
+},
+navigationButton: {
+  flex: 1,
+  minHeight: 50,
+  borderRadius: 10,
+  alignItems: 'center',
+  justifyContent: 'center',
+  paddingHorizontal: 16,
+},
+backButton: {
+  backgroundColor: '#ffffff',
+  borderWidth: 1,
+  borderColor: '#16a34a',
+},
+nextButton: {
+  backgroundColor: '#16a34a',
+},
+backButtonText: {
+  color: '#166534',
+  fontSize: 16,
+  fontWeight: '700',
+},
+nextButtonText: {
+  color: '#ffffff',
+  fontSize: 16,
+  fontWeight: '700',
+},
+methodOptions: {
+  gap: 10,
+  marginBottom: 18,
+},
+methodOption: {
+  borderWidth: 1,
+  borderColor: '#d1d5db',
+  borderRadius: 10,
+  padding: 14,
+  backgroundColor: '#ffffff',
+},
+methodOptionActive: {
+  borderColor: '#16a34a',
+  backgroundColor: '#f0fdf4',
+},
+methodOptionTitle: {
+  color: '#111827',
+  fontSize: 15,
+  fontWeight: '700',
+  marginBottom: 4,
+},
+methodOptionTitleActive: {
+  color: '#166534',
+},
+methodOptionDescription: {
+  color: '#4b5563',
+  fontSize: 13,
+  lineHeight: 18,
+},
 saveButtonText: {
 color: '#ffffff',
 fontSize: 16,
