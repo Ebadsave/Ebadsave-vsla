@@ -17,6 +17,8 @@ import {
   getFinancialTransactions,
   getLastConcludedMeeting,
   getMembersByGroupId,
+  getMemberSavings,
+  getVSLASetupRules,
   getOpenMeeting,
   type FinancialTransactionRecord,
   type GroupRecord,
@@ -320,11 +322,53 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
         subtitle = 'Active members registered in this group.';
         note = 'Tap Add Members in Group Management to register or update a member.';
       } else if (cardKey === 'savings') {
-        const account = accountRows('savings');
-        rows = byType(account);
+        const allMembers = await getMembersByGroupId(activeGroup!.id);
+        const setupRules = await getVSLASetupRules(activeGroup!.id);
+        const shareValue = Math.max(1, Number(setupRules?.share_value) || 1);
+        const methodology = setupRules?.share_out_methodology === 'share_based'
+          ? 'share_based'
+          : 'savings_based';
+        const memberSavings = await Promise.all(allMembers.map(async (member) => ({
+          member,
+          savings: Math.max(0, Number(await getMemberSavings(activeGroup!.id, member.id)) || 0),
+        })));
+        const groupSavings = memberSavings.reduce((total, item) => total + item.savings, 0);
+        const displayedMemberSavings = memberSavings.filter(
+          ({ member, savings }) => savings > 0 || member.status?.toLowerCase() === 'active',
+        );
+        rows = displayedMemberSavings
+          .sort((a, b) => a.member.full_name.localeCompare(b.member.full_name))
+          .map(({ member, savings }) => {
+            const estimatedShareOut = methodology === 'share_based'
+              ? Math.floor(savings / shareValue) * shareValue
+              : savings;
+            const remainder = Math.max(0, savings - estimatedShareOut);
+            const detailParts = [
+              `Member no. ${member.member_number}`,
+              `Total savings: ${money(dashboard.currency, savings)}`,
+            ];
+            if (methodology === 'share_based') {
+              detailParts.push(`Estimated whole shares: ${Math.floor(savings / shareValue)}`);
+              if (remainder > 0) detailParts.push(`Amount outside whole shares: ${money(dashboard.currency, remainder)}`);
+            }
+            return {
+              label: member.full_name || `Member ${member.member_number}`,
+              amount: estimatedShareOut,
+              detail: detailParts.join(' • '),
+            };
+          });
         totalValue = dashboard.savings;
-        subtitle = 'Savings transactions grouped by transaction type.';
-        note = 'The total shown below is the current Savings balance from the database summary.';
+        totalLabel = 'Total group savings (database)';
+        subtitle = `Each row shows an estimated share-out principal using the ${methodology === 'share_based' ? 'share-based' : 'savings-based'} method; member savings are shown below each name.`;
+        note = methodology === 'share_based'
+          ? `Share-based estimates infer whole shares from recorded savings divided by the configured share value (${money(dashboard.currency, shareValue)} per share). Actual share units are not stored separately yet, so treat this as an estimate. Amounts outside whole shares are shown separately. Profit allocation and approved deductions are not included.`
+          : 'Savings-based estimates use each member’s recorded savings as the principal portion. This is not the final share-out amount: group profits and approved deductions are not included in the current estimate.';
+        if (setupRules?.share_out_enabled === 0) {
+          note += ' Share-out is currently disabled in Setup Rules.';
+        }
+        if (Math.abs(groupSavings - dashboard.savings) > 0.01) {
+          warning = `The sum of member savings (${money(dashboard.currency, groupSavings)}) differs from the database group savings total (${money(dashboard.currency, dashboard.savings)}). Review unassigned transactions or adjustments before share-out.`;
+        }
       } else if (cardKey === 'loansOut') {
         const issued = valid.filter((t) => t.account_type === 'loan_fund' && t.transaction_type === 'loan_issued');
         const repayments = valid.filter((t) => t.account_type === 'loan_repayment' && t.transaction_type === 'loan_repayment');
