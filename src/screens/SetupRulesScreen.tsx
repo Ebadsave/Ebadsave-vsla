@@ -37,6 +37,10 @@ socialFundContribution: 0,
 absenceFine: 0,
 lateFine: 0,
 nonSavingFine: 0,
+nonLoanRepaymentFine: 0,
+nonInsuranceContribution: 0,
+allowSocialFundForLoans: false,
+allowExternalFundForLoans: false,
 meetingFrequency: 'weekly',
 cycleDurationMonths: 12,
 leadershipTermMonths: 12,
@@ -89,6 +93,10 @@ const current = await getVSLASetupRules(groupId);
     lateFine: current.late_fine,  
     nonSavingFine:  
       current.non_saving_fine,  
+    nonLoanRepaymentFine: current.non_loan_repayment_fine,
+    nonInsuranceContribution: current.non_insurance_contribution,
+    allowSocialFundForLoans: Boolean(current.allow_social_fund_for_loans),
+    allowExternalFundForLoans: Boolean(current.allow_external_fund_for_loans),
     meetingFrequency:  
       current.meeting_frequency,  
     cycleDurationMonths:  
@@ -172,6 +180,10 @@ try {
     lateFine: Number(rules.lateFine),  
     nonSavingFine:  
       Number(rules.nonSavingFine),  
+    nonLoanRepaymentFine: Number(rules.nonLoanRepaymentFine),
+    nonInsuranceContribution: Number(rules.nonInsuranceContribution),
+    allowSocialFundForLoans: Boolean(rules.allowSocialFundForLoans),
+    allowExternalFundForLoans: Boolean(rules.allowExternalFundForLoans),
     cycleDurationMonths:  
       Number(rules.cycleDurationMonths),  
     leadershipTermMonths:  
@@ -418,6 +430,36 @@ Setup Rules
       placeholder="0"  
     />  
 
+    <View style={styles.row}>
+      <View style={styles.rowText}>
+        <Text style={styles.label}>Use Social Fund for Loans</Text>
+        <Text style={styles.description}>
+          Off by default. When enabled, Social Fund collections may increase the available Loan Fund.
+        </Text>
+      </View>
+      <Switch
+        value={Boolean(rules.allowSocialFundForLoans)}
+        onValueChange={(value) => updateRule('allowSocialFundForLoans', value)}
+        trackColor={{ false: '#d1d5db', true: '#86efac' }}
+        thumbColor="#16a34a"
+      />
+    </View>
+
+    <View style={styles.row}>
+      <View style={styles.rowText}>
+        <Text style={styles.label}>Use External Funds for Loans</Text>
+        <Text style={styles.description}>
+          Off by default. When enabled, eligible external collections may increase the available Loan Fund.
+        </Text>
+      </View>
+      <Switch
+        value={Boolean(rules.allowExternalFundForLoans)}
+        onValueChange={(value) => updateRule('allowExternalFundForLoans', value)}
+        trackColor={{ false: '#d1d5db', true: '#86efac' }}
+        thumbColor="#16a34a"
+      />
+    </View>
+
     <Text style={styles.label}>  
       Absence Fine  
     </Text>  
@@ -469,7 +511,25 @@ Setup Rules
       }  
       keyboardType="decimal-pad"  
       placeholder="0"  
-    />  
+    />
+
+    <Text style={styles.label}>Non-Loan-Repayment Fine</Text>
+    <TextInput
+      style={styles.input}
+      value={String(rules.nonLoanRepaymentFine)}
+      onChangeText={(value) => updateRule('nonLoanRepaymentFine', Number(value) || 0)}
+      keyboardType="decimal-pad"
+      placeholder="0"
+    />
+
+    <Text style={styles.label}>Non-Insurance Contribution Fine</Text>
+    <TextInput
+      style={styles.input}
+      value={String(rules.nonInsuranceContribution)}
+      onChangeText={(value) => updateRule('nonInsuranceContribution', Number(value) || 0)}
+      keyboardType="decimal-pad"
+      placeholder="0"
+    />
   </View>  
 
   <View style={styles.card}>  
