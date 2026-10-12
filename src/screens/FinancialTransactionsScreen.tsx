@@ -12,8 +12,10 @@ import {
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import * as FileSystem from 'expo-file-system';
 
 import { RootStackParamList } from '../../App';
+import { exportDatabaseBackup } from '../database/backup';
 
 import {
   closeMeeting,
@@ -22,6 +24,7 @@ import {
   getMembersByGroupId,
   getOpenMeeting,
   getVSLASetupRules,
+  recordFine,
   recordFinePayment,
   recordInsuranceContribution,
   recordLoanRepayment,
@@ -105,14 +108,32 @@ export default function FinancialTransactionsScreen() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [endingMeeting, setEndingMeeting] = useState(false);
+  const [cashAtHand, setCashAtHand] = useState('');
 
   const [showMembers, setShowMembers] = useState(false);
+  const [showFineTypes, setShowFineTypes] = useState(false);
 
   const [shares, setShares] = useState('');
   const [loanRepayment, setLoanRepayment] = useState('');
   const [socialFund, setSocialFund] = useState('');
   const [insurance, setInsurance] = useState('');
   const [finePayment, setFinePayment] = useState('');
+
+  const [newFineAmount, setNewFineAmount] = useState('');
+
+  const [fineType, setFineType] = useState('Absence fine');
+  const [recordingFine, setRecordingFine] = useState(false);
+
+  const fineTypes = useMemo(
+    () => [
+      'Absence fine',
+      'Late fine',
+      'Non-saving fine',
+      'Non-loan repayment fine',
+      'Non-insurance contribution fine',
+    ],
+    [],
+  );
 
   const selectedMember = useMemo(
     () =>
@@ -175,6 +196,53 @@ export default function FinancialTransactionsScreen() {
     socialAmount +
     insuranceAmount +
     finePaymentAmount;
+
+  const getSetupFineAmount = useCallback(
+    (type: string): number => {
+      if (!setupRules) {
+        return 0;
+      }
+
+      switch (type) {
+        case 'Absence fine':
+          return Number(setupRules.absence_fine) || 0;
+
+        case 'Late fine':
+          return Number(setupRules.late_fine) || 0;
+
+        case 'Non-saving fine':
+          return (
+            Number(setupRules.non_saving_fine) || 0
+          );
+
+        case 'Non-loan repayment fine':
+          return (
+            Number(
+              setupRules.non_loan_repayment_fine,
+            ) || 0
+          );
+
+        case 'Non-insurance contribution fine':
+          return (
+            Number(
+              setupRules.non_insurance_contribution,
+            ) || 0
+          );
+
+        default:
+          return 0;
+      }
+    },
+    [setupRules],
+  );
+
+  useEffect(() => {
+    const amount = getSetupFineAmount(fineType);
+
+    setNewFineAmount(
+      amount > 0 ? String(amount) : '',
+    );
+  }, [fineType, getSetupFineAmount]);
 
   const loadMemberFinancialData = useCallback(
     async (memberId: number) => {
@@ -596,6 +664,73 @@ export default function FinancialTransactionsScreen() {
       );
     };
 
+  const recordNewFine = async () => {
+    if (!meetingId) {
+      Alert.alert(
+        'Meeting not started',
+        'Start the meeting before recording a fine.',
+      );
+
+      return;
+    }
+
+    if (!selectedMemberId) {
+      Alert.alert(
+        'Member required',
+        'Select a member before recording a fine.',
+      );
+
+      return;
+    }
+
+    const amount =
+      getSetupFineAmount(fineType);
+
+    if (
+      !Number.isFinite(amount) ||
+      amount <= 0
+    ) {
+      Alert.alert(
+        'Fine not configured',
+        'This fine does not have a valid amount in Setup Rules.',
+      );
+
+      return;
+    }
+
+    setRecordingFine(true);
+
+    try {
+      await recordFine(
+        groupId,
+        amount,
+        fineType,
+        selectedMemberId,
+        meetingId,
+      );
+
+      await loadMemberFinancialData(
+        selectedMemberId,
+      );
+
+      Alert.alert(
+        'Fine recorded',
+        `${fineType}: ${currency} ${formatMoney(
+          amount,
+        )}`,
+      );
+    } catch (error) {
+      Alert.alert(
+        'Fine failed',
+        error instanceof Error
+          ? error.message
+          : 'Unable to record the fine.',
+      );
+    } finally {
+      setRecordingFine(false);
+    }
+  };
+
   const goToNextMember = () => {
     if (
       !selectedMemberId ||
@@ -700,9 +835,59 @@ export default function FinancialTransactionsScreen() {
             setEndingMeeting(true);
 
             try {
+              const cleanedCash = cashAtHand.replace(/,/g, '').trim();
+              if (!cleanedCash) {
+                throw new Error('Enter the actual cash counted in the cash box before ending the meeting.');
+              }
+              const cashAmount = Number(cleanedCash);
+              if (!Number.isFinite(cashAmount) || cashAmount < 0) {
+                throw new Error('Cash in box must be a valid amount of zero or greater.');
+              }
+
+              // Create and read back a real backup while this meeting is still open.
+              const backupResult = await exportDatabaseBackup();
+              if (!backupResult.success || !backupResult.filePath || !backupResult.fileName) {
+                throw new Error(backupResult.error || backupResult.message || 'A verified backup could not be created.');
+              }
+
+              const backupInfo = await FileSystem.getInfoAsync(backupResult.filePath);
+              if (!backupInfo.exists || !('size' in backupInfo) || Number(backupInfo.size) <= 0) {
+                throw new Error('The backup file could not be verified. The meeting remains open.');
+              }
+              const backupContents = await FileSystem.readAsStringAsync(backupResult.filePath, {
+                encoding: FileSystem.EncodingType.UTF8,
+              });
+              let parsedBackup: { version?: number; created_at?: string; tables?: Record<string, unknown> };
+              try {
+                parsedBackup = JSON.parse(backupContents) as typeof parsedBackup;
+              } catch {
+                throw new Error('The saved backup could not be read as valid JSON. The meeting remains open.');
+              }
+              const backedUpMeetings = parsedBackup.tables?.group_meetings;
+              if (
+                parsedBackup.version !== 1 ||
+                !Array.isArray(backedUpMeetings) ||
+                !backedUpMeetings.some((row: any) => Number(row?.id) === Number(meetingId) && row?.status === 'open')
+              ) {
+                throw new Error('The verified backup does not contain this meeting in its open state. The meeting remains open.');
+              }
+
+              const receipt = {
+                meetingId,
+                createdAt: parsedBackup.created_at || new Date().toISOString(),
+                verifiedAtClose: new Date().toISOString(),
+                filePath: backupResult.filePath,
+                fileName: backupResult.fileName,
+                fileSize: Number(backupInfo.size),
+                verified: true,
+              };
+
               await closeMeeting(
                 meetingId,
                 executive.id,
+                cashAmount,
+                true,
+                JSON.stringify(receipt),
               );
 
               Alert.alert(
@@ -831,6 +1016,23 @@ export default function FinancialTransactionsScreen() {
           >
             Meeting #{meetingId}
           </Text>
+
+          <TouchableOpacity
+            accessibilityRole="button"
+            style={styles.loanDisbursementLink}
+            onPress={() =>
+              navigation.navigate('LoanDisbursement', {
+                groupId,
+                meetingId,
+                currency,
+              })
+            }
+            disabled={saving || endingMeeting}
+          >
+            <Text style={styles.loanDisbursementLinkText}>
+              Issue a New Loan
+            </Text>
+          </TouchableOpacity>
         </View>
 
         {/* MEMBER */}
@@ -1136,7 +1338,120 @@ export default function FinancialTransactionsScreen() {
           )}
         </View>
 
-        {/* Fine assessments are automatic; this screen only accepts payments. */}
+        {/* NEW FINE */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            Record New Fine
+          </Text>
+
+          <Text style={styles.fieldLabel}>
+            Fine type
+          </Text>
+
+          <TouchableOpacity
+            style={styles.selector}
+            onPress={() =>
+              setShowFineTypes(
+                (value) => !value,
+              )
+            }
+            disabled={recordingFine}
+          >
+            <Text style={styles.selectorText}>
+              {fineType}
+            </Text>
+
+            <Text style={styles.arrow}>
+              {showFineTypes
+                ? '▲'
+                : '▼'}
+            </Text>
+          </TouchableOpacity>
+
+          {showFineTypes && (
+            <View
+              style={
+                styles.optionsBox
+              }
+            >
+              {fineTypes.map(
+                (type) => (
+                  <TouchableOpacity
+                    key={type}
+                    style={
+                      styles.option
+                    }
+                    onPress={() => {
+                      setFineType(type);
+                      setShowFineTypes(false);
+                    }}
+                  >
+                    <Text
+                      style={
+                        styles.optionText
+                      }
+                    >
+                      {type}
+                    </Text>
+                  </TouchableOpacity>
+                ),
+              )}
+            </View>
+          )}
+
+          <Text style={styles.fieldLabel}>
+            Fine amount
+          </Text>
+
+          <TextInput
+            style={[
+              styles.input,
+              styles.disabledInput,
+            ]}
+            value={
+              newFineAmount
+                ? `${currency} ${formatMoney(
+                    Number(newFineAmount),
+                  )}`
+                : ''
+            }
+            editable={false}
+            placeholder="Not configured"
+            placeholderTextColor="#888"
+          />
+
+          <Text style={styles.helperText}>
+            Fine amount is automatically taken from
+            VSLA Setup Rules and cannot be edited here.
+          </Text>
+
+          <TouchableOpacity
+            style={[
+              styles.secondaryButton,
+              recordingFine &&
+                styles.disabledButton,
+            ]}
+            onPress={() =>
+              void recordNewFine()
+            }
+            disabled={recordingFine}
+          >
+            {recordingFine ? (
+              <ActivityIndicator
+                color="#ffffff"
+              />
+            ) : (
+              <Text
+                style={
+                  styles.secondaryButtonText
+                }
+              >
+                Record Fine
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
+
         {/* PAYMENT SUMMARY */}
         <View style={styles.summaryCard}>
           <Text style={styles.sectionTitle}>
@@ -1297,6 +1612,22 @@ export default function FinancialTransactionsScreen() {
           </Text>
         </TouchableOpacity>
 
+        {/* CASH RECONCILIATION: required before meeting closure */}
+        <View style={styles.cashReconciliationCard}>
+          <Text style={styles.sectionTitle}>Cash Reconciliation</Text>
+          <Text style={styles.emptyText}>
+            Count the actual cash remaining in the cash box. The database will compare it with the meeting records before allowing closure.
+          </Text>
+          <TextInput
+            style={styles.cashInput}
+            value={cashAtHand}
+            onChangeText={setCashAtHand}
+            keyboardType="decimal-pad"
+            placeholder="Actual cash in box (UGX)"
+            editable={!saving && !endingMeeting}
+          />
+        </View>
+
         {/* END MEETING */}
         <TouchableOpacity
           style={[
@@ -1367,6 +1698,23 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
 
+  loanDisbursementLink: {
+    alignSelf: 'flex-start',
+    marginTop: 12,
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+  },
+
+  loanDisbursementLinkText: {
+    color: '#166534',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+
   title: {
     fontSize: 22,
     fontWeight: '800',
@@ -1411,6 +1759,28 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     borderWidth: 1,
     borderColor: '#16a34a',
+  },
+
+  cashReconciliationCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    padding: 14,
+    marginTop: 8,
+    marginBottom: 14,
+  },
+
+  cashInput: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: '#9ca3af',
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 12,
+    marginTop: 12,
+    color: '#111827',
+    fontSize: 16,
   },
 
   sectionTitle: {
