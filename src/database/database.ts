@@ -1353,6 +1353,200 @@ status TEXT NOT NULL DEFAULT 'active',
 );
 
 
+    /* Persistent loan contracts and advanced-loan workflow. These tables are
+       additive so existing member and transaction records remain untouched. */
+    CREATE TABLE IF NOT EXISTS loan_policy_settings (
+      group_id INTEGER PRIMARY KEY,
+      default_interest_method TEXT NOT NULL DEFAULT 'fixed'
+        CHECK (default_interest_method IN ('fixed', 'flat', 'declining')),
+      require_committee_approval INTEGER NOT NULL DEFAULT 0 CHECK (require_committee_approval IN (0, 1)),
+      minimum_committee_approvals INTEGER NOT NULL DEFAULT 2 CHECK (minimum_committee_approvals >= 1),
+      require_guarantor INTEGER NOT NULL DEFAULT 0 CHECK (require_guarantor IN (0, 1)),
+      allow_member_savings_deduction INTEGER NOT NULL DEFAULT 0 CHECK (allow_member_savings_deduction IN (0, 1)),
+      allow_guarantor_deduction INTEGER NOT NULL DEFAULT 0 CHECK (allow_guarantor_deduction IN (0, 1)),
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS loan_committee_members (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      member_id INTEGER NOT NULL,
+      assigned_by_member_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+      assigned_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(group_id, member_id),
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (member_id) REFERENCES members(id),
+      FOREIGN KEY (assigned_by_member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS loan_applications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      member_id INTEGER NOT NULL,
+      meeting_id INTEGER,
+      requested_amount REAL NOT NULL CHECK (requested_amount > 0),
+      interest_method TEXT NOT NULL DEFAULT 'fixed'
+        CHECK (interest_method IN ('fixed', 'flat', 'declining')),
+      interest_rate REAL NOT NULL DEFAULT 0 CHECK (interest_rate >= 0),
+      repayment_period_count INTEGER NOT NULL DEFAULT 1 CHECK (repayment_period_count > 0),
+      repayment_period_unit TEXT NOT NULL DEFAULT 'months'
+        CHECK (repayment_period_unit IN ('weeks', 'months')),
+      requested_due_date TEXT,
+      reason TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'approved', 'rejected', 'disbursed', 'cancelled')),
+      requested_by_member_id INTEGER,
+      reviewed_at TEXT,
+      disbursed_transaction_id INTEGER UNIQUE,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (member_id) REFERENCES members(id),
+      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
+      FOREIGN KEY (requested_by_member_id) REFERENCES members(id),
+      FOREIGN KEY (disbursed_transaction_id) REFERENCES financial_transactions(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS loan_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      member_id INTEGER NOT NULL,
+      application_id INTEGER UNIQUE,
+      disbursement_transaction_id INTEGER NOT NULL UNIQUE,
+      meeting_id INTEGER,
+      principal_amount REAL NOT NULL CHECK (principal_amount > 0),
+      interest_method TEXT NOT NULL DEFAULT 'fixed'
+        CHECK (interest_method IN ('fixed', 'flat', 'declining')),
+      interest_rate REAL NOT NULL DEFAULT 0 CHECK (interest_rate >= 0),
+      interest_period TEXT NOT NULL DEFAULT 'per month',
+      repayment_period_count INTEGER NOT NULL DEFAULT 1 CHECK (repayment_period_count > 0),
+      repayment_period_unit TEXT NOT NULL DEFAULT 'months'
+        CHECK (repayment_period_unit IN ('weeks', 'months')),
+      issue_date TEXT NOT NULL,
+      due_date TEXT NOT NULL,
+      total_interest REAL NOT NULL DEFAULT 0,
+      total_due REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'paid', 'frozen', 'cancelled')),
+      reason TEXT NOT NULL DEFAULT '',
+      created_by_member_id INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (member_id) REFERENCES members(id),
+      FOREIGN KEY (application_id) REFERENCES loan_applications(id),
+      FOREIGN KEY (disbursement_transaction_id) REFERENCES financial_transactions(id),
+      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id),
+      FOREIGN KEY (created_by_member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS loan_repayment_schedule (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      loan_id INTEGER NOT NULL,
+      installment_number INTEGER NOT NULL,
+      due_date TEXT NOT NULL,
+      principal_due REAL NOT NULL DEFAULT 0,
+      interest_due REAL NOT NULL DEFAULT 0,
+      principal_paid REAL NOT NULL DEFAULT 0,
+      interest_paid REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'partial', 'paid', 'overdue')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(loan_id, installment_number),
+      FOREIGN KEY (loan_id) REFERENCES loan_records(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS loan_guarantors (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      application_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL,
+      guarantor_member_id INTEGER NOT NULL,
+      guarantee_amount REAL NOT NULL CHECK (guarantee_amount > 0),
+      signature_method TEXT NOT NULL DEFAULT 'member_passcode',
+      passcode_verified INTEGER NOT NULL DEFAULT 0 CHECK (passcode_verified IN (0, 1)),
+      signed_at TEXT,
+      status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'released', 'called')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(application_id, guarantor_member_id),
+      FOREIGN KEY (application_id) REFERENCES loan_applications(id) ON DELETE CASCADE,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (guarantor_member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS loan_committee_approvals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      application_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL,
+      approver_member_id INTEGER NOT NULL,
+      decision TEXT NOT NULL CHECK (decision IN ('approved', 'rejected')),
+      note TEXT NOT NULL DEFAULT '',
+      passcode_verified INTEGER NOT NULL DEFAULT 0 CHECK (passcode_verified IN (0, 1)),
+      decided_at TEXT NOT NULL,
+      UNIQUE(application_id, approver_member_id),
+      FOREIGN KEY (application_id) REFERENCES loan_applications(id) ON DELETE CASCADE,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (approver_member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS loan_deductions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      loan_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL,
+      source_type TEXT NOT NULL CHECK (source_type IN ('member_savings', 'guarantor')),
+      source_member_id INTEGER NOT NULL,
+      amount REAL NOT NULL CHECK (amount > 0),
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'applied', 'cancelled', 'reversed')),
+      reason TEXT NOT NULL DEFAULT '',
+      requested_by_member_id INTEGER,
+      applied_transaction_id INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (loan_id) REFERENCES loan_records(id) ON DELETE CASCADE,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (source_member_id) REFERENCES members(id),
+      FOREIGN KEY (requested_by_member_id) REFERENCES members(id),
+      FOREIGN KEY (applied_transaction_id) REFERENCES financial_transactions(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS loan_emergency_freezes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      member_id INTEGER,
+      reason TEXT NOT NULL,
+      authorized_by_member_id INTEGER NOT NULL,
+      authorized_at TEXT NOT NULL,
+      ended_by_member_id INTEGER,
+      ended_at TEXT,
+      end_reason TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'ended')),
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (member_id) REFERENCES members(id),
+      FOREIGN KEY (authorized_by_member_id) REFERENCES members(id),
+      FOREIGN KEY (ended_by_member_id) REFERENCES members(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS loan_audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      loan_id INTEGER,
+      actor_member_id INTEGER,
+      event_type TEXT NOT NULL,
+      details_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (loan_id) REFERENCES loan_records(id),
+      FOREIGN KEY (actor_member_id) REFERENCES members(id)
+    );
+
+
       
 
     CREATE INDEX IF NOT EXISTS idx_members_group
@@ -1688,7 +1882,10 @@ const BACKUP_TABLES = [
   'financial_transactions', 'financial_transaction_reversals', 'receipts',
   'notification_queue', 'notification_delivery', 'meeting_audit_records',
   'sync_queue', 'member_passbook_records', 'member_statement_records',
-  'loan_interest_charges',
+  'loan_interest_charges', 'loan_policy_settings', 'loan_committee_members', 'loan_applications',
+  'loan_records', 'loan_repayment_schedule', 'loan_guarantors',
+  'loan_committee_approvals', 'loan_deductions',
+  'loan_emergency_freezes', 'loan_audit_log',
 ] as const;
 
 export async function createDatabaseBackup(): Promise<string> {
@@ -2701,6 +2898,12 @@ export async function applyMonthlyLoanInterest(
   const db = await getDatabase();
 
   const setup = await getVSLASetupRules(groupId);
+
+  const contractLoan = await db.getFirstAsync<{ id: number }>(
+    `SELECT id FROM loan_records WHERE group_id = ? AND member_id = ? AND status = 'active' LIMIT 1`,
+    groupId, memberId,
+  );
+  if (contractLoan) return 0;
 
   const interestPercentage =
     Number.isFinite(setup?.loan_interest_percentage)
@@ -4005,6 +4208,11 @@ export async function getHomeDashboardSummary(
            FROM loan_interest_charges lic
            WHERE lic.group_id = ?
              AND lic.member_id = m.id), 0)
+         + COALESCE((SELECT SUM(lr.total_interest)
+           FROM loan_records lr
+           JOIN financial_transactions lft ON lft.id = lr.disbursement_transaction_id
+           WHERE lr.group_id = ? AND lr.member_id = m.id
+             AND lr.status != 'cancelled' AND lft.reversed = 0), 0)
          - COALESCE((SELECT SUM(ft2.amount)
            FROM financial_transactions ft2
            WHERE ft2.group_id = ?
@@ -4017,6 +4225,7 @@ export async function getHomeDashboardSummary(
        WHERE m.group_id = ?
          AND m.status = 'active'
      )`,
+    groupId,
     groupId,
     groupId,
     groupId,
@@ -4884,6 +5093,14 @@ export async function issueLoan(
     );
   }
 
+  if (await isLoanDisbursementFrozen(groupId, memberId)) {
+    throw new Error('Loan disbursement is frozen by the Chairperson.');
+  }
+  const policy = await getLoanPolicySettings(groupId);
+  if (Number(policy.require_committee_approval) || Number(policy.require_guarantor)) {
+    throw new Error('This group requires the advanced loan application workflow. Use the approved application disbursement process.');
+  }
+
   await requireMemberPresentForLoan(
     db,
     groupId,
@@ -5005,20 +5222,769 @@ export async function issueLoan(
     );
   }
 
-  if (dueDate) {
-    await db.runAsync(
-      `UPDATE loan_records
-       SET due_date = ?
-       WHERE member_id = ?
-       AND status = 'active'`,
-      dueDate,
-      memberId,
-    ).catch(() => {});
-  }
-
   await recordGroupActivity(groupId);
 
   return transactionId;
+}
+
+/* ============================================================
+   ADVANCED LOAN DATABASE SUPPORT
+   ============================================================ */
+
+export type LoanInterestMethod = 'fixed' | 'flat' | 'declining';
+export type LoanRepaymentPeriodUnit = 'weeks' | 'months';
+export type LoanContractInput = {
+  interestMethod: LoanInterestMethod;
+  interestRate: number;
+  repaymentPeriodCount: number;
+  repaymentPeriodUnit: LoanRepaymentPeriodUnit;
+  dueDate?: string | null;
+  createdByMemberId?: number | null;
+  applicationId?: number | null;
+};
+
+export type LoanContractRecord = {
+  id: number;
+  group_id: number;
+  member_id: number;
+  disbursement_transaction_id: number;
+  meeting_id: number | null;
+  principal_amount: number;
+  interest_method: LoanInterestMethod;
+  interest_rate: number;
+  interest_period: string;
+  repayment_period_count: number;
+  repayment_period_unit: LoanRepaymentPeriodUnit;
+  issue_date: string;
+  due_date: string;
+  total_interest: number;
+  total_due: number;
+  status: string;
+  reason: string;
+  created_by_member_id: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+function loanDateForPeriod(issueDate: Date, period: number, unit: LoanRepaymentPeriodUnit): string {
+  const date = new Date(issueDate.getTime());
+  if (unit === 'weeks') {
+    date.setDate(date.getDate() + period * 7);
+  } else {
+    const targetDay = date.getDate();
+    date.setDate(1);
+    date.setMonth(date.getMonth() + period);
+    const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+    date.setDate(Math.min(targetDay, lastDay));
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function calculateLoanInterestSchedule(
+  principal: number,
+  rate: number,
+  periods: number,
+  method: LoanInterestMethod,
+): Array<{ principalDue: number; interestDue: number }> {
+  const principalPerPeriod = principal / periods;
+  const fixedTotal = principal * rate / 100;
+  const flatPerPeriod = principal * rate / 100;
+  const rows: Array<{ principalDue: number; interestDue: number }> = [];
+  let remaining = principal;
+  let decliningTotal = 0;
+
+  for (let index = 0; index < periods; index += 1) {
+    const principalDue = index === periods - 1
+      ? remaining
+      : Math.min(remaining, principalPerPeriod);
+    let interestDue = 0;
+    if (method === 'fixed') {
+      interestDue = fixedTotal / periods;
+    } else if (method === 'flat') {
+      interestDue = flatPerPeriod;
+    } else {
+      interestDue = remaining * rate / 100;
+      decliningTotal += interestDue;
+    }
+    rows.push({ principalDue, interestDue });
+    remaining = Math.max(0, remaining - principalDue);
+  }
+
+  // Keep the final installment aligned with the contract-level total despite rounding.
+  if (method === 'declining' && rows.length > 0) {
+    const computed = rows.reduce((sum, row) => sum + row.interestDue, 0);
+    decliningTotal = computed;
+  }
+  return rows;
+}
+
+async function addLoanAudit(
+  db: SQLite.SQLiteDatabase,
+  groupId: number,
+  loanId: number | null,
+  actorMemberId: number | null,
+  eventType: string,
+  details: Record<string, unknown>,
+): Promise<void> {
+  await db.runAsync(
+    `INSERT INTO loan_audit_log (group_id, loan_id, actor_member_id, event_type, details_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    groupId, loanId, actorMemberId, eventType, JSON.stringify(details), now(),
+  );
+}
+
+/**
+ * Atomically disburses an approved application, records the loan contract and
+ * installment schedule, updates the Loan Fund and member passbook, and marks
+ * the application disbursed. This is the safe write path for the advanced flow.
+ */
+export async function disburseApprovedLoanApplication(
+  applicationId: number,
+  executiveMemberId: number,
+): Promise<{ loanId: number; transactionId: number; dueDate: string; totalInterest: number; totalDue: number }> {
+  const db = await getDatabase();
+  let application = await db.getFirstAsync<{
+    id: number; group_id: number; member_id: number; meeting_id: number | null;
+    requested_amount: number; interest_method: LoanInterestMethod; interest_rate: number;
+    repayment_period_count: number; repayment_period_unit: LoanRepaymentPeriodUnit;
+    requested_due_date: string | null; reason: string; status: string;
+    disbursed_transaction_id: number | null;
+  }>('SELECT * FROM loan_applications WHERE id = ? LIMIT 1', applicationId);
+  if (!application) throw new Error('Loan application not found.');
+  if (application.status === 'disbursed' || application.disbursed_transaction_id) throw new Error('This loan application has already been disbursed.');
+  if (application.status === 'rejected' || application.status === 'cancelled') throw new Error(`This application is ${application.status} and cannot be disbursed.`);
+
+  let decision = application.status as 'pending' | 'approved' | 'rejected';
+  if (decision === 'pending') decision = await refreshLoanApplicationDecision(applicationId);
+  application = await db.getFirstAsync<{
+    id: number; group_id: number; member_id: number; meeting_id: number | null;
+    requested_amount: number; interest_method: LoanInterestMethod; interest_rate: number;
+    repayment_period_count: number; repayment_period_unit: LoanRepaymentPeriodUnit;
+    requested_due_date: string | null; reason: string; status: string;
+    disbursed_transaction_id: number | null;
+  }>('SELECT * FROM loan_applications WHERE id = ? LIMIT 1', applicationId);
+  if (!application) throw new Error('Loan application not found.');
+  if (decision !== 'approved' || application.status !== 'approved') throw new Error('The loan application has not satisfied its approval requirements.');
+
+  const policy = await getLoanPolicySettings(application.group_id);
+  if (Number(policy.require_committee_approval)) {
+    const approvals = await db.getFirstAsync<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM loan_committee_approvals WHERE application_id = ? AND decision = 'approved' AND passcode_verified = 1`, applicationId,
+    );
+    if (Number(approvals?.count ?? 0) < Number(policy.minimum_committee_approvals)) throw new Error('The required number of loan committee approvals has not been reached.');
+  }
+  if (Number(policy.require_guarantor)) {
+    const guarantors = await db.getFirstAsync<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM loan_guarantors WHERE application_id = ? AND status = 'active' AND passcode_verified = 1`, applicationId,
+    );
+    if (Number(guarantors?.count ?? 0) < 1) throw new Error('A verified guarantor signature is required before disbursement.');
+  }
+  if (await isLoanDisbursementFrozen(application.group_id, application.member_id)) throw new Error('Loan disbursement is frozen by the Chairperson.');
+
+  const executive = await db.getFirstAsync<{ group_id: number; status: string; assigned_roles: string | null; is_super_user: number | null }>(
+    'SELECT group_id, status, assigned_roles, is_super_user FROM members WHERE id = ? LIMIT 1', executiveMemberId,
+  );
+  const executiveRoles = (executive?.assigned_roles || '').split(',').map((role: string) => canonicalExecutivePost(role));
+  if (!executive || Number(executive.group_id) !== application.group_id || executive.status !== 'active' || (!Number(executive.is_super_user) && !executiveRoles.some((role) => role && EXECUTIVE_POSTS.includes(role as (typeof EXECUTIVE_POSTS)[number])))) {
+    throw new Error('An active group executive must authorize loan disbursement.');
+  }
+  if (application.meeting_id == null) throw new Error('The application must be linked to a meeting.');
+  await requireMemberPresentForLoan(db, application.group_id, application.member_id, application.meeting_id);
+
+  const setup = await getVSLASetupRules(application.group_id);
+  const savings = await getMemberSavings(application.group_id, application.member_id);
+  const currentLoan = await getMemberLoanBalance(application.group_id, application.member_id);
+  const maximumAdditionalLoan = Math.max(0, savings * Number(setup?.maximum_loan_multiple ?? 3) - currentLoan.balance);
+  if (application.requested_amount > maximumAdditionalLoan) throw new Error(`The member's current additional loan limit is ${maximumAdditionalLoan.toLocaleString()}. Reassess this application before disbursing.`);
+
+  const account = await db.getFirstAsync<{ balance: number }>(
+    `SELECT balance FROM financial_accounts WHERE group_id = ? AND account_type = 'loan_fund' LIMIT 1`, application.group_id,
+  );
+  if (!account || Number(account.balance) < Number(application.requested_amount)) throw new Error('The Loan Fund no longer has enough available money.');
+
+  const timestamp = now();
+  const issueDate = new Date(timestamp);
+  const schedule = calculateLoanInterestSchedule(
+    Number(application.requested_amount), Number(application.interest_rate),
+    Number(application.repayment_period_count), application.interest_method,
+  );
+  const totalInterest = schedule.reduce((sum, item) => sum + item.interestDue, 0);
+  const dueDate = application.requested_due_date || loanDateForPeriod(issueDate, Number(application.repayment_period_count), application.repayment_period_unit);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(new Date(`${dueDate}T00:00:00`).getTime())) throw new Error('The loan due date is invalid.');
+
+  await db.execAsync('BEGIN TRANSACTION;');
+  try {
+    const tx = await db.runAsync(
+      `INSERT INTO financial_transactions (group_id, account_type, amount, reason, member_id, meeting_id, transaction_type, created_at)
+       VALUES (?, 'loan_fund', ?, ?, ?, ?, 'loan_issued', ?)`,
+      application.group_id, -Math.abs(Number(application.requested_amount)), normalizeText(application.reason),
+      application.member_id, application.meeting_id, timestamp,
+    );
+    const transactionId = tx.lastInsertRowId;
+    const accountUpdate = await db.runAsync(
+      `UPDATE financial_accounts SET balance = balance - ?, updated_at = ? WHERE group_id = ? AND account_type = 'loan_fund' AND balance >= ?`,
+      Number(application.requested_amount), timestamp, application.group_id, Number(application.requested_amount),
+    );
+    if (accountUpdate.changes !== 1) throw new Error('The Loan Fund balance changed. Refresh and try again.');
+
+    const contract = await db.runAsync(
+      `INSERT INTO loan_records (
+        group_id, member_id, application_id, disbursement_transaction_id, meeting_id, principal_amount,
+        interest_method, interest_rate, interest_period, repayment_period_count, repayment_period_unit,
+        issue_date, due_date, total_interest, total_due, status, reason, created_by_member_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
+      application.group_id, application.member_id, applicationId, transactionId, application.meeting_id,
+      Number(application.requested_amount), application.interest_method, Number(application.interest_rate),
+      application.repayment_period_unit === 'weeks' ? 'per week' : 'per month',
+      Number(application.repayment_period_count), application.repayment_period_unit,
+      timestamp, dueDate, totalInterest, Number(application.requested_amount) + totalInterest,
+      normalizeText(application.reason), executiveMemberId, timestamp, timestamp,
+    );
+    const loanId = contract.lastInsertRowId;
+    for (let index = 0; index < schedule.length; index += 1) {
+      const item = schedule[index];
+      await db.runAsync(
+        `INSERT INTO loan_repayment_schedule (loan_id, installment_number, due_date, principal_due, interest_due, principal_paid, interest_paid, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 0, 0, 'pending', ?, ?)`,
+        loanId, index + 1,
+        index === schedule.length - 1 ? dueDate : loanDateForPeriod(issueDate, index + 1, application.repayment_period_unit),
+        item.principalDue, item.interestDue, timestamp, timestamp,
+      );
+    }
+    await addPassbookEntry(db, application.group_id, application.member_id, application.meeting_id, transactionId, 'loan_issued', Number(application.requested_amount), application.reason || 'Loan issued', timestamp);
+    const applicationUpdate = await db.runAsync(
+      `UPDATE loan_applications SET status = 'disbursed', disbursed_transaction_id = ?, reviewed_at = COALESCE(reviewed_at, ?), updated_at = ? WHERE id = ? AND status = 'approved'`,
+      transactionId, timestamp, timestamp, applicationId,
+    );
+    if (applicationUpdate.changes !== 1) throw new Error('The application status changed. The disbursement was cancelled.');
+    await addLoanAudit(db, application.group_id, loanId, executiveMemberId, 'loan_disbursed', {
+      applicationId, transactionId, principal: Number(application.requested_amount),
+      interestMethod: application.interest_method, interestRate: Number(application.interest_rate),
+      repaymentPeriodCount: Number(application.repayment_period_count), repaymentPeriodUnit: application.repayment_period_unit,
+      dueDate, totalInterest, totalDue: Number(application.requested_amount) + totalInterest,
+    });
+    await db.runAsync('UPDATE groups SET status = \'active\', last_activity_at = ? WHERE id = ?', timestamp, application.group_id);
+    await db.execAsync('COMMIT;');
+    return { loanId, transactionId, dueDate, totalInterest, totalDue: Number(application.requested_amount) + totalInterest };
+  } catch (error) {
+    await db.execAsync('ROLLBACK;');
+    throw error;
+  }
+}
+
+/**
+ * Saves the repayment terms and a dated installment schedule for an existing
+ * loan_issued transaction. Interest rates are per repayment period:
+ * fixed = one-time interest on original principal; flat = rate on original
+ * principal every period; declining = rate on each period's opening balance.
+ * This function records contract metadata only; callers must not treat a
+ * pending loan application as disbursed cash.
+ */
+export async function createLoanContract(
+  groupId: number,
+  memberId: number,
+  disbursementTransactionId: number,
+  meetingId: number | null,
+  principalAmount: number,
+  reason: string,
+  terms: LoanContractInput,
+): Promise<number> {
+  const db = await getDatabase();
+  if (!Number.isFinite(principalAmount) || principalAmount <= 0) throw new Error('Loan principal must be greater than zero.');
+  if (await isLoanDisbursementFrozen(groupId, memberId)) throw new Error('Loan disbursement is frozen by the Chairperson.');
+  if (terms.applicationId == null) throw new Error('Every advanced loan contract must be linked to its approved loan application.');
+  if (!['fixed', 'flat', 'declining'].includes(terms.interestMethod)) throw new Error('Choose a supported loan interest method.');
+  if (!Number.isFinite(terms.interestRate) || terms.interestRate < 0) throw new Error('Interest rate cannot be negative.');
+  if (!Number.isInteger(terms.repaymentPeriodCount) || terms.repaymentPeriodCount < 1 || terms.repaymentPeriodCount > 120) throw new Error('Repayment period must be between 1 and 120 periods.');
+  if (!['weeks', 'months'].includes(terms.repaymentPeriodUnit)) throw new Error('Choose weeks or months for the repayment period.');
+
+  const transaction = await db.getFirstAsync<{ id: number; group_id: number; member_id: number; transaction_type: string; reversed: number; amount: number; reason: string; meeting_id: number | null }>(
+    `SELECT id, group_id, member_id, transaction_type, reversed, amount, reason, meeting_id
+     FROM financial_transactions WHERE id = ? LIMIT 1`, disbursementTransactionId,
+  );
+  if (!transaction || Number(transaction.group_id) !== groupId || Number(transaction.member_id) !== memberId || transaction.transaction_type !== 'loan_issued' || Number(transaction.reversed) === 1) {
+    throw new Error('A valid, unreversed loan disbursement transaction is required before saving loan terms.');
+  }
+  if (Math.abs(Number(transaction.amount)) !== Math.abs(principalAmount)) throw new Error('Loan contract principal must match the recorded disbursement amount.');
+  const existing = await db.getFirstAsync<{ id: number }>(`SELECT id FROM loan_records WHERE disbursement_transaction_id = ? LIMIT 1`, disbursementTransactionId);
+  if (existing) throw new Error('Repayment terms have already been saved for this loan.');
+  let applicationDueDate: string | null = null;
+  if (terms.applicationId != null) {
+    const application = await db.getFirstAsync<{ group_id: number; member_id: number; status: string; requested_amount: number; requested_due_date: string | null }>(
+      'SELECT group_id, member_id, status, requested_amount, requested_due_date FROM loan_applications WHERE id = ? LIMIT 1', terms.applicationId,
+    );
+    if (!application || Number(application.group_id) !== groupId || Number(application.member_id) !== memberId) throw new Error('Loan application does not match this borrower and group.');
+    if (application.status !== 'approved') throw new Error('The loan application must be approved before disbursement.');
+    if (Math.abs(Number(application.requested_amount) - principalAmount) > 0.0001) throw new Error('Disbursed principal must match the approved application amount.');
+    applicationDueDate = application.requested_due_date;
+  }
+
+  const timestamp = now();
+  const issueDate = new Date(timestamp);
+  const schedule = calculateLoanInterestSchedule(principalAmount, terms.interestRate, terms.repaymentPeriodCount, terms.interestMethod);
+  const totalInterest = schedule.reduce((sum, item) => sum + item.interestDue, 0);
+  const dueDate = terms.dueDate || applicationDueDate || loanDateForPeriod(issueDate, terms.repaymentPeriodCount, terms.repaymentPeriodUnit);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(new Date(`${dueDate}T00:00:00`).getTime())) throw new Error('Enter a valid due date in YYYY-MM-DD format.');
+
+  await db.execAsync('BEGIN TRANSACTION;');
+  try {
+    const inserted = await db.runAsync(
+      `INSERT INTO loan_records (
+        group_id, member_id, application_id, disbursement_transaction_id, meeting_id, principal_amount,
+        interest_method, interest_rate, interest_period, repayment_period_count,
+        repayment_period_unit, issue_date, due_date, total_interest, total_due, status,
+        reason, created_by_member_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
+      groupId, memberId, terms.applicationId ?? null, disbursementTransactionId, meetingId, principalAmount,
+      terms.interestMethod, terms.interestRate,
+      terms.repaymentPeriodUnit === 'weeks' ? 'per week' : 'per month',
+      terms.repaymentPeriodCount, terms.repaymentPeriodUnit, timestamp, dueDate,
+      totalInterest, principalAmount + totalInterest, normalizeText(reason),
+      terms.createdByMemberId ?? null, timestamp, timestamp,
+    );
+    const loanId = inserted.lastInsertRowId;
+    for (let index = 0; index < schedule.length; index += 1) {
+      const item = schedule[index];
+      await db.runAsync(
+        `INSERT INTO loan_repayment_schedule (
+          loan_id, installment_number, due_date, principal_due, interest_due,
+          principal_paid, interest_paid, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 0, 0, 'pending', ?, ?)`,
+        loanId, index + 1, index === schedule.length - 1 ? dueDate : loanDateForPeriod(issueDate, index + 1, terms.repaymentPeriodUnit),
+        item.principalDue, item.interestDue, timestamp, timestamp,
+      );
+    }
+    await addLoanAudit(db, groupId, loanId, terms.createdByMemberId ?? null, 'loan_terms_created', {
+      disbursementTransactionId, principalAmount, interestMethod: terms.interestMethod,
+      interestRate: terms.interestRate, repaymentPeriodCount: terms.repaymentPeriodCount,
+      repaymentPeriodUnit: terms.repaymentPeriodUnit, dueDate, totalInterest,
+    });
+    if (terms.applicationId != null) {
+      await db.runAsync(
+        `UPDATE loan_applications SET status = 'disbursed', disbursed_transaction_id = ?, updated_at = ? WHERE id = ? AND status = 'approved'`,
+        disbursementTransactionId, timestamp, terms.applicationId,
+      );
+    }
+    await db.execAsync('COMMIT;');
+    return loanId;
+  } catch (error) {
+    await db.execAsync('ROLLBACK;');
+    throw error;
+  }
+}
+
+export type LoanPolicySettings = {
+  group_id: number;
+  default_interest_method: LoanInterestMethod;
+  require_committee_approval: number;
+  minimum_committee_approvals: number;
+  require_guarantor: number;
+  allow_member_savings_deduction: number;
+  allow_guarantor_deduction: number;
+  updated_at: string;
+};
+
+export async function getLoanPolicySettings(groupId: number): Promise<LoanPolicySettings> {
+  const db = await getDatabase();
+  const existing = await db.getFirstAsync<LoanPolicySettings>('SELECT * FROM loan_policy_settings WHERE group_id = ? LIMIT 1', groupId);
+  if (existing) return existing;
+  const timestamp = now();
+  await db.runAsync('INSERT OR IGNORE INTO loan_policy_settings (group_id, updated_at) VALUES (?, ?)', groupId, timestamp);
+  return (await db.getFirstAsync<LoanPolicySettings>('SELECT * FROM loan_policy_settings WHERE group_id = ? LIMIT 1', groupId))!;
+}
+
+export async function updateLoanPolicySettings(
+  groupId: number,
+  chairpersonMemberId: number,
+  passcode: string,
+  settings: Partial<Omit<LoanPolicySettings, 'group_id' | 'updated_at'>>,
+): Promise<LoanPolicySettings> {
+  const db = await getDatabase();
+  const verification = await verifyMemberPasscode(chairpersonMemberId, groupId, passcode);
+  if (!verification.success) throw new Error('Chairperson passcode could not be verified.');
+  const chair = await db.getFirstAsync<{ assigned_roles: string | null; is_super_user: number | null; status: string }>(
+    'SELECT assigned_roles, is_super_user, status FROM members WHERE id = ? AND group_id = ? LIMIT 1', chairpersonMemberId, groupId,
+  );
+  const chairRoles = (chair?.assigned_roles || '').split(',').map((value: string) => value.trim().toLowerCase());
+  if (!chair || chair.status !== 'active' || (!Number(chair.is_super_user) && !chairRoles.includes('chairperson'))) throw new Error('Only the assigned Chairperson can change loan policy settings.');
+  const current = await getLoanPolicySettings(groupId);
+  const method = settings.default_interest_method ?? current.default_interest_method;
+  const requiredApprovals = settings.minimum_committee_approvals ?? current.minimum_committee_approvals;
+  if (!['fixed', 'flat', 'declining'].includes(method)) throw new Error('Invalid default interest method.');
+  if (!Number.isInteger(requiredApprovals) || requiredApprovals < 1 || requiredApprovals > 20) throw new Error('Minimum committee approvals must be between 1 and 20.');
+  const timestamp = now();
+  await db.runAsync(
+    `UPDATE loan_policy_settings SET default_interest_method = ?, require_committee_approval = ?,
+      minimum_committee_approvals = ?, require_guarantor = ?, allow_member_savings_deduction = ?,
+      allow_guarantor_deduction = ?, updated_at = ? WHERE group_id = ?`,
+    method,
+    settings.require_committee_approval ?? current.require_committee_approval,
+    requiredApprovals,
+    settings.require_guarantor ?? current.require_guarantor,
+    settings.allow_member_savings_deduction ?? current.allow_member_savings_deduction,
+    settings.allow_guarantor_deduction ?? current.allow_guarantor_deduction,
+    timestamp, groupId,
+  );
+  await addLoanAudit(db, groupId, null, chairpersonMemberId, 'loan_policy_updated', {
+    defaultInterestMethod: method,
+    requireCommitteeApproval: settings.require_committee_approval ?? current.require_committee_approval,
+    minimumCommitteeApprovals: requiredApprovals,
+    requireGuarantor: settings.require_guarantor ?? current.require_guarantor,
+    allowMemberSavingsDeduction: settings.allow_member_savings_deduction ?? current.allow_member_savings_deduction,
+    allowGuarantorDeduction: settings.allow_guarantor_deduction ?? current.allow_guarantor_deduction,
+  });
+  return (await getLoanPolicySettings(groupId));
+}
+
+export type LoanApplicationInput = {
+  requestedAmount: number;
+  interestMethod: LoanInterestMethod;
+  interestRate: number;
+  repaymentPeriodCount: number;
+  repaymentPeriodUnit: LoanRepaymentPeriodUnit;
+  requestedDueDate?: string | null;
+  reason: string;
+  requestedByMemberId?: number | null;
+};
+
+export async function createLoanApplication(
+  groupId: number,
+  memberId: number,
+  meetingId: number,
+  input: LoanApplicationInput,
+): Promise<number> {
+  const db = await getDatabase();
+  if (!Number.isFinite(input.requestedAmount) || input.requestedAmount <= 0) throw new Error('Requested loan amount must be greater than zero.');
+  if (!['fixed', 'flat', 'declining'].includes(input.interestMethod)) throw new Error('Choose a supported interest method.');
+  if (!Number.isFinite(input.interestRate) || input.interestRate < 0) throw new Error('Interest rate cannot be negative.');
+  if (!Number.isInteger(input.repaymentPeriodCount) || input.repaymentPeriodCount < 1 || input.repaymentPeriodCount > 120) throw new Error('Repayment period must be between 1 and 120 periods.');
+  if (!['weeks', 'months'].includes(input.repaymentPeriodUnit)) throw new Error('Choose weeks or months.');
+  if (input.requestedDueDate && (!/^\d{4}-\d{2}-\d{2}$/.test(input.requestedDueDate) || Number.isNaN(new Date(`${input.requestedDueDate}T00:00:00`).getTime()))) throw new Error('Enter a valid due date in YYYY-MM-DD format.');
+  await requireMemberPresentForLoan(db, groupId, memberId, meetingId);
+  const freeze = await isLoanDisbursementFrozen(groupId, memberId);
+  if (freeze) throw new Error('Loan applications are currently frozen by the Chairperson.');
+  const setup = await getVSLASetupRules(groupId);
+  const savings = await getMemberSavings(groupId, memberId);
+  const currentLoan = await getMemberLoanBalance(groupId, memberId);
+  const maximumAdditionalLoan = Math.max(0, savings * Number(setup?.maximum_loan_multiple ?? 3) - currentLoan.balance);
+  if (input.requestedAmount > maximumAdditionalLoan) throw new Error(`Requested amount exceeds the member's additional loan limit of ${maximumAdditionalLoan.toLocaleString()}.`);
+  const fund = await getFinancialAccount(groupId, 'loan_fund');
+  if (!fund || Number(fund.balance) < input.requestedAmount) throw new Error('The Loan Fund does not have enough available money for this application.');
+  const policy = await getLoanPolicySettings(groupId);
+  if (input.requestedByMemberId != null) {
+    const requester = await db.getFirstAsync<{ group_id: number; status: string; assigned_roles: string | null; is_super_user: number | null }>(
+      'SELECT group_id, status, assigned_roles, is_super_user FROM members WHERE id = ? LIMIT 1', input.requestedByMemberId,
+    );
+    if (!requester || Number(requester.group_id) !== groupId || requester.status !== 'active') throw new Error('The person submitting the application must be an active member of this group.');
+    if (input.requestedByMemberId !== memberId) {
+      const roles = (requester.assigned_roles || '').split(',').map((role: string) => canonicalExecutivePost(role));
+      if (!Number(requester.is_super_user) && !roles.some((role) => role && EXECUTIVE_POSTS.includes(role as (typeof EXECUTIVE_POSTS)[number]))) throw new Error('Only the borrower or an active group executive can submit this loan application.');
+    }
+  }
+  const timestamp = now();
+  const result = await db.runAsync(
+    `INSERT INTO loan_applications (
+      group_id, member_id, meeting_id, requested_amount, interest_method, interest_rate,
+      repayment_period_count, repayment_period_unit, requested_due_date, reason, status,
+      requested_by_member_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+    groupId, memberId, meetingId, input.requestedAmount, input.interestMethod, input.interestRate,
+    input.repaymentPeriodCount, input.repaymentPeriodUnit, input.requestedDueDate ?? null,
+    normalizeText(input.reason), input.requestedByMemberId ?? null, timestamp, timestamp,
+  );
+  await addLoanAudit(db, groupId, null, input.requestedByMemberId ?? null, 'loan_application_created', {
+    applicationId: result.lastInsertRowId, memberId, requestedAmount: input.requestedAmount,
+    interestMethod: input.interestMethod, interestRate: input.interestRate,
+    repaymentPeriodCount: input.repaymentPeriodCount, repaymentPeriodUnit: input.repaymentPeriodUnit,
+    committeeApprovalRequired: Boolean(policy.require_committee_approval),
+    guarantorRequired: Boolean(policy.require_guarantor),
+  });
+  return result.lastInsertRowId;
+}
+
+export async function getLoanApplication(applicationId: number): Promise<Record<string, unknown> | null> {
+  const db = await getDatabase();
+  return (await db.getFirstAsync<Record<string, unknown>>('SELECT * FROM loan_applications WHERE id = ? LIMIT 1', applicationId)) ?? null;
+}
+
+export async function getLoanApplicationGuarantors(applicationId: number): Promise<Array<Record<string, unknown>>> {
+  const db = await getDatabase();
+  return db.getAllAsync(`SELECT g.*, m.full_name, m.member_number FROM loan_guarantors g JOIN members m ON m.id = g.guarantor_member_id WHERE g.application_id = ? ORDER BY g.created_at`, applicationId);
+}
+
+export async function getLoanApplicationApprovals(applicationId: number): Promise<Array<Record<string, unknown>>> {
+  const db = await getDatabase();
+  return db.getAllAsync(`SELECT a.*, m.full_name, m.member_number FROM loan_committee_approvals a JOIN members m ON m.id = a.approver_member_id WHERE a.application_id = ? ORDER BY a.decided_at`, applicationId);
+}
+
+export async function refreshLoanApplicationDecision(applicationId: number): Promise<'pending' | 'approved' | 'rejected'> {
+  const db = await getDatabase();
+  const application = await db.getFirstAsync<{ id: number; group_id: number; member_id: number; status: string }>('SELECT id, group_id, member_id, status FROM loan_applications WHERE id = ? LIMIT 1', applicationId);
+  if (!application) throw new Error('Loan application not found.');
+  if (application.status !== 'pending') return application.status as 'approved' | 'rejected';
+  const policy = await getLoanPolicySettings(application.group_id);
+  const approvals = await db.getFirstAsync<{ count: number }>(`SELECT COUNT(*) AS count FROM loan_committee_approvals WHERE application_id = ? AND decision = 'approved' AND passcode_verified = 1`, applicationId);
+  const rejected = await db.getFirstAsync<{ count: number }>(`SELECT COUNT(*) AS count FROM loan_committee_approvals WHERE application_id = ? AND decision = 'rejected' AND passcode_verified = 1`, applicationId);
+  const guarantors = await db.getFirstAsync<{ count: number }>(`SELECT COUNT(*) AS count FROM loan_guarantors WHERE application_id = ? AND status = 'active' AND passcode_verified = 1`, applicationId);
+  let status: 'pending' | 'approved' | 'rejected' = 'pending';
+  if (Number(rejected?.count ?? 0) > 0) status = 'rejected';
+  else if ((!Number(policy.require_committee_approval) || Number(approvals?.count ?? 0) >= Number(policy.minimum_committee_approvals)) && (!Number(policy.require_guarantor) || Number(guarantors?.count ?? 0) >= 1)) status = 'approved';
+  if (status !== 'pending') {
+    const timestamp = now();
+    await db.runAsync('UPDATE loan_applications SET status = ?, reviewed_at = ?, updated_at = ? WHERE id = ? AND status = \'pending\'', status, timestamp, timestamp, applicationId);
+    await addLoanAudit(db, application.group_id, null, null, 'loan_application_decided', { applicationId, status, approvals: Number(approvals?.count ?? 0), guarantors: Number(guarantors?.count ?? 0) });
+  }
+  return status;
+}
+
+export async function getLoanContract(loanId: number): Promise<LoanContractRecord | null> {
+  const db = await getDatabase();
+  return (await db.getFirstAsync<LoanContractRecord>('SELECT * FROM loan_records WHERE id = ? LIMIT 1', loanId)) ?? null;
+}
+
+export async function getLoanRepaymentSchedule(loanId: number): Promise<Array<Record<string, unknown>>> {
+  const db = await getDatabase();
+  return db.getAllAsync(`SELECT * FROM loan_repayment_schedule WHERE loan_id = ? ORDER BY installment_number`, loanId);
+}
+
+export async function saveLoanGuarantorSignature(
+  applicationId: number,
+  guarantorMemberId: number,
+  guaranteeAmount: number,
+  passcode: string,
+): Promise<number> {
+  const db = await getDatabase();
+  const application = await db.getFirstAsync<{ id: number; group_id: number; member_id: number; status: string }>(
+    'SELECT id, group_id, member_id, status FROM loan_applications WHERE id = ? LIMIT 1', applicationId,
+  );
+  if (!application) throw new Error('Loan application not found.');
+  if (application.status !== 'pending') throw new Error('Guarantors can only sign while the loan application is pending.');
+  if (guarantorMemberId === application.member_id) throw new Error('The borrower cannot guarantee their own loan.');
+  if (!Number.isFinite(guaranteeAmount) || guaranteeAmount <= 0) throw new Error('Guarantee amount must be greater than zero.');
+  const guarantor = await db.getFirstAsync<{ id: number; group_id: number; status: string }>(
+    'SELECT id, group_id, status FROM members WHERE id = ? LIMIT 1', guarantorMemberId,
+  );
+  if (!guarantor || Number(guarantor.group_id) !== application.group_id || guarantor.status !== 'active') throw new Error('Choose an active guarantor from the same group.');
+  const verification = await verifyMemberPasscode(guarantorMemberId, application.group_id, passcode);
+  if (!verification.success) throw new Error('Guarantor passcode could not be verified. Ask the guarantor to unlock their account or check their passcode.');
+
+  const timestamp = now();
+  const existing = await db.getFirstAsync<{ id: number }>(
+    'SELECT id FROM loan_guarantors WHERE application_id = ? AND guarantor_member_id = ? LIMIT 1', applicationId, guarantorMemberId,
+  );
+  if (existing) {
+    await db.runAsync(
+      `UPDATE loan_guarantors SET guarantee_amount = ?, passcode_verified = 1, signed_at = ?, status = 'active', updated_at = ? WHERE id = ?`,
+      guaranteeAmount, timestamp, timestamp, existing.id,
+    );
+    await addLoanAudit(db, application.group_id, null, guarantorMemberId, 'guarantor_signature_updated', { applicationId, guarantorMemberId, guaranteeAmount });
+    await refreshLoanApplicationDecision(applicationId);
+    return existing.id;
+  }
+  const result = await db.runAsync(
+    `INSERT INTO loan_guarantors (application_id, group_id, guarantor_member_id, guarantee_amount, signature_method, passcode_verified, signed_at, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'member_passcode', 1, ?, 'active', ?, ?)`,
+    applicationId, application.group_id, guarantorMemberId, guaranteeAmount, timestamp, timestamp, timestamp,
+  );
+  await addLoanAudit(db, application.group_id, null, guarantorMemberId, 'guarantor_signed', { applicationId, guarantorMemberId, guaranteeAmount, signatureMethod: 'member_passcode' });
+  await refreshLoanApplicationDecision(applicationId);
+  return result.lastInsertRowId;
+}
+
+export async function assignLoanCommitteeMember(
+  groupId: number,
+  chairpersonMemberId: number,
+  passcode: string,
+  targetMemberId: number,
+  assigned: boolean,
+): Promise<void> {
+  const db = await getDatabase();
+  const verification = await verifyMemberPasscode(chairpersonMemberId, groupId, passcode);
+  if (!verification.success) throw new Error('Chairperson passcode could not be verified.');
+  const chair = await db.getFirstAsync<{ assigned_roles: string | null; is_super_user: number | null; status: string }>(
+    'SELECT assigned_roles, is_super_user, status FROM members WHERE id = ? AND group_id = ? LIMIT 1', chairpersonMemberId, groupId,
+  );
+  const roles = (chair?.assigned_roles || '').split(',').map((value: string) => value.trim().toLowerCase());
+  if (!chair || chair.status !== 'active' || (!Number(chair.is_super_user) && !roles.includes('chairperson'))) throw new Error('Only the assigned Chairperson can manage the loan committee.');
+  const target = await db.getFirstAsync<{ group_id: number; status: string }>('SELECT group_id, status FROM members WHERE id = ? LIMIT 1', targetMemberId);
+  if (!target || Number(target.group_id) !== groupId || target.status !== 'active') throw new Error('Loan committee members must be active members of this group.');
+  const timestamp = now();
+  if (assigned) {
+    await db.runAsync(
+      `INSERT INTO loan_committee_members (group_id, member_id, assigned_by_member_id, status, assigned_at, updated_at)
+       VALUES (?, ?, ?, 'active', ?, ?)
+       ON CONFLICT(group_id, member_id) DO UPDATE SET status = 'active', assigned_by_member_id = excluded.assigned_by_member_id, assigned_at = excluded.assigned_at, updated_at = excluded.updated_at`,
+      groupId, targetMemberId, chairpersonMemberId, timestamp, timestamp,
+    );
+  } else {
+    await db.runAsync("UPDATE loan_committee_members SET status = 'inactive', updated_at = ? WHERE group_id = ? AND member_id = ?", timestamp, groupId, targetMemberId);
+  }
+  await addLoanAudit(db, groupId, null, chairpersonMemberId, assigned ? 'loan_committee_member_assigned' : 'loan_committee_member_removed', { targetMemberId });
+}
+
+export async function getLoanCommitteeMembers(groupId: number): Promise<Array<Record<string, unknown>>> {
+  const db = await getDatabase();
+  return db.getAllAsync(
+    `SELECT cm.*, m.full_name, m.member_number FROM loan_committee_members cm
+     JOIN members m ON m.id = cm.member_id
+     WHERE cm.group_id = ? AND cm.status = 'active' AND m.status = 'active'
+     ORDER BY m.full_name COLLATE NOCASE`, groupId,
+  );
+}
+
+export async function recordLoanCommitteeDecision(
+  applicationId: number,
+  approverMemberId: number,
+  decision: 'approved' | 'rejected',
+  passcode: string,
+  note = '',
+): Promise<number> {
+  const db = await getDatabase();
+  const application = await db.getFirstAsync<{ id: number; group_id: number; member_id: number; status: string }>(
+    'SELECT id, group_id, member_id, status FROM loan_applications WHERE id = ? LIMIT 1', applicationId,
+  );
+  if (!application) throw new Error('Loan application not found.');
+  if (application.status !== 'pending') throw new Error('Only pending loan applications can receive committee decisions.');
+  if (approverMemberId === application.member_id) throw new Error('The borrower cannot approve their own loan.');
+  if (!['approved', 'rejected'].includes(decision)) throw new Error('Choose approve or reject.');
+  const committeeMember = await db.getFirstAsync<{ id: number }>(
+    `SELECT id FROM loan_committee_members WHERE group_id = ? AND member_id = ? AND status = 'active' LIMIT 1`,
+    application.group_id, approverMemberId,
+  );
+  if (!committeeMember) throw new Error('Only a currently assigned loan committee member can approve or reject this application.');
+  const verification = await verifyMemberPasscode(approverMemberId, application.group_id, passcode);
+  if (!verification.success) throw new Error('Approver passcode could not be verified.');
+  const member = await db.getFirstAsync<{ status: string; group_id: number }>('SELECT status, group_id FROM members WHERE id = ? LIMIT 1', approverMemberId);
+  if (!member || Number(member.group_id) !== application.group_id || member.status !== 'active') throw new Error('Approver must be an active member of the same group.');
+  const timestamp = now();
+  const existing = await db.getFirstAsync<{ id: number }>('SELECT id FROM loan_committee_approvals WHERE application_id = ? AND approver_member_id = ? LIMIT 1', applicationId, approverMemberId);
+  if (existing) {
+    await db.runAsync('UPDATE loan_committee_approvals SET decision = ?, note = ?, passcode_verified = 1, decided_at = ? WHERE id = ?', decision, normalizeText(note), timestamp, existing.id);
+    await addLoanAudit(db, application.group_id, null, approverMemberId, 'committee_decision_updated', { applicationId, decision, note: normalizeText(note) });
+    await refreshLoanApplicationDecision(applicationId);
+    return existing.id;
+  }
+  const result = await db.runAsync(
+    `INSERT INTO loan_committee_approvals (application_id, group_id, approver_member_id, decision, note, passcode_verified, decided_at)
+     VALUES (?, ?, ?, ?, ?, 1, ?)`,
+    applicationId, application.group_id, approverMemberId, decision, normalizeText(note), timestamp,
+  );
+  await addLoanAudit(db, application.group_id, null, approverMemberId, 'committee_decision_recorded', { applicationId, decision, note: normalizeText(note) });
+  await refreshLoanApplicationDecision(applicationId);
+  return result.lastInsertRowId;
+}
+
+export async function createLoanDeductionRequest(
+  loanId: number,
+  sourceType: 'member_savings' | 'guarantor',
+  sourceMemberId: number,
+  amount: number,
+  requestedByMemberId: number,
+  reason: string,
+): Promise<number> {
+  const db = await getDatabase();
+  const loan = await getLoanContract(loanId);
+  if (!loan) throw new Error('Loan contract not found.');
+  if (!['member_savings', 'guarantor'].includes(sourceType)) throw new Error('Invalid loan deduction source.');
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('Deduction amount must be greater than zero.');
+  const policy = await getLoanPolicySettings(loan.group_id);
+  if (sourceType === 'member_savings' && !Number(policy.allow_member_savings_deduction)) throw new Error('This group has not enabled deductions from member savings.');
+  if (sourceType === 'guarantor' && !Number(policy.allow_guarantor_deduction)) throw new Error('This group has not enabled guarantor deductions.');
+  const requester = await db.getFirstAsync<{ group_id: number; status: string }>('SELECT group_id, status FROM members WHERE id = ? LIMIT 1', requestedByMemberId);
+  if (!requester || Number(requester.group_id) !== loan.group_id || requester.status !== 'active') throw new Error('The person requesting the deduction must be an active member of this group.');
+  const source = await db.getFirstAsync<{ group_id: number; status: string }>('SELECT group_id, status FROM members WHERE id = ? LIMIT 1', sourceMemberId);
+  if (!source || Number(source.group_id) !== loan.group_id || source.status !== 'active') throw new Error('Deduction source must be an active member of the same group.');
+  if (sourceType === 'member_savings' && sourceMemberId !== loan.member_id) throw new Error('Savings deductions can only be requested from the borrower unless a separate guarantor recovery is authorized.');
+  if (sourceType === 'guarantor') {
+    const guarantor = await db.getFirstAsync<{ id: number; guarantee_amount: number }>(
+      `SELECT g.id, g.guarantee_amount FROM loan_guarantors g
+       JOIN loan_records lr ON lr.application_id = g.application_id
+       WHERE lr.id = ? AND g.guarantor_member_id = ? AND g.status = 'active' AND g.passcode_verified = 1 LIMIT 1`,
+      loanId, sourceMemberId,
+    );
+    if (!guarantor) throw new Error('A verified active guarantor signature is required before requesting a guarantor deduction.');
+    if (amount > Number(guarantor.guarantee_amount)) throw new Error('The requested deduction exceeds this guarantor’s signed guarantee amount.');
+  }
+  const timestamp = now();
+  const result = await db.runAsync(
+    `INSERT INTO loan_deductions (loan_id, group_id, source_type, source_member_id, amount, status, reason, requested_by_member_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+    loanId, loan.group_id, sourceType, sourceMemberId, amount, normalizeText(reason), requestedByMemberId, timestamp, timestamp,
+  );
+  await addLoanAudit(db, loan.group_id, loanId, requestedByMemberId, 'loan_deduction_requested', { sourceType, sourceMemberId, amount, reason: normalizeText(reason) });
+  return result.lastInsertRowId;
+}
+
+export async function setChairpersonEmergencyLoanFreeze(
+  groupId: number,
+  chairpersonMemberId: number,
+  passcode: string,
+  reason: string,
+  memberId: number | null = null,
+): Promise<number> {
+  const db = await getDatabase();
+  if (!reason.trim()) throw new Error('A reason is required for an emergency loan freeze.');
+  const verification = await verifyMemberPasscode(chairpersonMemberId, groupId, passcode);
+  if (!verification.success) throw new Error('Chairperson passcode could not be verified.');
+  const chair = await db.getFirstAsync<{ assigned_roles: string | null; is_super_user: number | null; status: string }>(
+    'SELECT assigned_roles, is_super_user, status FROM members WHERE id = ? AND group_id = ? LIMIT 1', chairpersonMemberId, groupId,
+  );
+  const roles = (chair?.assigned_roles || '').split(',').map((value) => value.trim().toLowerCase());
+  if (!chair || chair.status !== 'active' || (!Number(chair.is_super_user) && !roles.includes('chairperson'))) throw new Error('Only the assigned Chairperson can authorize an emergency loan freeze.');
+  if (memberId !== null) {
+    const target = await db.getFirstAsync<{ group_id: number; status: string }>('SELECT group_id, status FROM members WHERE id = ? LIMIT 1', memberId);
+    if (!target || Number(target.group_id) !== groupId || target.status !== 'active') throw new Error('Choose an active member from this group for an individual freeze.');
+  }
+  const timestamp = now();
+  const result = await db.runAsync(
+    `INSERT INTO loan_emergency_freezes (group_id, member_id, reason, authorized_by_member_id, authorized_at, status, created_at)
+     VALUES (?, ?, ?, ?, ?, 'active', ?)`,
+    groupId, memberId, normalizeText(reason), chairpersonMemberId, timestamp, timestamp,
+  );
+  await addLoanAudit(db, groupId, null, chairpersonMemberId, 'emergency_loan_freeze_started', { memberId, reason: normalizeText(reason) });
+  return result.lastInsertRowId;
+}
+
+export async function endChairpersonEmergencyLoanFreeze(
+  freezeId: number,
+  chairpersonMemberId: number,
+  passcode: string,
+  reason: string,
+): Promise<void> {
+  const db = await getDatabase();
+  const freeze = await db.getFirstAsync<{ id: number; group_id: number; status: string }>('SELECT id, group_id, status FROM loan_emergency_freezes WHERE id = ? LIMIT 1', freezeId);
+  if (!freeze || freeze.status !== 'active') throw new Error('No active emergency loan freeze was found.');
+  if (!reason.trim()) throw new Error('A reason is required to end the freeze.');
+  const verification = await verifyMemberPasscode(chairpersonMemberId, freeze.group_id, passcode);
+  if (!verification.success) throw new Error('Chairperson passcode could not be verified.');
+  const chair = await db.getFirstAsync<{ assigned_roles: string | null; is_super_user: number | null; status: string }>('SELECT assigned_roles, is_super_user, status FROM members WHERE id = ? AND group_id = ? LIMIT 1', chairpersonMemberId, freeze.group_id);
+  const roles = (chair?.assigned_roles || '').split(',').map((value) => value.trim().toLowerCase());
+  if (!chair || chair.status !== 'active' || (!Number(chair.is_super_user) && !roles.includes('chairperson'))) throw new Error('Only the assigned Chairperson can end an emergency loan freeze.');
+  const timestamp = now();
+  await db.runAsync('UPDATE loan_emergency_freezes SET status = \'ended\', ended_by_member_id = ?, ended_at = ?, end_reason = ? WHERE id = ? AND status = \'active\'', chairpersonMemberId, timestamp, normalizeText(reason), freezeId);
+  await addLoanAudit(db, freeze.group_id, null, chairpersonMemberId, 'emergency_loan_freeze_ended', { freezeId, reason: normalizeText(reason) });
+}
+
+export async function getActiveLoanFreezes(groupId: number): Promise<Array<Record<string, unknown>>> {
+  const db = await getDatabase();
+  return db.getAllAsync(
+    `SELECT f.*, target.full_name AS target_member_name, chair.full_name AS chairperson_name
+     FROM loan_emergency_freezes f
+     LEFT JOIN members target ON target.id = f.member_id
+     JOIN members chair ON chair.id = f.authorized_by_member_id
+     WHERE f.group_id = ? AND f.status = 'active' ORDER BY f.authorized_at DESC`, groupId,
+  );
+}
+
+export async function isLoanDisbursementFrozen(groupId: number, memberId?: number): Promise<boolean> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ id: number }>(
+    `SELECT id FROM loan_emergency_freezes
+     WHERE group_id = ? AND status = 'active'
+       AND (member_id IS NULL OR member_id = ?)
+     LIMIT 1`, groupId, memberId ?? -1,
+  );
+  return Boolean(row);
 }
 
 export async function recordLoanRepayment(
@@ -5045,15 +6011,79 @@ export async function recordLoanRepayment(
     );
   }
 
-  return recordFinancialIncome(
-    groupId,
-    'loan_repayment',
-    amount,
-    reason,
-    memberId,
-    meetingId,
-    'loan_repayment',
-  );
+  const db = await getDatabase();
+  if (!normalizeText(reason)) throw new Error('A reason is required for every financial transaction.');
+  await ensureFinancialAccountsForGroup(db, groupId);
+  const timestamp = now();
+  await db.execAsync('BEGIN TRANSACTION;');
+  try {
+    const result = await db.runAsync(
+      `INSERT INTO financial_transactions (
+        group_id, account_type, amount, reason, member_id, meeting_id,
+        transaction_type, reversed_transaction_id, reversed, created_at
+      ) VALUES (?, 'loan_repayment', ?, ?, ?, ?, 'loan_repayment', NULL, 0, ?)`,
+      groupId, amount, normalizeText(reason), memberId, meetingId, timestamp,
+    );
+    const transactionId = result.lastInsertRowId;
+    await db.runAsync(
+      `UPDATE financial_accounts SET balance = balance + ?, updated_at = ?
+       WHERE group_id = ? AND account_type = 'loan_repayment'`,
+      amount, timestamp, groupId,
+    );
+    await addPassbookEntry(db, groupId, memberId, meetingId, transactionId, 'loan_repayment', amount, reason, timestamp);
+
+    // Apply the payment to the oldest scheduled installments first, interest then principal.
+    let remainingPayment = amount;
+    const installments = await db.getAllAsync<{
+      id: number; loan_id: number; interest_due: number; interest_paid: number;
+      principal_due: number; principal_paid: number; due_date: string; installment_number: number;
+    }>(
+      `SELECT s.id, s.loan_id, s.interest_due, s.interest_paid, s.principal_due, s.principal_paid, s.due_date, s.installment_number
+       FROM loan_repayment_schedule s
+       JOIN loan_records lr ON lr.id = s.loan_id
+       WHERE lr.group_id = ? AND lr.member_id = ? AND lr.status = 'active'
+         AND (s.interest_paid < s.interest_due OR s.principal_paid < s.principal_due)
+       ORDER BY s.due_date ASC, lr.issue_date ASC, s.installment_number ASC`,
+      groupId, memberId,
+    );
+    const affectedLoanIds = new Set<number>();
+    for (const installment of installments) {
+      if (remainingPayment <= 0) break;
+      let interestPaid = Number(installment.interest_paid) || 0;
+      let principalPaid = Number(installment.principal_paid) || 0;
+      const interestOutstanding = Math.max(0, Number(installment.interest_due) - interestPaid);
+      const interestPayment = Math.min(remainingPayment, interestOutstanding);
+      interestPaid += interestPayment;
+      remainingPayment -= interestPayment;
+      const principalOutstanding = Math.max(0, Number(installment.principal_due) - principalPaid);
+      const principalPayment = Math.min(remainingPayment, principalOutstanding);
+      principalPaid += principalPayment;
+      remainingPayment -= principalPayment;
+      const fullyPaid = interestPaid + 0.000001 >= Number(installment.interest_due)
+        && principalPaid + 0.000001 >= Number(installment.principal_due);
+      const partiallyPaid = interestPaid > 0 || principalPaid > 0;
+      await db.runAsync(
+        `UPDATE loan_repayment_schedule SET interest_paid = ?, principal_paid = ?, status = ?, updated_at = ? WHERE id = ?`,
+        interestPaid, principalPaid, fullyPaid ? 'paid' : partiallyPaid ? 'partial' : 'pending', timestamp, installment.id,
+      );
+      affectedLoanIds.add(Number(installment.loan_id));
+    }
+    for (const loanId of affectedLoanIds) {
+      const unpaid = await db.getFirstAsync<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM loan_repayment_schedule
+         WHERE loan_id = ? AND (interest_paid + 0.000001 < interest_due OR principal_paid + 0.000001 < principal_due)`, loanId,
+      );
+      if (Number(unpaid?.count ?? 0) === 0) {
+        await db.runAsync(`UPDATE loan_records SET status = 'paid', updated_at = ? WHERE id = ? AND status = 'active'`, timestamp, loanId);
+      }
+    }
+    await db.runAsync("UPDATE groups SET status = 'active', last_activity_at = ? WHERE id = ?", timestamp, groupId);
+    await db.execAsync('COMMIT;');
+    return transactionId;
+  } catch (error) {
+    await db.execAsync('ROLLBACK;');
+    throw error;
+  }
 }
 
 export async function getMemberLoanBalance(
@@ -5092,12 +6122,14 @@ export async function getMemberLoanBalance(
 
   const interestCharges =
     await db.getFirstAsync<{ total: number }>(
-      `SELECT COALESCE(SUM(interest_amount), 0) AS total
-       FROM loan_interest_charges
-       WHERE group_id = ?
-         AND member_id = ?`,
-      groupId,
-      memberId,
+      `SELECT
+         COALESCE((SELECT SUM(lic.interest_amount) FROM loan_interest_charges lic
+           WHERE lic.group_id = ? AND lic.member_id = ?), 0)
+         + COALESCE((SELECT SUM(lr.total_interest) FROM loan_records lr
+           JOIN financial_transactions lft ON lft.id = lr.disbursement_transaction_id
+           WHERE lr.group_id = ? AND lr.member_id = ? AND lr.status != 'cancelled' AND lft.reversed = 0), 0)
+         AS total`,
+      groupId, memberId, groupId, memberId,
     );
 
   const principal = issued?.total ?? 0;
