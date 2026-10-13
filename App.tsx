@@ -64,6 +64,8 @@ export type RootStackParamList = {
   FinancialTransactions: {
     groupId: number;
     meetingId: number;
+    executiveMemberId?: number;
+    currency?: string;
   };
 
   Savings: {
