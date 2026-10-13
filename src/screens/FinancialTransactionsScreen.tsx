@@ -40,6 +40,7 @@ type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 interface RouteParams {
   groupId?: number;
   meetingId?: number | null;
+  executiveMemberId?: number;
   currency?: string;
 }
 
@@ -91,6 +92,7 @@ export default function FinancialTransactionsScreen() {
       : Number(params.meetingId);
 
   const currency = params.currency?.trim() || 'UGX';
+  const executiveMemberId = params.executiveMemberId == null ? undefined : Number(params.executiveMemberId);
 
   const [meetingId, setMeetingId] = useState<number | null>(
     suppliedMeetingId,
@@ -963,6 +965,7 @@ export default function FinancialTransactionsScreen() {
               navigation.navigate('LoanDisbursement', {
                 groupId,
                 meetingId,
+                executiveMemberId,
                 currency,
               })
             }
