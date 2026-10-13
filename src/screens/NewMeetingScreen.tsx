@@ -24,6 +24,7 @@ import {
   closeMeeting,
   approveMeetingSummary,
   getMeetingCashReconciliation,
+  applyMeetingDayLoanInterest,
 } from '../database/database';
 import { exportDatabaseBackup } from '../database/backup';
 
@@ -129,6 +130,26 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
     }
     setOpenMeeting(meeting);
     setBackupReceipt((current) => current && current.meetingId === Number(meeting.id) ? current : null);
+
+    // Run once per meeting before roll call; the database uses a unique
+    // (group, member, meeting) key so reopening the meeting cannot duplicate charges.
+    try {
+      const interestResult = await applyMeetingDayLoanInterest(groupId, Number(meeting.id));
+      if (interestResult.chargedMembers > 0) {
+        Alert.alert('Meeting Interest Recorded', interestResult.message);
+      } else if (interestResult.skippedByPeriod) {
+        Alert.alert('Meeting Interest Paused', interestResult.message);
+      }
+    } catch (interestError) {
+      // A calculation problem must be visible but must not leave a newly opened meeting stranded.
+      Alert.alert(
+        'Meeting Interest Not Applied',
+        interestError instanceof Error
+          ? `${interestError.message} The meeting can continue; review interest before closing.`
+          : 'Meeting interest could not be applied. The meeting can continue; review interest before closing.',
+      );
+    }
+
     navigation.navigate('MeetingRollCall', {
       groupId,
       meetingId: Number(meeting.id),
