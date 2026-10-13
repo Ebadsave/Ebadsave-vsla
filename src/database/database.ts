@@ -83,6 +83,7 @@ export type VSLASetupRuleRecord = {
   allow_external_fund_for_loans: number;
   allow_fines_for_loans: number;
   meeting_frequency: string;
+  meeting_start_date: string | null;
   cycle_duration_months: number;
   leadership_term_months: number;
   share_out_enabled: number;
@@ -264,6 +265,7 @@ export type VSLASetupRuleUpdates = {
   allowExternalFundForLoans?: boolean | number;
   allowFinesForLoans?: boolean | number;
   meetingFrequency?: string;
+  meetingStartDate?: string | null;
   cycleDurationMonths?: number;
   leadershipTermMonths?: number;
   shareOutEnabled?: boolean | number;
@@ -1044,6 +1046,7 @@ status TEXT NOT NULL DEFAULT 'active',
       allow_external_fund_for_loans INTEGER NOT NULL DEFAULT 0,
       allow_fines_for_loans INTEGER NOT NULL DEFAULT 1,
       meeting_frequency TEXT NOT NULL DEFAULT 'weekly',
+      meeting_start_date TEXT,
       cycle_duration_months INTEGER NOT NULL DEFAULT 12,
       leadership_term_months INTEGER NOT NULL DEFAULT 12,
       share_out_enabled INTEGER NOT NULL DEFAULT 1,
@@ -1356,6 +1359,27 @@ status TEXT NOT NULL DEFAULT 'active',
   FOREIGN KEY (group_id) REFERENCES groups(id),
   FOREIGN KEY (member_id) REFERENCES members(id)
 );
+
+
+    CREATE TABLE IF NOT EXISTS meeting_loan_interest_charges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      member_id INTEGER NOT NULL,
+      meeting_id INTEGER NOT NULL,
+      charge_date TEXT NOT NULL,
+      opening_balance REAL NOT NULL,
+      interest_percentage REAL NOT NULL,
+      interest_method TEXT NOT NULL CHECK (interest_method IN ('fixed', 'flat', 'declining')),
+      interest_amount REAL NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(group_id, member_id, meeting_id),
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (member_id) REFERENCES members(id),
+      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_meeting_interest_member_date
+      ON meeting_loan_interest_charges(group_id, member_id, charge_date);
 
 
     /* Persistent loan contracts and advanced-loan workflow. These tables are
@@ -1797,6 +1821,13 @@ status TEXT NOT NULL DEFAULT 'active',
 
   await addColumnIfMissing(
     db,
+    'vsla_setup_rules',
+    'meeting_start_date',
+    'TEXT',
+  );
+
+  await addColumnIfMissing(
+    db,
     'financial_transactions',
     'collection_id',
     'INTEGER',
@@ -1895,7 +1926,7 @@ const BACKUP_TABLES = [
   'financial_transactions', 'financial_transaction_reversals', 'receipts',
   'notification_queue', 'notification_delivery', 'meeting_audit_records',
   'sync_queue', 'member_passbook_records', 'member_statement_records',
-  'loan_interest_charges', 'loan_policy_settings', 'loan_committee_members', 'loan_applications',
+  'loan_interest_charges', 'meeting_loan_interest_charges', 'loan_policy_settings', 'loan_committee_members', 'loan_applications',
   'loan_records', 'loan_repayment_schedule', 'loan_guarantors',
   'loan_committee_approvals', 'loan_deductions',
   'loan_emergency_freezes', 'loan_audit_log',
@@ -2904,6 +2935,175 @@ export async function getVSLASetupRules(
   return rules ?? null;
 }
 
+export type MeetingDayInterestResult = {
+  meetingId: number;
+  meetingDate: string;
+  checkedMembers: number;
+  chargedMembers: number;
+  totalInterest: number;
+  skippedByPeriod: boolean;
+  message: string;
+};
+
+function dateOnly(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const match = String(value).match(/^(\d{4}-\d{2}-\d{2})/);
+  if (!match) return null;
+  return match[1];
+}
+
+function daysBetweenDates(fromDate: string, toDate: string): number {
+  const [fy, fm, fd] = fromDate.split('-').map(Number);
+  const [ty, tm, td] = toDate.split('-').map(Number);
+  const from = Date.UTC(fy, fm - 1, fd);
+  const to = Date.UTC(ty, tm - 1, td);
+  return Math.floor((to - from) / 86400000);
+}
+
+/**
+ * Applies interest to legacy/member-level loans at most once per meeting,
+ * when 27-35 days have passed since the latest issue or prior interest charge.
+ * Advanced loan contracts with a persisted repayment schedule are excluded:
+ * their interest has already been calculated into that contract's schedule.
+ */
+export async function applyMeetingDayLoanInterest(
+  groupId: number,
+  meetingId: number,
+): Promise<MeetingDayInterestResult> {
+  const db = await getDatabase();
+  const meeting = await db.getFirstAsync<{ id: number; group_id: number; meeting_date: string; status: string }>(
+    `SELECT id, group_id, meeting_date, status FROM group_meetings WHERE id = ? AND group_id = ? LIMIT 1`,
+    meetingId, groupId,
+  );
+  if (!meeting) throw new Error('Cannot apply meeting interest: meeting not found for this group.');
+  if (String(meeting.status).toLowerCase() !== 'open') {
+    throw new Error('Meeting interest can only be applied to an open meeting.');
+  }
+
+  const meetingDate = dateOnly(meeting.meeting_date);
+  if (!meetingDate) throw new Error('The meeting date is not valid.');
+  const setup = await getVSLASetupRules(groupId);
+  // Meeting-day interest uses the actual elapsed days (27–35), regardless of
+  // the legacy period label. The group's saved rate and interest method still apply.
+  const percentage = Number(setup?.loan_interest_percentage ?? 0);
+  const method: LoanInterestMethod = setup?.loan_interest_method ?? 'fixed';
+  if (!Number.isFinite(percentage) || percentage <= 0) {
+    return {
+      meetingId, meetingDate, checkedMembers: 0, chargedMembers: 0, totalInterest: 0,
+      skippedByPeriod: false, message: 'No meeting-day interest was charged because the saved interest rate is zero.',
+    };
+  }
+
+  const members = await db.getAllAsync<{ id: number }>(
+    `SELECT id FROM members WHERE group_id = ? AND LOWER(TRIM(status)) = 'active' ORDER BY id`,
+    groupId,
+  );
+  let checkedMembers = 0;
+  let chargedMembers = 0;
+  let totalInterest = 0;
+
+  for (const member of members) {
+    const alreadyForMeeting = await db.getFirstAsync<{ id: number }>(
+      `SELECT id FROM meeting_loan_interest_charges WHERE group_id = ? AND member_id = ? AND meeting_id = ? LIMIT 1`,
+      groupId, member.id, meetingId,
+    );
+    if (alreadyForMeeting) continue;
+
+    // Loan contracts already have interest calculated in their saved schedule. Do not double charge them here.
+    const contract = await db.getFirstAsync<{ id: number }>(
+      `SELECT id FROM loan_records WHERE group_id = ? AND member_id = ? AND status IN ('active', 'frozen') LIMIT 1`,
+      groupId, member.id,
+    );
+    if (contract) continue;
+
+    const issued = await db.getFirstAsync<{ total: number; latest_date: string | null }>(
+      `SELECT COALESCE(SUM(ABS(amount)), 0) AS total, MAX(substr(created_at, 1, 10)) AS latest_date
+       FROM financial_transactions
+       WHERE group_id = ? AND member_id = ? AND account_type = 'loan_fund'
+         AND transaction_type = 'loan_issued' AND reversed = 0`,
+      groupId, member.id,
+    );
+    const repayments = await db.getFirstAsync<{ total: number }>(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM financial_transactions
+       WHERE group_id = ? AND member_id = ? AND account_type = 'loan_repayment'
+         AND transaction_type = 'loan_repayment' AND reversed = 0`,
+      groupId, member.id,
+    );
+    const originalPrincipal = Math.max(0, Number(issued?.total ?? 0));
+    const outstandingPrincipal = Math.max(0, originalPrincipal - Number(repayments?.total ?? 0));
+    if (originalPrincipal <= 0 || outstandingPrincipal <= 0) continue;
+    checkedMembers += 1;
+
+    const priorLegacyCharge = await db.getFirstAsync<{ charge_date: string | null }>(
+      `SELECT MAX(substr(created_at, 1, 10)) AS charge_date FROM loan_interest_charges WHERE group_id = ? AND member_id = ?`,
+      groupId, member.id,
+    );
+    const priorMeetingCharge = await db.getFirstAsync<{ charge_date: string | null }>(
+      `SELECT MAX(charge_date) AS charge_date FROM meeting_loan_interest_charges WHERE group_id = ? AND member_id = ?`,
+      groupId, member.id,
+    );
+    const referenceDates = [
+      dateOnly(issued?.latest_date),
+      dateOnly(priorLegacyCharge?.charge_date),
+      dateOnly(priorMeetingCharge?.charge_date),
+    ].filter((value): value is string => Boolean(value)).sort();
+    const referenceDate = referenceDates.length ? referenceDates[referenceDates.length - 1] : null;
+    if (!referenceDate) continue;
+
+    const days = daysBetweenDates(referenceDate, meetingDate);
+    if (days < 27 || days > 35) continue;
+
+    // Fixed interest is a one-time charge. Since legacy loans are aggregated per member,
+    // treat all uncontracted outstanding principal for that member as one legacy loan balance.
+    if (method === 'fixed') {
+      const anyPriorInterest = await db.getFirstAsync<{ count: number }>(
+        `SELECT
+           (SELECT COUNT(*) FROM loan_interest_charges
+             WHERE group_id = ? AND member_id = ? AND substr(created_at, 1, 10) >= ?)
+           + (SELECT COUNT(*) FROM meeting_loan_interest_charges
+             WHERE group_id = ? AND member_id = ? AND charge_date >= ?)
+           AS count`,
+        groupId, member.id, dateOnly(issued?.latest_date) ?? meetingDate,
+        groupId, member.id, dateOnly(issued?.latest_date) ?? meetingDate,
+      );
+      if (Number(anyPriorInterest?.count ?? 0) > 0) continue;
+    }
+
+    // Compound meeting-day interest: previously charged meeting interest is added to
+    // the balance for the next eligible period. Fixed remains a one-time charge below.
+    const accumulatedMeetingInterest = await db.getFirstAsync<{ total: number }>(
+      `SELECT COALESCE(SUM(interest_amount), 0) AS total
+       FROM meeting_loan_interest_charges WHERE group_id = ? AND member_id = ?`,
+      groupId, member.id,
+    );
+    const compoundBalance = outstandingPrincipal + Number(accumulatedMeetingInterest?.total ?? 0);
+    const interestBasis = method === 'declining' ? compoundBalance : method === 'flat' ? originalPrincipal + Number(accumulatedMeetingInterest?.total ?? 0) : originalPrincipal;
+    const interestAmount = Number((interestBasis * percentage / 100).toFixed(2));
+    if (!Number.isFinite(interestAmount) || interestAmount <= 0) continue;
+
+    const insertion = await db.runAsync(
+      `INSERT OR IGNORE INTO meeting_loan_interest_charges (
+        group_id, member_id, meeting_id, charge_date, opening_balance,
+        interest_percentage, interest_method, interest_amount, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      groupId, member.id, meetingId, meetingDate, interestBasis, percentage, method, interestAmount, now(),
+    );
+    if (Number(insertion.changes ?? 0) > 0) {
+      chargedMembers += 1;
+      totalInterest += interestAmount;
+    }
+  }
+
+  return {
+    meetingId, meetingDate, checkedMembers, chargedMembers,
+    totalInterest: Number(totalInterest.toFixed(2)),
+    skippedByPeriod: false,
+    message: chargedMembers > 0
+      ? `Meeting-day interest recorded for ${chargedMembers} member(s): ${totalInterest.toLocaleString()} in group currency.`
+      : 'No meeting-day interest was due. A charge is only considered 27–35 days after the latest loan issue or interest charge.',
+  };
+}
+
 export async function applyMonthlyLoanInterest(
   groupId: number,
   memberId: number,
@@ -3126,6 +3326,11 @@ export async function updateVSLASetupRules(
         current.meeting_frequency,
     );
 
+  const meetingStartDate =
+    data.meetingStartDate !== undefined
+      ? data.meetingStartDate
+      : current.meeting_start_date;
+
   const cycleDurationMonths =
     data.cycleDurationMonths ??
     current.cycle_duration_months;
@@ -3273,11 +3478,27 @@ export async function updateVSLASetupRules(
     );
   }
 
-  if (!meetingFrequency) {
-    throw new Error(
-      'Meeting frequency is required.',
-    );
-}
+  const isMonthlyWeekdayRule = /^(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/.test(meetingFrequency);
+  if (!['weekly', 'biweekly', 'monthly'].includes(meetingFrequency) && !isMonthlyWeekdayRule) {
+    throw new Error('Choose a valid meeting frequency or monthly weekday rule.');
+  }
+
+  if (isMonthlyWeekdayRule) {
+    if (!meetingStartDate || !/^\d{4}-\d{2}-\d{2}$/.test(meetingStartDate)) {
+      throw new Error('Choose a date for the selected monthly weekday rule.');
+    }
+    const selectedDate = new Date(`${meetingStartDate}T00:00:00`);
+    const match = meetingFrequency.match(/^(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/)!;
+    const weekdayMap: Record<string, number> = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+    const lastDay = new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0).getDate();
+    const occurrence = Math.floor((selectedDate.getDate() - 1) / 7) + 1;
+    const isLast = selectedDate.getDate() + 7 > lastDay;
+    const ordinalMatches = match[1] === 'last' ? isLast : occurrence === ({ first: 1, second: 2, third: 3, fourth: 4 } as Record<string, number>)[match[1]];
+    if (Number.isNaN(selectedDate.getTime()) || selectedDate.getDay() !== weekdayMap[match[2]] || !ordinalMatches) {
+      throw new Error('The selected schedule date does not match the monthly weekday rule.');
+    }
+  }
+
   if (
     !Number.isInteger(
       cycleDurationMonths,
@@ -3323,6 +3544,7 @@ export async function updateVSLASetupRules(
        allow_external_fund_for_loans = ?,
        allow_fines_for_loans = ?,
        meeting_frequency = ?,
+       meeting_start_date = ?,
        cycle_duration_months = ?,
        leadership_term_months = ?,
        share_out_enabled = ?,
@@ -3347,6 +3569,7 @@ export async function updateVSLASetupRules(
     allowExternalFundForLoans,
     allowFinesForLoans,
     meetingFrequency,
+    meetingStartDate,
     cycleDurationMonths,
     leadershipTermMonths,
     shareOutEnabled,
@@ -4237,6 +4460,9 @@ export async function getHomeDashboardSummary(
            JOIN financial_transactions lft ON lft.id = lr.disbursement_transaction_id
            WHERE lr.group_id = ? AND lr.member_id = m.id
              AND lr.status != 'cancelled' AND lft.reversed = 0), 0)
+         + COALESCE((SELECT SUM(mlic.interest_amount)
+           FROM meeting_loan_interest_charges mlic
+           WHERE mlic.group_id = ? AND mlic.member_id = m.id), 0)
          - COALESCE((SELECT SUM(ft2.amount)
            FROM financial_transactions ft2
            WHERE ft2.group_id = ?
@@ -4249,6 +4475,7 @@ export async function getHomeDashboardSummary(
        WHERE m.group_id = ?
          AND m.status = 'active'
      )`,
+    groupId,
     groupId,
     groupId,
     groupId,
@@ -5150,17 +5377,6 @@ export async function issueLoan(
     );
   }
 
-  const setup =
-    await getVSLASetupRules(groupId);
-
-  const interestPercentage =
-    setup &&
-    Number.isFinite(
-      setup.loan_interest_percentage,
-    )
-      ? setup.loan_interest_percentage
-      : 5;
-
   const timestamp = now();
 
   const result =
@@ -5210,41 +5426,7 @@ export async function issueLoan(
     reason,
   );
 
-  /*
-   * Charge the first month's interest immediately.
-   */
-  const issueDate = new Date(timestamp);
-
-  const monthKey =
-    `${issueDate.getFullYear()}-${String(
-      issueDate.getMonth() + 1,
-    ).padStart(2, '0')}`;
-
-  const interest =
-    amount *
-    (interestPercentage / 100);
-
-  if (interest > 0) {
-    await db.runAsync(
-      `INSERT OR IGNORE INTO loan_interest_charges (
-        group_id,
-        member_id,
-        loan_month,
-        opening_balance,
-        interest_percentage,
-        interest_amount,
-        created_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      groupId,
-      memberId,
-      monthKey,
-      amount,
-      interestPercentage,
-      interest,
-      timestamp,
-    );
-  }
+  // Legacy loans accrue meeting-day interest only after the 27–35 day eligibility window.
 
   await recordGroupActivity(groupId);
 
@@ -6155,8 +6337,10 @@ export async function getMemberLoanBalance(
          + COALESCE((SELECT SUM(lr.total_interest) FROM loan_records lr
            JOIN financial_transactions lft ON lft.id = lr.disbursement_transaction_id
            WHERE lr.group_id = ? AND lr.member_id = ? AND lr.status != 'cancelled' AND lft.reversed = 0), 0)
+         + COALESCE((SELECT SUM(mlic.interest_amount) FROM meeting_loan_interest_charges mlic
+           WHERE mlic.group_id = ? AND mlic.member_id = ?), 0)
          AS total`,
-      groupId, memberId, groupId, memberId,
+      groupId, memberId, groupId, memberId, groupId, memberId,
     );
 
   const principal = issued?.total ?? 0;
