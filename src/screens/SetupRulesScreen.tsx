@@ -25,6 +25,48 @@ type Props = NativeStackScreenProps<
   'SetupRules'
 >;
 
+function toLocalDateString(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function getFirstMonday(year: number, monthIndex: number): Date {
+  const firstDay = new Date(year, monthIndex, 1);
+  const offset = (8 - firstDay.getDay()) % 7;
+  return new Date(year, monthIndex, 1 + offset);
+}
+
+function getNextFirstMonday(fromDate: Date): Date {
+  const first = getFirstMonday(fromDate.getFullYear(), fromDate.getMonth());
+  const today = toLocalDateString(fromDate);
+  if (toLocalDateString(first) >= today) return first;
+  return getFirstMonday(fromDate.getFullYear(), fromDate.getMonth() + 1);
+}
+
+function formatCalendarMonth(date: Date): string {
+  return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+}
+
+const MEETING_ORDINALS = ['first', 'second', 'third', 'fourth', 'last'] as const;
+const MEETING_WEEKDAYS = [
+  { key: 'sunday', label: 'Sunday', day: 0 },
+  { key: 'monday', label: 'Monday', day: 1 },
+  { key: 'tuesday', label: 'Tuesday', day: 2 },
+  { key: 'wednesday', label: 'Wednesday', day: 3 },
+  { key: 'thursday', label: 'Thursday', day: 4 },
+  { key: 'friday', label: 'Friday', day: 5 },
+  { key: 'saturday', label: 'Saturday', day: 6 },
+] as const;
+
+function isMatchingMeetingRule(date: Date, rule: string): boolean {
+  const match = rule.match(/^(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/);
+  if (!match) return false;
+  const weekday = MEETING_WEEKDAYS.find((item) => item.key === match[2])?.day;
+  if (weekday === undefined || date.getDay() !== weekday) return false;
+  if (match[1] === 'last') return date.getDate() + 7 > new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  const ordinal = Math.floor((date.getDate() - 1) / 7) + 1;
+  return ordinal === MEETING_ORDINALS.indexOf(match[1] as typeof MEETING_ORDINALS[number]) + 1;
+}
+
 const DEFAULT_RULES: VSLASetupRuleUpdates = {
 shareValue: 1000,
 minimumSharesPerMeeting: 1,
@@ -44,6 +86,7 @@ allowSocialFundForLoans: false,
 allowExternalFundForLoans: false,
 allowFinesForLoans: true,
 meetingFrequency: 'weekly',
+meetingStartDate: toLocalDateString(getNextFirstMonday(new Date())),
 cycleDurationMonths: 12,
 leadershipTermMonths: 12,
 shareOutEnabled: true,
@@ -61,6 +104,10 @@ useState<VSLASetupRuleUpdates>(DEFAULT_RULES);
 
 const [loading, setLoading] = useState(true);
 const [saving, setSaving] = useState(false);
+const [calendarMonth, setCalendarMonth] = useState<Date>(() => {
+  const today = new Date();
+  return new Date(today.getFullYear(), today.getMonth(), 1);
+});
 
 useEffect(() => {
 loadRules();
@@ -72,10 +119,19 @@ setLoading(true);
 
 const current = await getVSLASetupRules(groupId);  
 
-  if (!current) {  
-    setRules(DEFAULT_RULES);  
-    return;  
-  }  
+  if (!current) {
+    const initialDate = toLocalDateString(getNextFirstMonday(new Date()));
+    setRules({ ...DEFAULT_RULES, meetingStartDate: initialDate });
+    const initial = new Date(`${initialDate}T00:00:00`);
+    setCalendarMonth(new Date(initial.getFullYear(), initial.getMonth(), 1));
+    return;
+  }
+
+  const storedMeetingDate = current.meeting_start_date ?? toLocalDateString(getNextFirstMonday(new Date()));
+  const storedDateObject = new Date(`${storedMeetingDate}T00:00:00`);
+  if (!Number.isNaN(storedDateObject.getTime())) {
+    setCalendarMonth(new Date(storedDateObject.getFullYear(), storedDateObject.getMonth(), 1));
+  }
 
   setRules({  
     shareValue: current.share_value,  
@@ -103,8 +159,8 @@ const current = await getVSLASetupRules(groupId);
     allowSocialFundForLoans: Boolean(current.allow_social_fund_for_loans),
     allowExternalFundForLoans: Boolean(current.allow_external_fund_for_loans),
     allowFinesForLoans: Number(current.allow_fines_for_loans ?? 1) === 1,
-    meetingFrequency:  
-      current.meeting_frequency,  
+    meetingFrequency: current.meeting_frequency,
+    meetingStartDate: storedMeetingDate,
     cycleDurationMonths:  
       current.cycle_duration_months,  
     leadershipTermMonths:  
@@ -154,16 +210,21 @@ Alert.alert(
 return;
 }
 
-if (  
-  Number(rules.minimumSharesPerMeeting) >  
-  Number(rules.maximumSharesPerMeeting)  
-) {  
-  Alert.alert(  
-    'Invalid Shares',  
-    'Minimum shares cannot be greater than maximum shares.',  
-  );  
-  return;  
-}  
+if (
+  Number(rules.minimumSharesPerMeeting) >
+  Number(rules.maximumSharesPerMeeting)
+) {
+  Alert.alert('Invalid Shares', 'Minimum shares cannot be greater than maximum shares.');
+  return;
+}
+
+if (/^(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/.test(rules.meetingFrequency)) {
+  const selectedDate = rules.meetingStartDate ? new Date(`${rules.meetingStartDate}T00:00:00`) : null;
+  if (!selectedDate || Number.isNaN(selectedDate.getTime()) || !isMatchingMeetingRule(selectedDate, rules.meetingFrequency)) {
+    Alert.alert('Choose a Meeting Date', 'Choose a calendar date that matches the selected meeting rule.');
+    return;
+  }
+}
 
 try {  
   setSaving(true);  
@@ -650,47 +711,67 @@ Setup Rules
       Meeting & Cycle Rules  
     </Text>  
 
-    <Text style={styles.label}>  
-      Meeting Frequency  
-    </Text>  
+    <Text style={styles.label}>
+      Meeting Frequency
+    </Text>
 
-    <View style={styles.optionRow}>  
-      {[  
-        'weekly',  
-        'biweekly',  
-        'monthly',  
-      ].map((frequency) => (  
-        <TouchableOpacity  
-          key={frequency}  
-          style={[  
-            styles.optionButton,  
-            rules.meetingFrequency ===  
-              frequency &&  
-              styles.optionButtonActive,  
-          ]}  
-          onPress={() =>  
-            updateRule(  
-              'meetingFrequency',  
-              frequency,  
-            )  
-          }  
-        >  
-          <Text  
-            style={[  
-              styles.optionText,  
-              rules.meetingFrequency ===  
-                frequency &&  
-                styles.optionTextActive,  
-            ]}  
-          >  
-            {frequency}  
-          </Text>  
-        </TouchableOpacity>  
-      ))}  
-    </View>  
+    <View style={styles.optionRow}>
+      {['weekly', 'biweekly', 'monthly'].map((frequency) => (
+        <TouchableOpacity key={frequency} style={[styles.optionButton, rules.meetingFrequency === frequency && styles.optionButtonActive]} onPress={() => updateRule('meetingFrequency', frequency)}>
+          <Text style={[styles.optionText, rules.meetingFrequency === frequency && styles.optionTextActive]}>{frequency === 'biweekly' ? 'Every 2 weeks' : frequency[0].toUpperCase() + frequency.slice(1)}</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
 
-    <Text style={styles.label}>  
-      Cycle Duration (Months)  
+    <Text style={styles.label}>Monthly meeting rule</Text>
+    <Text style={styles.description}>Choose which occurrence of a weekday your group meets every month.</Text>
+    <View style={styles.optionRow}>
+      {MEETING_ORDINALS.map((ordinal) => {
+        const active = rules.meetingFrequency.startsWith(`${ordinal}_`);
+        return <TouchableOpacity key={ordinal} style={[styles.optionButton, active && styles.optionButtonActive]} onPress={() => updateRule('meetingFrequency', `${ordinal}_${rules.meetingFrequency.split('_')[1] || 'monday'}`)}><Text style={[styles.optionText, active && styles.optionTextActive]}>{ordinal[0].toUpperCase() + ordinal.slice(1)}</Text></TouchableOpacity>;
+      })}
+    </View>
+    <View style={styles.optionRow}>
+      {MEETING_WEEKDAYS.map((weekday) => {
+        const active = rules.meetingFrequency.endsWith(`_${weekday.key}`);
+        return <TouchableOpacity key={weekday.key} style={[styles.optionButton, active && styles.optionButtonActive]} onPress={() => {
+          const ordinal = MEETING_ORDINALS.find((item) => rules.meetingFrequency.startsWith(`${item}_`)) || 'first';
+          updateRule('meetingFrequency', `${ordinal}_${weekday.key}`);
+        }}><Text style={[styles.optionText, active && styles.optionTextActive]}>{weekday.label}</Text></TouchableOpacity>;
+      })}
+    </View>
+
+    { /^(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/.test(rules.meetingFrequency) && (() => {
+      const year = calendarMonth.getFullYear();
+      const monthIndex = calendarMonth.getMonth();
+      const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+      const leadingBlanks = new Date(year, monthIndex, 1).getDay();
+      const cells: Array<number | null> = [...Array.from({ length: leadingBlanks }, () => null), ...Array.from({ length: daysInMonth }, (_, index) => index + 1)];
+      while (cells.length % 7 !== 0) cells.push(null);
+      const todayString = toLocalDateString(new Date());
+      return <View style={styles.calendarCard}>
+        <Text style={styles.calendarTitle}>Choose a meeting date</Text>
+        <Text style={styles.description}>Only dates matching the selected First/Second/Third/Fourth/Last weekday rule can be selected. Automatic compound interest is checked on the actual meeting date.</Text>
+        <View style={styles.calendarHeader}>
+          <TouchableOpacity accessibilityLabel="Previous month" style={styles.calendarArrow} onPress={() => setCalendarMonth(new Date(year, monthIndex - 1, 1))} disabled={saving}><Text style={styles.calendarArrowText}>‹</Text></TouchableOpacity>
+          <Text style={styles.calendarMonth}>{formatCalendarMonth(calendarMonth)}</Text>
+          <TouchableOpacity accessibilityLabel="Next month" style={styles.calendarArrow} onPress={() => setCalendarMonth(new Date(year, monthIndex + 1, 1))} disabled={saving}><Text style={styles.calendarArrowText}>›</Text></TouchableOpacity>
+        </View>
+        <View style={styles.calendarGrid}>
+          {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((dayName) => <View key={dayName} style={styles.calendarCell}><Text style={styles.calendarWeekday}>{dayName}</Text></View>)}
+          {cells.map((day, index) => {
+            if (day === null) return <View key={`blank-${year}-${monthIndex}-${index}`} style={styles.calendarCell} />;
+            const date = new Date(year, monthIndex, day); const iso = toLocalDateString(date);
+            const matching = isMatchingMeetingRule(date, rules.meetingFrequency); const isPast = iso < todayString; const selected = iso === rules.meetingStartDate;
+            return <TouchableOpacity key={iso} accessibilityRole="button" accessibilityState={{ selected, disabled: !matching || isPast }} style={[styles.calendarCell, styles.calendarDay, selected && styles.calendarDaySelected, (!matching || isPast) && styles.calendarDayDisabled]} disabled={!matching || isPast || saving} onPress={() => updateRule('meetingStartDate', iso)}><Text style={[styles.calendarDayText, selected && styles.calendarDayTextSelected, (!matching || isPast) && styles.calendarDayTextDisabled]}>{day}</Text></TouchableOpacity>;
+          })}
+        </View>
+        <Text style={styles.calendarSelection}>Selected: {rules.meetingStartDate ? new Date(`${rules.meetingStartDate}T00:00:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : 'Choose a date'}</Text>
+      </View>;
+    })()}
+
+    <Text style={styles.label}>
+      Cycle Duration (Months)
     </Text>  
 
     <TextInput  
@@ -941,6 +1022,92 @@ exampleFootnote: {
   fontSize: 12,
   lineHeight: 17,
   marginBottom: 12,
+},
+
+calendarCard: {
+  borderWidth: 1,
+  borderColor: '#bbf7d0',
+  borderRadius: 12,
+  padding: 12,
+  marginBottom: 16,
+  backgroundColor: '#f0fdf4',
+},
+calendarTitle: {
+  color: '#166534',
+  fontSize: 15,
+  fontWeight: '800',
+  marginBottom: 6,
+},
+calendarHeader: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  marginTop: 10,
+  marginBottom: 8,
+},
+calendarArrow: {
+  width: 36,
+  height: 36,
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: 18,
+  backgroundColor: '#dcfce7',
+},
+calendarArrowText: {
+  color: '#166534',
+  fontSize: 24,
+  fontWeight: '700',
+},
+calendarMonth: {
+  color: '#14532d',
+  fontSize: 15,
+  fontWeight: '800',
+},
+calendarGrid: {
+  flexDirection: 'row',
+  flexWrap: 'wrap',
+},
+calendarCell: {
+  width: '14.2857%',
+  minHeight: 38,
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+calendarWeekday: {
+  color: '#166534',
+  fontSize: 12,
+  fontWeight: '800',
+},
+calendarDay: {
+  borderRadius: 20,
+  borderWidth: 1,
+  borderColor: 'transparent',
+  marginVertical: 1,
+},
+calendarDaySelected: {
+  backgroundColor: '#16a34a',
+  borderColor: '#15803d',
+},
+calendarDayDisabled: {
+  backgroundColor: '#f3f4f6',
+},
+calendarDayText: {
+  color: '#111827',
+  fontSize: 13,
+  fontWeight: '600',
+},
+calendarDayTextSelected: {
+  color: '#ffffff',
+  fontWeight: '800',
+},
+calendarDayTextDisabled: {
+  color: '#9ca3af',
+},
+calendarSelection: {
+  color: '#166534',
+  fontSize: 12,
+  fontWeight: '700',
+  marginTop: 10,
 },
 
 optionRow: {
