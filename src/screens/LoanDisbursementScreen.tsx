@@ -10,7 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import {
   createLoanApplication,
   disburseApprovedLoanApplication,
@@ -78,6 +78,7 @@ function methodLabel(method: LoanInterestMethod): string {
 }
 
 export default function LoanDisbursementScreen() {
+  const navigation = useNavigation<any>();
   const route = useRoute();
   const params = (route.params ?? {}) as RouteParams;
   const groupId = Number(params.groupId ?? 0);
@@ -307,8 +308,24 @@ export default function LoanDisbursementScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <TouchableOpacity
+          accessibilityRole="button"
+          style={styles.backToMeetingButton}
+          onPress={() => navigation.goBack()}
+          disabled={saving}
+        >
+          <Text style={styles.backToMeetingText}>← Return to Meeting</Text>
+        </TouchableOpacity>
+
         <Text style={styles.title}>Loan Disbursement</Text>
         <Text style={styles.subtitle}>Loan terms are loaded from the group administrator’s saved Setup Rules.</Text>
+
+        {!executiveMemberId && (
+          <View style={styles.warning}>
+            <Text style={styles.warningTitle}>Executive authorization required</Text>
+            <Text style={styles.warningBody}>The current meeting did not pass an authorized executive member to this screen. Return to the meeting and open Loan Disbursement from the meeting workflow. If no executive is assigned, assign an active member to an executive post in Group Management first. No loan can be disbursed without this authorization.</Text>
+          </View>
+        )}
 
         <View style={styles.balanceCard}>
           <Text style={styles.balanceLabel}>Available Loan Fund</Text>
@@ -436,6 +453,10 @@ const styles = StyleSheet.create({
   methodDescription: { color: '#475569', fontSize: 12, lineHeight: 18, marginTop: 9, paddingTop: 9, borderTopWidth: 1, borderTopColor: '#e2e8f0' },
   notice: { color: '#92400e', backgroundColor: '#fffbeb', padding: 10, borderRadius: 8, fontSize: 12, lineHeight: 18, marginTop: 10 },
   warning: { color: '#991b1b', backgroundColor: '#fef2f2', padding: 10, borderRadius: 8, fontSize: 12, lineHeight: 18, marginTop: 10 },
+  warningTitle: { color: '#991b1b', fontWeight: '800', marginBottom: 5 },
+  warningBody: { color: '#991b1b', fontSize: 12, lineHeight: 18 },
+  backToMeetingButton: { alignSelf: 'flex-start', backgroundColor: '#ffffff', borderColor: '#16a34a', borderWidth: 1, borderRadius: 9, paddingVertical: 10, paddingHorizontal: 13, marginBottom: 14 },
+  backToMeetingText: { color: '#166534', fontSize: 14, fontWeight: '800' },
   sectionTitle: { fontSize: 16, fontWeight: '800', color: '#166534', marginTop: 12, marginBottom: 8 },
   input: { borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 12, fontSize: 16, color: '#111827', backgroundColor: '#ffffff' },
   memberButton: { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 10, padding: 13, marginTop: 8, backgroundColor: '#ffffff' },
