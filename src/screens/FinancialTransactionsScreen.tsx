@@ -12,14 +12,15 @@ import {
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import * as FileSystem from 'expo-file-system';
 
 import { RootStackParamList } from '../../App';
-import { exportDatabaseBackup } from '../database/backup';
 
 import {
-  closeMeeting,
   getMemberFines,
+  getMemberSavings,
+  getFinancialTransactions,
+  getUndoableMeetingTransactions,
+  reverseFinancialTransaction,
   getMemberLoanBalance,
   getMembersByGroupId,
   getOpenMeeting,
@@ -108,7 +109,8 @@ export default function FinancialTransactionsScreen() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [endingMeeting, setEndingMeeting] = useState(false);
-  const [cashAtHand, setCashAtHand] = useState('');
+  const [memberSavings, setMemberSavings] = useState<Record<number, { total: number; today: number }>>({});
+  const [meetingTransactions, setMeetingTransactions] = useState<any[]>([]);
 
   const [showMembers, setShowMembers] = useState(false);
   const [showFineTypes, setShowFineTypes] = useState(false);
@@ -318,6 +320,33 @@ export default function FinancialTransactionsScreen() {
             ),
           );
 
+      const [savingsRows, allTransactions, undoableTransactions] = await Promise.all([
+        Promise.all(activeMembers.map(async (member) => [member.id, await getMemberSavings(groupId, member.id)] as const)),
+        getFinancialTransactions(groupId),
+        getUndoableMeetingTransactions(activeMeetingId),
+      ]);
+      const today = new Date();
+      const localToday = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const savingsByMember: Record<number, { total: number; today: number }> = {};
+      for (const [memberId, total] of savingsRows) {
+        savingsByMember[memberId] = { total: Number(total) || 0, today: 0 };
+      }
+      for (const transaction of allTransactions as any[]) {
+        if (
+          Number(transaction.meeting_id) === Number(activeMeetingId) &&
+          transaction.account_type === 'savings' &&
+          transaction.transaction_type === 'savings_contribution' &&
+          Number(transaction.reversed || 0) === 0 &&
+          transaction.member_id != null &&
+          typeof transaction.created_at === 'string' &&
+          new Date(transaction.created_at).toDateString() === today.toDateString()
+        ) {
+          const id = Number(transaction.member_id);
+          if (savingsByMember[id]) savingsByMember[id].today += Number(transaction.amount) || 0;
+        }
+      }
+      setMemberSavings(savingsByMember);
+      setMeetingTransactions(undoableTransactions as any[]);
       setMeetingId(activeMeetingId);
       setMembers(activeMembers);
       setSetupRules(rules);
@@ -628,11 +657,9 @@ export default function FinancialTransactionsScreen() {
       }
 
       try {
-        await loadMemberFinancialData(
-          selectedMemberId,
-        );
+        await loadData();
       } catch {
-        // Do not block the transaction flow.
+        // Keep the saved transaction even if refreshing the screen fails.
       }
 
       setSaving(false);
@@ -793,125 +820,37 @@ export default function FinancialTransactionsScreen() {
 
   const handleEndMeeting = () => {
     if (!meetingId) {
-      Alert.alert(
-        'Meeting not available',
-        'There is no open meeting to end.',
-      );
-
+      Alert.alert('Meeting not available', 'There is no open meeting to close.');
       return;
     }
-
-    const executive = members.find(
-      (member) =>
-        member.status
-          ?.toLowerCase() ===
-          'active' &&
-        member.role
-          ?.toLowerCase() ===
-          'executive',
-    );
-
+    const executive = members.find((member) => member.status?.toLowerCase() === 'active' && member.role?.toLowerCase() === 'executive');
     if (!executive) {
-      Alert.alert(
-        'Executive Required',
-        'An active executive member is required to end the meeting.',
-      );
-
+      Alert.alert('Executive Required', 'An active executive member is required to close the meeting.');
       return;
     }
+    navigation.navigate('CloseMeeting', { groupId, executiveMemberId: executive.id, meetingId });
+  };
 
+  const handleUndoTransaction = (transaction: any) => {
     Alert.alert(
-      'End Meeting',
-      'Are you sure you want to end this meeting? Once closed, it cannot continue as the current meeting.',
+      'Undo transaction?',
+      `Reverse ${transaction.transaction_type.replace(/_/g, ' ')} of ${currency} ${formatMoney(Math.abs(Number(transaction.amount) || 0))}? The original record will remain in the audit history.`,
       [
+        { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'End Meeting',
+          text: 'Undo',
           style: 'destructive',
           onPress: async () => {
-            setEndingMeeting(true);
-
             try {
-              const cleanedCash = cashAtHand.replace(/,/g, '').trim();
-              if (!cleanedCash) {
-                throw new Error('Enter the actual cash counted in the cash box before ending the meeting.');
-              }
-              const cashAmount = Number(cleanedCash);
-              if (!Number.isFinite(cashAmount) || cashAmount < 0) {
-                throw new Error('Cash in box must be a valid amount of zero or greater.');
-              }
-
-              // Create and read back a real backup while this meeting is still open.
-              const backupResult = await exportDatabaseBackup();
-              if (!backupResult.success || !backupResult.filePath || !backupResult.fileName) {
-                throw new Error(backupResult.error || backupResult.message || 'A verified backup could not be created.');
-              }
-
-              const backupInfo = await FileSystem.getInfoAsync(backupResult.filePath);
-              if (!backupInfo.exists || !('size' in backupInfo) || Number(backupInfo.size) <= 0) {
-                throw new Error('The backup file could not be verified. The meeting remains open.');
-              }
-              const backupContents = await FileSystem.readAsStringAsync(backupResult.filePath, {
-                encoding: FileSystem.EncodingType.UTF8,
-              });
-              let parsedBackup: { version?: number; created_at?: string; tables?: Record<string, unknown> };
-              try {
-                parsedBackup = JSON.parse(backupContents) as typeof parsedBackup;
-              } catch {
-                throw new Error('The saved backup could not be read as valid JSON. The meeting remains open.');
-              }
-              const backedUpMeetings = parsedBackup.tables?.group_meetings;
-              if (
-                parsedBackup.version !== 1 ||
-                !Array.isArray(backedUpMeetings) ||
-                !backedUpMeetings.some((row: any) => Number(row?.id) === Number(meetingId) && row?.status === 'open')
-              ) {
-                throw new Error('The verified backup does not contain this meeting in its open state. The meeting remains open.');
-              }
-
-              const receipt = {
-                meetingId,
-                createdAt: parsedBackup.created_at || new Date().toISOString(),
-                verifiedAtClose: new Date().toISOString(),
-                filePath: backupResult.filePath,
-                fileName: backupResult.fileName,
-                fileSize: Number(backupInfo.size),
-                verified: true,
-              };
-
-              await closeMeeting(
-                meetingId,
-                executive.id,
-                cashAmount,
-                true,
-                JSON.stringify(receipt),
+              await reverseFinancialTransaction(
+                Number(transaction.id),
+                'Transaction reversed by group executive through Financial Transactions',
+                null,
               );
-
-              Alert.alert(
-                'Meeting Ended',
-                'The meeting has been closed successfully.',
-                [
-                  {
-                    text: 'OK',
-                    onPress: () =>
-                      navigation.navigate(
-                        'Home',
-                      ),
-                  },
-                ],
-              );
+              await loadData();
+              Alert.alert('Transaction reversed', 'The transaction was reversed and the balances were refreshed.');
             } catch (error) {
-              Alert.alert(
-                'Unable to End Meeting',
-                error instanceof Error
-                  ? error.message
-                  : 'The meeting could not be closed.',
-              );
-            } finally {
-              setEndingMeeting(false);
+              Alert.alert('Unable to undo', error instanceof Error ? error.message : 'The transaction could not be reversed.');
             }
           },
         },
@@ -1033,6 +972,43 @@ export default function FinancialTransactionsScreen() {
               Issue a New Loan
             </Text>
           </TouchableOpacity>
+        </View>
+
+        <View style={styles.memberSavingsCard}>
+          <Text style={styles.sectionTitle}>Member Savings</Text>
+          {members.map((member) => (
+            <View key={member.id} style={styles.memberSavingsRow}>
+              <View style={styles.memberSavingsIdentity}>
+                <Text style={styles.memberSavingsName}>{member.full_name}</Text>
+                <Text style={styles.memberSavingsNumber}>Member {member.member_number}</Text>
+              </View>
+              <View style={styles.memberSavingsAmounts}>
+                <Text style={styles.memberSavingsTotal}>{currency} {formatMoney(memberSavings[member.id]?.total ?? 0)}</Text>
+                <Text style={styles.memberSavingsToday}>{currency} {formatMoney(memberSavings[member.id]?.today ?? 0)}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+
+        <View style={styles.memberSavingsCard}>
+          <Text style={styles.sectionTitle}>Transactions This Meeting</Text>
+          {meetingTransactions.length === 0 ? (
+            <Text style={styles.emptyText}>No transactions available to undo.</Text>
+          ) : meetingTransactions.map((transaction) => {
+            const member = members.find((item) => item.id === Number(transaction.member_id));
+            return (
+              <View key={transaction.id} style={styles.transactionUndoRow}>
+                <View style={styles.transactionUndoDetails}>
+                  <Text style={styles.memberSavingsName}>{member?.full_name ?? 'Group transaction'}</Text>
+                  <Text style={styles.memberSavingsNumber}>{String(transaction.transaction_type).replace(/_/g, ' ')}</Text>
+                  <Text style={styles.transactionAmount}>{currency} {formatMoney(Math.abs(Number(transaction.amount) || 0))}</Text>
+                </View>
+                <TouchableOpacity style={styles.undoButton} onPress={() => handleUndoTransaction(transaction)} disabled={saving || endingMeeting}>
+                  <Text style={styles.undoButtonText}>Undo</Text>
+                </TouchableOpacity>
+              </View>
+            );
+          })}
         </View>
 
         {/* MEMBER */}
@@ -1611,49 +1587,12 @@ export default function FinancialTransactionsScreen() {
             Back
           </Text>
         </TouchableOpacity>
-
-        {/* CASH RECONCILIATION: required before meeting closure */}
-        <View style={styles.cashReconciliationCard}>
-          <Text style={styles.sectionTitle}>Cash Reconciliation</Text>
-          <Text style={styles.emptyText}>
-            Count the actual cash remaining in the cash box. The database will compare it with the meeting records before allowing closure.
-          </Text>
-          <TextInput
-            style={styles.cashInput}
-            value={cashAtHand}
-            onChangeText={setCashAtHand}
-            keyboardType="decimal-pad"
-            placeholder="Actual cash in box (UGX)"
-            editable={!saving && !endingMeeting}
-          />
-        </View>
-
-        {/* END MEETING */}
         <TouchableOpacity
-          style={[
-            styles.endMeetingButton,
-            endingMeeting &&
-              styles.disabledButton,
-          ]}
+          style={[styles.endMeetingButton, (saving || endingMeeting) && styles.disabledButton]}
           onPress={handleEndMeeting}
-          disabled={
-            saving ||
-            endingMeeting
-          }
+          disabled={saving || endingMeeting}
         >
-          {endingMeeting ? (
-            <ActivityIndicator
-              color="#ffffff"
-            />
-          ) : (
-            <Text
-              style={
-                styles.endMeetingText
-              }
-            >
-              End Meeting
-            </Text>
-          )}
+          <Text style={styles.endMeetingText}>Close Meeting</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
@@ -2057,6 +1996,33 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
+  memberSavingsCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+    elevation: 1,
+  },
+  memberSavingsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+    gap: 10,
+  },
+  memberSavingsIdentity: { flex: 1 },
+  memberSavingsAmounts: { alignItems: 'flex-end' },
+  memberSavingsName: { color: '#111827', fontSize: 14, fontWeight: '800' },
+  memberSavingsNumber: { color: '#6b7280', fontSize: 12, marginTop: 3 },
+  memberSavingsTotal: { color: '#166534', fontWeight: '800', fontSize: 14 },
+  memberSavingsToday: { color: '#dc2626', fontWeight: '800', fontSize: 13, marginTop: 3 },
+  transactionUndoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#e5e7eb', gap: 8 },
+  transactionUndoDetails: { flex: 1 },
+  transactionAmount: { color: '#111827', fontSize: 13, fontWeight: '700', marginTop: 3 },
+  undoButton: { backgroundColor: '#fee2e2', borderRadius: 8, paddingHorizontal: 13, paddingVertical: 9 },
+  undoButtonText: { color: '#b91c1c', fontWeight: '800' },
   endMeetingButton: {
     minHeight: 50,
     borderRadius: 12,
