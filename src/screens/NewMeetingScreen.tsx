@@ -474,47 +474,13 @@ export default function NewMeetingScreen({ route, navigation }: Props) {
               )}
             </TouchableOpacity>
 
-            <View style={styles.closeWorkflowCard}>
-              <Text style={styles.workflowTitle}>Close Meeting Checklist</Text>
-              <Text style={styles.workflowStep}>1. Backup database</Text>
-              <Text style={styles.workflowStatus}>{backupCompleted ? '✓ Backup completed' : 'Backup required'}</Text>
-              {!backupCompleted && (
-                <TouchableOpacity style={styles.closeButton} onPress={() => void handleCreateBackup()} disabled={closing}>
-                  {closing ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.closeButtonText}>Create Backup</Text>}
-                </TouchableOpacity>
-              )}
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => navigation.navigate('CloseMeeting', { groupId, executiveMemberId, meetingId: Number(openMeeting.id) })}
+            >
+              <Text style={styles.closeButtonText}>Close Meeting</Text>
+            </TouchableOpacity>
 
-              <Text style={styles.workflowStep}>2. Count cash in box</Text>
-              <TextInput
-                value={cashInBox}
-                onChangeText={(value) => { setCashInBox(value); setCashCheck(null); }}
-                keyboardType="decimal-pad"
-                placeholder="Enter actual cash in box"
-                placeholderTextColor="#9ca3af"
-                style={styles.cashInput}
-                editable={backupCompleted}
-              />
-              <TouchableOpacity style={[styles.checkCashButton, !backupCompleted && styles.disabledCloseButton]} onPress={() => void handleCheckCash()} disabled={!backupCompleted || checkingCash}>
-                {checkingCash ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.closeButtonText}>Check Cash</Text>}
-              </TouchableOpacity>
-
-              {cashCheck && (
-                <View style={cashCheck.balanced ? styles.cashBalancedBox : styles.cashMismatchBox}>
-                  <Text style={styles.workflowStatus}>{cashCheck.balanced ? '✓ CASH BALANCES' : '✗ CASH DOES NOT BALANCE'}</Text>
-                  <Text style={styles.cashDetail}>Expected: UGX {cashCheck.expectedCash.toLocaleString()}</Text>
-                  <Text style={styles.cashDetail}>Difference: UGX {Math.abs(cashCheck.difference).toLocaleString()}</Text>
-                </View>
-              )}
-
-              <Text style={styles.workflowStep}>3. End meeting</Text>
-              <TouchableOpacity style={[styles.closeButton, (!backupCompleted || !cashCheck?.balanced || closing) && styles.disabledCloseButton]} onPress={() => void handleCloseMeeting()} disabled={!backupCompleted || !cashCheck?.balanced || closing}>
-                {closing ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.closeButtonText}>End Meeting</Text>}
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.lockText}>
-              The meeting cannot end until a newly saved backup file is verified for this meeting, its receipt is recorded, and the cash in the box exactly matches the calculated expected cash.
-            </Text>
           </View>
         ) : (
           <>
