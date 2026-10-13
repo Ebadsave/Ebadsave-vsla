@@ -10,6 +10,7 @@ import SetupRulesScreen from './src/screens/SetupRulesScreen';
 import GroupManagementScreen from './src/screens/GroupManagementScreen';
 import AddMembersScreen from './src/screens/AddMembersScreen';
 import NewMeetingScreen from './src/screens/NewMeetingScreen';
+import CloseMeetingScreen from './src/screens/CloseMeetingScreen';
 import RollCallScreen from './src/screens/RollCallScreen';
 import FinancialTransactionsScreen from './src/screens/FinancialTransactionsScreen';
 import SavingsScreen from './src/screens/SavingsScreen';
@@ -46,6 +47,12 @@ export type RootStackParamList = {
   NewMeeting: {
     groupId: number;
     executiveMemberId: number;
+  };
+
+  CloseMeeting: {
+    groupId: number;
+    executiveMemberId: number;
+    meetingId: number;
   };
 
   MeetingRollCall: {
@@ -208,6 +215,11 @@ export default function App() {
         <Stack.Screen
           name="NewMeeting"
           component={NewMeetingScreen}
+        />
+
+        <Stack.Screen
+          name="CloseMeeting"
+          component={CloseMeetingScreen}
         />
 
         <Stack.Screen
