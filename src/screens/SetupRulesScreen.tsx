@@ -31,6 +31,7 @@ minimumSharesPerMeeting: 1,
 maximumSharesPerMeeting: 5,
 maximumLoanMultiple: 3,
 loanInterestPercentage: 5,
+loanInterestMethod: 'fixed',
 loanInterestPeriod: 'per month',
 maximumLoanRepaymentPeriod: 12,
 socialFundContribution: 0,
@@ -86,6 +87,7 @@ const current = await getVSLASetupRules(groupId);
       current.maximum_loan_multiple,  
     loanInterestPercentage:  
       current.loan_interest_percentage,  
+    loanInterestMethod: current.loan_interest_method === 'flat' || current.loan_interest_method === 'declining' ? current.loan_interest_method : 'fixed',
     loanInterestPeriod:  
       current.loan_interest_period,  
     maximumLoanRepaymentPeriod:  
@@ -222,6 +224,16 @@ try {
 
 }
 
+const examplePrincipal = 100000;
+const exampleRate = Math.max(0, Number(rules.loanInterestPercentage) || 0) / 100;
+const examplePeriods = 3;
+const formatExampleMoney = (value: number) => `UGX ${Math.round(value).toLocaleString()}`;
+const fixedExampleInterest = examplePrincipal * exampleRate;
+const flatExampleInterest = examplePrincipal * exampleRate * examplePeriods;
+const decliningExampleInterest = Array.from({ length: examplePeriods }, (_, index) =>
+  examplePrincipal * (1 - index / examplePeriods) * exampleRate,
+).reduce((total, amount) => total + amount, 0);
+
 if (loading) {
 return (
 <View style={styles.center}>
@@ -338,6 +350,67 @@ Setup Rules
       keyboardType="decimal-pad"  
       placeholder="3"  
     />  
+
+    <Text style={styles.label}>Interest Method</Text>
+    <Text style={styles.description}>
+      Choose the method this group will use for new loans. Existing loans keep their saved terms.
+    </Text>
+
+    <View style={styles.interestMethodList}>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityState={{ selected: rules.loanInterestMethod === 'fixed' }}
+        style={[styles.interestMethodCard, rules.loanInterestMethod === 'fixed' && styles.interestMethodCardSelected]}
+        onPress={() => updateRule('loanInterestMethod', 'fixed')}
+      >
+        <Text style={[styles.interestMethodTitle, rules.loanInterestMethod === 'fixed' && styles.interestMethodTitleSelected]}>
+          Fixed Interest {rules.loanInterestMethod === 'fixed' ? '✓ SELECTED' : ''}
+        </Text>
+        <Text style={[styles.interestMethodDescription, rules.loanInterestMethod === 'fixed' && styles.interestMethodTextSelected]}>
+          Charge interest once on the original loan principal for the whole loan.
+        </Text>
+        <Text style={[styles.interestMethodExample, rules.loanInterestMethod === 'fixed' && styles.interestMethodTextSelected]}>
+          Example: UGX 100,000 at {Number(rules.loanInterestPercentage) || 0}% = {formatExampleMoney(fixedExampleInterest)} total interest.
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityState={{ selected: rules.loanInterestMethod === 'flat' }}
+        style={[styles.interestMethodCard, rules.loanInterestMethod === 'flat' && styles.interestMethodCardSelected]}
+        onPress={() => updateRule('loanInterestMethod', 'flat')}
+      >
+        <Text style={[styles.interestMethodTitle, rules.loanInterestMethod === 'flat' && styles.interestMethodTitleSelected]}>
+          Flat Interest {rules.loanInterestMethod === 'flat' ? '✓ SELECTED' : ''}
+        </Text>
+        <Text style={[styles.interestMethodDescription, rules.loanInterestMethod === 'flat' && styles.interestMethodTextSelected]}>
+          Charge interest on the original principal in every repayment period.
+        </Text>
+        <Text style={[styles.interestMethodExample, rules.loanInterestMethod === 'flat' && styles.interestMethodTextSelected]}>
+          Example: UGX 100,000 at {Number(rules.loanInterestPercentage) || 0}% × {examplePeriods} periods = {formatExampleMoney(flatExampleInterest)} total interest.
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityState={{ selected: rules.loanInterestMethod === 'declining' }}
+        style={[styles.interestMethodCard, rules.loanInterestMethod === 'declining' && styles.interestMethodCardSelected]}
+        onPress={() => updateRule('loanInterestMethod', 'declining')}
+      >
+        <Text style={[styles.interestMethodTitle, rules.loanInterestMethod === 'declining' && styles.interestMethodTitleSelected]}>
+          Declining Balance {rules.loanInterestMethod === 'declining' ? '✓ SELECTED' : ''}
+        </Text>
+        <Text style={[styles.interestMethodDescription, rules.loanInterestMethod === 'declining' && styles.interestMethodTextSelected]}>
+          Calculate each period's interest on the principal still outstanding, assuming equal principal repayments.
+        </Text>
+        <Text style={[styles.interestMethodExample, rules.loanInterestMethod === 'declining' && styles.interestMethodTextSelected]}>
+          Example: interest reduces as the balance falls; over {examplePeriods} periods the total is about {formatExampleMoney(decliningExampleInterest)}.
+        </Text>
+      </TouchableOpacity>
+    </View>
+    <Text style={styles.exampleFootnote}>
+      Examples use a UGX 100,000 loan, the percentage entered below, and {examplePeriods} repayment periods. Actual schedules use the selected rate and loan term.
+    </Text>
 
     <Text style={styles.label}>  
       Loan Interest Percentage  
@@ -817,6 +890,57 @@ fontSize: 15,
 color: '#111827',
 backgroundColor: '#ffffff',
 marginBottom: 14,
+},
+
+interestMethodList: {
+  gap: 10,
+  marginTop: 8,
+  marginBottom: 8,
+},
+interestMethodCard: {
+  borderWidth: 1,
+  borderColor: '#d1d5db',
+  borderRadius: 12,
+  padding: 13,
+  backgroundColor: '#ffffff',
+},
+interestMethodCardSelected: {
+  borderColor: '#16a34a',
+  borderWidth: 2,
+  backgroundColor: '#f0fdf4',
+},
+interestMethodTitle: {
+  color: '#111827',
+  fontSize: 15,
+  fontWeight: '800',
+  marginBottom: 6,
+},
+interestMethodTitleSelected: {
+  color: '#166534',
+},
+interestMethodDescription: {
+  color: '#4b5563',
+  fontSize: 13,
+  lineHeight: 19,
+},
+interestMethodExample: {
+  color: '#166534',
+  backgroundColor: '#dcfce7',
+  padding: 9,
+  borderRadius: 8,
+  marginTop: 9,
+  fontSize: 13,
+  fontWeight: '700',
+  lineHeight: 19,
+},
+interestMethodTextSelected: {
+  color: '#14532d',
+},
+exampleFootnote: {
+  color: '#6b7280',
+  fontSize: 12,
+  lineHeight: 17,
+  marginBottom: 12,
 },
 
 optionRow: {
