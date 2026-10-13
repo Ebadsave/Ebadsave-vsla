@@ -107,6 +107,7 @@ export default function RollCallScreen({ route, navigation }: Props) {
       navigation.navigate('FinancialTransactions', {
         groupId,
         meetingId,
+        executiveMemberId,
       });
     } catch (error) {
       Alert.alert(
