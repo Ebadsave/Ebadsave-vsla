@@ -70,6 +70,7 @@ export type VSLASetupRuleRecord = {
   maximum_shares_per_meeting: number;
   maximum_loan_multiple: number;
   loan_interest_percentage: number;
+  loan_interest_method: LoanInterestMethod;
   loan_interest_period: string;
   maximum_loan_repayment_period: number;
   social_fund_contribution: number;
@@ -250,6 +251,7 @@ export type VSLASetupRuleUpdates = {
   maximumSharesPerMeeting?: number;
   maximumLoanMultiple?: number;
   loanInterestPercentage?: number;
+  loanInterestMethod?: LoanInterestMethod;
   loanInterestPeriod?: string;
   maximumLoanRepaymentPeriod?: number;
   socialFundContribution?: number;
@@ -716,6 +718,7 @@ async function createDefaultVSLASetupRules(
       maximum_shares_per_meeting,
       maximum_loan_multiple,
       loan_interest_percentage,
+      loan_interest_method,
       loan_interest_period,
       maximum_loan_repayment_period,
       social_fund_contribution,
@@ -732,13 +735,14 @@ async function createDefaultVSLASetupRules(
       created_at,
       updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     groupId,
     1000,
     1,
     5,
     3,
     5,
+    'fixed',
     'per month',
     12,
     0,
@@ -1027,6 +1031,7 @@ status TEXT NOT NULL DEFAULT 'active',
       maximum_shares_per_meeting INTEGER NOT NULL DEFAULT 5,
       maximum_loan_multiple REAL NOT NULL DEFAULT 3,
       loan_interest_percentage REAL NOT NULL DEFAULT 5,
+      loan_interest_method TEXT NOT NULL DEFAULT 'fixed' CHECK (loan_interest_method IN ('fixed', 'flat', 'declining')),
       loan_interest_period TEXT NOT NULL DEFAULT 'per month',
       maximum_loan_repayment_period INTEGER NOT NULL DEFAULT 12,
       social_fund_contribution REAL NOT NULL DEFAULT 0,
@@ -1780,6 +1785,14 @@ status TEXT NOT NULL DEFAULT 'active',
     'vsla_setup_rules',
     'share_out_methodology',
     "TEXT NOT NULL DEFAULT 'savings_based'",
+  );
+
+  // Persist the group's selected interest method without changing existing loan contracts.
+  await addColumnIfMissing(
+    db,
+    'vsla_setup_rules',
+    'loan_interest_method',
+    "TEXT NOT NULL DEFAULT 'fixed'",
   );
 
   await addColumnIfMissing(
@@ -3047,6 +3060,15 @@ export async function updateVSLASetupRules(
     data.loanInterestPercentage ??
     current.loan_interest_percentage;
 
+  const loanInterestMethod =
+    data.loanInterestMethod ??
+    current.loan_interest_method ??
+    'fixed';
+
+  if (!['fixed', 'flat', 'declining'].includes(loanInterestMethod)) {
+    throw new Error('Choose Fixed, Flat, or Declining interest.');
+  }
+
   const loanInterestPeriod =
     normalizeText(
       data.loanInterestPeriod ??
@@ -3288,6 +3310,7 @@ export async function updateVSLASetupRules(
        maximum_shares_per_meeting = ?,
        maximum_loan_multiple = ?,
        loan_interest_percentage = ?,
+       loan_interest_method = ?,
        loan_interest_period = ?,
        maximum_loan_repayment_period = ?,
        social_fund_contribution = ?,
@@ -3311,6 +3334,7 @@ export async function updateVSLASetupRules(
     maximumShares,
     maximumLoanMultiple,
     loanInterestPercentage,
+    loanInterestMethod,
     loanInterestPeriod,
     maximumLoanRepaymentPeriod,
     socialFundContribution,
@@ -5654,8 +5678,12 @@ export async function createLoanApplication(
   input: LoanApplicationInput,
 ): Promise<number> {
   const db = await getDatabase();
+  const setup = await getVSLASetupRules(groupId);
+  // The group admin's saved Setup Rules choice is the default for every new loan.
+  // Already-created applications and loan contracts retain their original method.
+  const interestMethod = setup?.loan_interest_method ?? input.interestMethod;
   if (!Number.isFinite(input.requestedAmount) || input.requestedAmount <= 0) throw new Error('Requested loan amount must be greater than zero.');
-  if (!['fixed', 'flat', 'declining'].includes(input.interestMethod)) throw new Error('Choose a supported interest method.');
+  if (!['fixed', 'flat', 'declining'].includes(interestMethod)) throw new Error('Choose a supported interest method in Setup Rules.');
   if (!Number.isFinite(input.interestRate) || input.interestRate < 0) throw new Error('Interest rate cannot be negative.');
   if (!Number.isInteger(input.repaymentPeriodCount) || input.repaymentPeriodCount < 1 || input.repaymentPeriodCount > 120) throw new Error('Repayment period must be between 1 and 120 periods.');
   if (!['weeks', 'months'].includes(input.repaymentPeriodUnit)) throw new Error('Choose weeks or months.');
@@ -5663,7 +5691,6 @@ export async function createLoanApplication(
   await requireMemberPresentForLoan(db, groupId, memberId, meetingId);
   const freeze = await isLoanDisbursementFrozen(groupId, memberId);
   if (freeze) throw new Error('Loan applications are currently frozen by the Chairperson.');
-  const setup = await getVSLASetupRules(groupId);
   const savings = await getMemberSavings(groupId, memberId);
   const currentLoan = await getMemberLoanBalance(groupId, memberId);
   const maximumAdditionalLoan = Math.max(0, savings * Number(setup?.maximum_loan_multiple ?? 3) - currentLoan.balance);
@@ -5688,13 +5715,13 @@ export async function createLoanApplication(
       repayment_period_count, repayment_period_unit, requested_due_date, reason, status,
       requested_by_member_id, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
-    groupId, memberId, meetingId, input.requestedAmount, input.interestMethod, input.interestRate,
+    groupId, memberId, meetingId, input.requestedAmount, interestMethod, input.interestRate,
     input.repaymentPeriodCount, input.repaymentPeriodUnit, input.requestedDueDate ?? null,
     normalizeText(input.reason), input.requestedByMemberId ?? null, timestamp, timestamp,
   );
   await addLoanAudit(db, groupId, null, input.requestedByMemberId ?? null, 'loan_application_created', {
     applicationId: result.lastInsertRowId, memberId, requestedAmount: input.requestedAmount,
-    interestMethod: input.interestMethod, interestRate: input.interestRate,
+    interestMethod, interestRate: input.interestRate,
     repaymentPeriodCount: input.repaymentPeriodCount, repaymentPeriodUnit: input.repaymentPeriodUnit,
     committeeApprovalRequired: Boolean(policy.require_committee_approval),
     guarantorRequired: Boolean(policy.require_guarantor),
