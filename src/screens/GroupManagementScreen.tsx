@@ -15,6 +15,7 @@ import type { RootStackParamList } from '../../App';
 
 import {
   getGroupById,
+  getGroupOnboardingLock,
   getMembersByGroupId,
   getOpenMeeting,
   isMeetingRollCallComplete,
@@ -36,6 +37,8 @@ export default function GroupManagementScreen({
   const [groupNumber, setGroupNumber] = useState('');
   const [openMeeting, setOpenMeeting] = useState<any | null>(null);
   const [memberCount, setMemberCount] = useState(0);
+  const [onboardingMode, setOnboardingMode] = useState<'new' | 'existing'>('new');
+  const [onboardingLocked, setOnboardingLocked] = useState(false);
 
   const loadManagementState = useCallback(async () => {
     try {
@@ -51,6 +54,10 @@ export default function GroupManagementScreen({
             : '',
         );
       }
+
+      const onboardingState = await getGroupOnboardingLock(groupId);
+      setOnboardingMode(onboardingState.onboarding_mode);
+      setOnboardingLocked(onboardingState.onboarding_locked);
 
       const members = await getMembersByGroupId(groupId);
 
@@ -199,6 +206,26 @@ export default function GroupManagementScreen({
 
           <Text style={styles.infoValue}>
             {memberCount}
+          </Text>
+        </View>
+
+        <View style={[styles.onboardingCard, onboardingLocked && styles.onboardingLockedCard]}>
+          <View style={styles.onboardingHeader}>
+            <Text style={styles.onboardingTitle}>
+              {onboardingMode === 'existing' ? 'Existing Group Onboarding' : 'New Group Setup'}
+            </Text>
+            <View style={[styles.onboardingBadge, onboardingLocked && styles.onboardingBadgeLocked]}>
+              <Text style={styles.onboardingBadgeText}>
+                {onboardingLocked ? 'LOCKED' : 'OPEN'}
+              </Text>
+            </View>
+          </View>
+          <Text style={styles.onboardingDescription}>
+            {onboardingLocked
+              ? 'Opening balances are locked because the first digital meeting has been closed. Use an authorised adjustment with an audit record for any genuine correction.'
+              : onboardingMode === 'existing'
+                ? 'Existing balances can be entered and verified before the first digital meeting is closed.'
+                : 'This group starts with zero opening balances.'}
           </Text>
         </View>
 
@@ -411,6 +438,58 @@ const styles = StyleSheet.create({
     color: '#111827',
     fontSize: 24,
     fontWeight: '800',
+  },
+
+  onboardingCard: {
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    borderRadius: 12,
+    padding: 15,
+    marginBottom: 14,
+    backgroundColor: '#f0fdf4',
+  },
+
+  onboardingLockedCard: {
+    borderColor: '#fecaca',
+    backgroundColor: '#fef2f2',
+  },
+
+  onboardingHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+
+  onboardingTitle: {
+    flex: 1,
+    color: '#166534',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+
+  onboardingBadge: {
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: '#16a34a',
+  },
+
+  onboardingBadgeLocked: {
+    backgroundColor: '#dc2626',
+  },
+
+  onboardingBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+
+  onboardingDescription: {
+    marginTop: 8,
+    color: '#374151',
+    fontSize: 13,
+    lineHeight: 19,
   },
 
   currentMeetingCard: {
