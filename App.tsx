@@ -24,6 +24,7 @@ import MiscellaneousExpenseScreen from './src/screens/MiscellaneousExpenseScreen
 import ExpenditureScreen from './src/screens/ExpenditureScreen';
 import BackupRestoreScreen from './src/screens/BackupRestoreScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
+import ExistingGroupOnboardingScreen from './src/screens/ExistingGroupOnboardingScreen';
 
 export type RootStackParamList = {
   Onboarding: undefined;
@@ -32,6 +33,7 @@ export type RootStackParamList = {
   Home: undefined;
   Constitution: undefined;
   BackupRestore: undefined;
+  ExistingGroupOnboarding: { groupId: number };
 
   SetupRules: {
     groupId: number;
@@ -180,6 +182,7 @@ export default function App() {
         }}
       >
         <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+        <Stack.Screen name="ExistingGroupOnboarding" component={ExistingGroupOnboardingScreen} />
         <Stack.Screen name="Welcome" component={WelcomeScreen} />
 
         <Stack.Screen
