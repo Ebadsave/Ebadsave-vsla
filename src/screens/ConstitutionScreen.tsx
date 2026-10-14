@@ -16,6 +16,7 @@ import {
   getAllGroups,
   deleteGroup,
   undoDeleteGroup,
+  setGroupOnboardingMode,
   type GroupRecord,
 } from '../database/database';
 
@@ -98,6 +99,7 @@ export default function ConstitutionScreen({
 
   const [isRegisteringNewGroup, setIsRegisteringNewGroup] = useState(false);
   const [isTestGroup, setIsTestGroup] = useState(false);
+  const [onboardingMode, setOnboardingMode] = useState<'new' | 'existing'>('new');
 
   const signatureValid = signatureCode.trim().length >= 4;
 
@@ -157,7 +159,7 @@ export default function ConstitutionScreen({
     };
   }, []);
 
-  const startNewGroupRegistration = (testGroup = false) => {
+  const startNewGroupRegistration = (testGroup = false, mode: 'new' | 'existing' = 'new') => {
     setGroupNumber(null);
     setCurrentGroupId(null);
     setGroupName('');
@@ -167,6 +169,7 @@ export default function ConstitutionScreen({
     setAgreed(false);
     setRegistrationMessage('');
     setIsTestGroup(testGroup);
+    setOnboardingMode(mode);
     setIsRegisteringNewGroup(true);
     setExpandedArticle(0);
   };
@@ -226,6 +229,10 @@ export default function ConstitutionScreen({
         isTestGroup,
       });
 
+      if (!isTestGroup) {
+        await setGroupOnboardingMode(group.id, onboardingMode);
+      }
+
       setGroupNumber(group.group_number);
       setCurrentGroupId(group.id);
 
@@ -234,7 +241,7 @@ export default function ConstitutionScreen({
       setIsRegisteringNewGroup(false);
 
       setRegistrationMessage(
-        `${isTestGroup ? 'Test group' : 'Group'} successfully registered as KYA ${group.group_number}.`,
+        `${isTestGroup ? 'Test group' : onboardingMode === 'existing' ? 'Existing group' : 'New group'} successfully registered as KYA ${group.group_number}.`,
       );
     } catch (error) {
       console.error('Group registration error:', error);
@@ -435,11 +442,22 @@ export default function ConstitutionScreen({
                         <TouchableOpacity
                           style={styles.newGroupButton}
                           onPress={() =>
-                            startNewGroupRegistration(false)
+                            startNewGroupRegistration(false, 'new')
                           }
                         >
                           <Text style={styles.newGroupButtonText}>
                             + Register New Group
+                          </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[styles.newGroupButton, styles.existingGroupButton]}
+                          onPress={() =>
+                            startNewGroupRegistration(false, 'existing')
+                          }
+                        >
+                          <Text style={styles.newGroupButtonText}>
+                            + Register Existing Group (Already Saving)
                           </Text>
                         </TouchableOpacity>
 
@@ -459,7 +477,7 @@ export default function ConstitutionScreen({
                             <Text style={styles.modeText}>
                               {isTestGroup
                                 ? 'TEST MODE: KYA 2000–KYA 2009'
-                                : 'PRODUCTION MODE: KYA 2010–KYA 9090'}
+                                : `PRODUCTION MODE: KYA 2010–KYA 9090\n${onboardingMode === 'existing' ? 'EXISTING GROUP: Opening balances will be entered separately.' : 'NEW GROUP: Starts with zero opening balances.'}`}
                             </Text>
 
                             <Text style={styles.inputLabel}>
@@ -905,6 +923,10 @@ const styles = StyleSheet.create({
     borderRadius: 9,
     alignItems: 'center',
     justifyContent: 'center',
+    marginTop: 8,
+  },
+  existingGroupButton: {
+    backgroundColor: '#166534',
     marginTop: 8,
   },
   newGroupButtonText: {
