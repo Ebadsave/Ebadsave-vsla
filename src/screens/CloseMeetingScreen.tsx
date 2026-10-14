@@ -179,7 +179,7 @@ export default function CloseMeetingScreen({ route, navigation }: Props) {
             if (!latestCashCheck.balanced) throw new Error('Cash no longer balances. Recheck the cash before closing.');
             const receipt = await verifyBackupBeforeClose();
             await closeMeeting(meetingId, executiveMemberId, cashAmount, true, receipt);
-            Alert.alert('Meeting Closed', 'The meeting has been closed successfully.', [
+            Alert.alert('Meeting Closed', 'The meeting has been closed successfully. Existing-group onboarding is now locked and cannot be reopened to add opening savings.', [
               { text: 'OK', onPress: () => navigation.navigate('Home') },
             ]);
           } catch (error) {
