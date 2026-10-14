@@ -23,8 +23,10 @@ import LoansScreen from './src/screens/LoansScreen';
 import MiscellaneousExpenseScreen from './src/screens/MiscellaneousExpenseScreen';
 import ExpenditureScreen from './src/screens/ExpenditureScreen';
 import BackupRestoreScreen from './src/screens/BackupRestoreScreen';
+import OnboardingScreen from './src/screens/OnboardingScreen';
 
 export type RootStackParamList = {
+  Onboarding: undefined;
   Welcome: undefined;
   PreAppAuthorization: undefined;
   Home: undefined;
@@ -172,11 +174,12 @@ export default function App() {
   return (
     <NavigationContainer>
       <Stack.Navigator
-        initialRouteName="Welcome"
+        initialRouteName="Onboarding"
         screenOptions={{
           headerShown: false,
         }}
       >
+        <Stack.Screen name="Onboarding" component={OnboardingScreen} />
         <Stack.Screen name="Welcome" component={WelcomeScreen} />
 
         <Stack.Screen
