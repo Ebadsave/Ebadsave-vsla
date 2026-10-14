@@ -936,6 +936,30 @@ status TEXT NOT NULL DEFAULT 'active',
       onboarding_locked_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS member_opening_balances (
+      member_id INTEGER PRIMARY KEY,
+      group_id INTEGER NOT NULL,
+      opening_shares INTEGER,
+      share_value REAL,
+      opening_savings REAL,
+      opening_loan_balance REAL NOT NULL DEFAULT 0,
+      loan_due_date TEXT,
+      saved_at TEXT NOT NULL,
+      FOREIGN KEY (member_id) REFERENCES members(id),
+      FOREIGN KEY (group_id) REFERENCES groups(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS onboarding_balance_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      member_id INTEGER,
+      action TEXT NOT NULL,
+      details TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (member_id) REFERENCES members(id)
+    );
+
     CREATE TABLE IF NOT EXISTS group_registration_attempts (
       id TEXT PRIMARY KEY,
       group_name TEXT NOT NULL,
@@ -2760,6 +2784,126 @@ export async function setGroupOnboardingMode(
     mode,
     groupId,
   );
+}
+
+export type MemberOpeningBalanceRecord = {
+  member_id: number;
+  group_id: number;
+  opening_shares: number | null;
+  share_value: number | null;
+  opening_savings: number | null;
+  opening_loan_balance: number;
+  loan_due_date: string | null;
+  saved_at: string;
+};
+
+export async function getMemberOpeningBalances(
+  groupId: number,
+): Promise<MemberOpeningBalanceRecord[]> {
+  const db = await getDatabase();
+  return db.getAllAsync<MemberOpeningBalanceRecord>(
+    `SELECT member_id, group_id, opening_shares, share_value,
+            opening_savings, opening_loan_balance, loan_due_date, saved_at
+     FROM member_opening_balances
+     WHERE group_id = ?
+     ORDER BY member_id ASC`,
+    groupId,
+  );
+}
+
+export type MemberOpeningBalanceInput = {
+  member_id: number;
+  opening_shares: number | null;
+  share_value: number | null;
+  opening_savings: number | null;
+  opening_loan_balance: number;
+  loan_due_date: string | null;
+};
+
+export async function saveMemberOpeningBalances(
+  groupId: number,
+  entries: MemberOpeningBalanceInput[],
+): Promise<void> {
+  const db = await getDatabase();
+  const timestamp = now();
+
+  const group = await db.getFirstAsync<{ onboarding_locked: number }>(
+    `SELECT onboarding_locked FROM groups WHERE id = ? LIMIT 1`,
+    groupId,
+  );
+  if (!group) throw new Error('Group not found.');
+  if (Number(group.onboarding_locked) === 1) {
+    throw new Error('Onboarding is permanently locked because the first digital meeting has been closed.');
+  }
+
+  for (const entry of entries) {
+    const values = [entry.opening_shares, entry.share_value, entry.opening_savings, entry.opening_loan_balance];
+    if (values.some((value) => value !== null && (!Number.isFinite(Number(value)) || Number(value) < 0))) {
+      throw new Error('Opening balances must be non-negative valid numbers.');
+    }
+    if (entry.opening_shares !== null && !Number.isInteger(entry.opening_shares)) {
+      throw new Error('Opening shares must be a whole number.');
+    }
+  }
+
+  await db.withTransactionAsync(async () => {
+    const currentGroup = await db.getFirstAsync<{ onboarding_locked: number }>(
+      `SELECT onboarding_locked FROM groups WHERE id = ? LIMIT 1`,
+      groupId,
+    );
+    if (!currentGroup) throw new Error('Group not found.');
+    if (Number(currentGroup.onboarding_locked) === 1) {
+      throw new Error('Onboarding is permanently locked because the first digital meeting has been closed.');
+    }
+
+    for (const entry of entries) {
+      const member = await db.getFirstAsync<{ id: number }>(
+        `SELECT id FROM members WHERE id = ? AND group_id = ? AND status = 'active' LIMIT 1`,
+        entry.member_id,
+        groupId,
+      );
+      if (!member) throw new Error(`Member ${entry.member_id} does not belong to this group or is inactive.`);
+
+      await db.runAsync(
+        `INSERT INTO member_opening_balances
+          (member_id, group_id, opening_shares, share_value, opening_savings,
+           opening_loan_balance, loan_due_date, saved_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(member_id) DO UPDATE SET
+           group_id = excluded.group_id,
+           opening_shares = excluded.opening_shares,
+           share_value = excluded.share_value,
+           opening_savings = excluded.opening_savings,
+           opening_loan_balance = excluded.opening_loan_balance,
+           loan_due_date = excluded.loan_due_date,
+           saved_at = excluded.saved_at`,
+        entry.member_id,
+        groupId,
+        entry.opening_shares,
+        entry.share_value,
+        entry.opening_savings,
+        entry.opening_loan_balance,
+        entry.loan_due_date,
+        timestamp,
+      );
+
+      await db.runAsync(
+        `INSERT INTO onboarding_balance_audit
+          (group_id, member_id, action, details, created_at)
+         VALUES (?, ?, 'opening_balance_saved', ?, ?)`,
+        groupId,
+        entry.member_id,
+        JSON.stringify({
+          opening_shares: entry.opening_shares,
+          share_value: entry.share_value,
+          opening_savings: entry.opening_savings,
+          opening_loan_balance: entry.opening_loan_balance,
+          loan_due_date: entry.loan_due_date,
+        }),
+        timestamp,
+      );
+    }
+  });
 }
 
 export async function getGroupById(
