@@ -218,9 +218,9 @@ if (
   return;
 }
 
-if (/^(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/.test(rules.meetingFrequency)) {
+if (/^(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/.test((rules.meetingFrequency ?? 'weekly'))) {
   const selectedDate = rules.meetingStartDate ? new Date(`${rules.meetingStartDate}T00:00:00`) : null;
-  if (!selectedDate || Number.isNaN(selectedDate.getTime()) || !isMatchingMeetingRule(selectedDate, rules.meetingFrequency)) {
+  if (!selectedDate || Number.isNaN(selectedDate.getTime()) || !isMatchingMeetingRule(selectedDate, (rules.meetingFrequency ?? 'weekly'))) {
     Alert.alert('Choose a Meeting Date', 'Choose a calendar date that matches the selected meeting rule.');
     return;
   }
@@ -717,8 +717,8 @@ Setup Rules
 
     <View style={styles.optionRow}>
       {['weekly', 'biweekly', 'monthly'].map((frequency) => (
-        <TouchableOpacity key={frequency} style={[styles.optionButton, rules.meetingFrequency === frequency && styles.optionButtonActive]} onPress={() => updateRule('meetingFrequency', frequency)}>
-          <Text style={[styles.optionText, rules.meetingFrequency === frequency && styles.optionTextActive]}>{frequency === 'biweekly' ? 'Every 2 weeks' : frequency[0].toUpperCase() + frequency.slice(1)}</Text>
+        <TouchableOpacity key={frequency} style={[styles.optionButton, (rules.meetingFrequency ?? 'weekly') === frequency && styles.optionButtonActive]} onPress={() => updateRule('meetingFrequency', frequency)}>
+          <Text style={[styles.optionText, (rules.meetingFrequency ?? 'weekly') === frequency && styles.optionTextActive]}>{frequency === 'biweekly' ? 'Every 2 weeks' : frequency[0].toUpperCase() + frequency.slice(1)}</Text>
         </TouchableOpacity>
       ))}
     </View>
@@ -727,21 +727,21 @@ Setup Rules
     <Text style={styles.description}>Choose which occurrence of a weekday your group meets every month.</Text>
     <View style={styles.optionRow}>
       {MEETING_ORDINALS.map((ordinal) => {
-        const active = rules.meetingFrequency.startsWith(`${ordinal}_`);
-        return <TouchableOpacity key={ordinal} style={[styles.optionButton, active && styles.optionButtonActive]} onPress={() => updateRule('meetingFrequency', `${ordinal}_${rules.meetingFrequency.split('_')[1] || 'monday'}`)}><Text style={[styles.optionText, active && styles.optionTextActive]}>{ordinal[0].toUpperCase() + ordinal.slice(1)}</Text></TouchableOpacity>;
+        const active = (rules.meetingFrequency ?? 'weekly').startsWith(`${ordinal}_`);
+        return <TouchableOpacity key={ordinal} style={[styles.optionButton, active && styles.optionButtonActive]} onPress={() => updateRule('meetingFrequency', `${ordinal}_${(rules.meetingFrequency ?? 'weekly').split('_')[1] || 'monday'}`)}><Text style={[styles.optionText, active && styles.optionTextActive]}>{ordinal[0].toUpperCase() + ordinal.slice(1)}</Text></TouchableOpacity>;
       })}
     </View>
     <View style={styles.optionRow}>
       {MEETING_WEEKDAYS.map((weekday) => {
-        const active = rules.meetingFrequency.endsWith(`_${weekday.key}`);
+        const active = (rules.meetingFrequency ?? 'weekly').endsWith(`_${weekday.key}`);
         return <TouchableOpacity key={weekday.key} style={[styles.optionButton, active && styles.optionButtonActive]} onPress={() => {
-          const ordinal = MEETING_ORDINALS.find((item) => rules.meetingFrequency.startsWith(`${item}_`)) || 'first';
+          const ordinal = MEETING_ORDINALS.find((item) => (rules.meetingFrequency ?? 'weekly').startsWith(`${item}_`)) || 'first';
           updateRule('meetingFrequency', `${ordinal}_${weekday.key}`);
         }}><Text style={[styles.optionText, active && styles.optionTextActive]}>{weekday.label}</Text></TouchableOpacity>;
       })}
     </View>
 
-    { /^(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/.test(rules.meetingFrequency) && (() => {
+    { /^(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/.test((rules.meetingFrequency ?? 'weekly')) && (() => {
       const year = calendarMonth.getFullYear();
       const monthIndex = calendarMonth.getMonth();
       const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
@@ -762,7 +762,7 @@ Setup Rules
           {cells.map((day, index) => {
             if (day === null) return <View key={`blank-${year}-${monthIndex}-${index}`} style={styles.calendarCell} />;
             const date = new Date(year, monthIndex, day); const iso = toLocalDateString(date);
-            const matching = isMatchingMeetingRule(date, rules.meetingFrequency); const isPast = iso < todayString; const selected = iso === rules.meetingStartDate;
+            const matching = isMatchingMeetingRule(date, (rules.meetingFrequency ?? 'weekly')); const isPast = iso < todayString; const selected = iso === rules.meetingStartDate;
             return <TouchableOpacity key={iso} accessibilityRole="button" accessibilityState={{ selected, disabled: !matching || isPast }} style={[styles.calendarCell, styles.calendarDay, selected && styles.calendarDaySelected, (!matching || isPast) && styles.calendarDayDisabled]} disabled={!matching || isPast || saving} onPress={() => updateRule('meetingStartDate', iso)}><Text style={[styles.calendarDayText, selected && styles.calendarDayTextSelected, (!matching || isPast) && styles.calendarDayTextDisabled]}>{day}</Text></TouchableOpacity>;
           })}
         </View>
