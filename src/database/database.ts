@@ -19,6 +19,9 @@ export type GroupRecord = {
   created_at: string;
   last_activity_at: string;
   firebase_registration_id?: string | null;
+  onboarding_mode?: 'new' | 'existing';
+  onboarding_locked?: number;
+  onboarding_locked_at?: string | null;
 };
 
 export type MemberRecord = {
@@ -927,7 +930,10 @@ currency TEXT NOT NULL DEFAULT 'UGX',
 status TEXT NOT NULL DEFAULT 'active',
       created_at TEXT NOT NULL,
       last_activity_at TEXT NOT NULL,
-      firebase_registration_id TEXT
+      firebase_registration_id TEXT,
+      onboarding_mode TEXT NOT NULL DEFAULT 'new' CHECK (onboarding_mode IN ('new', 'existing')),
+      onboarding_locked INTEGER NOT NULL DEFAULT 0 CHECK (onboarding_locked IN (0, 1)),
+      onboarding_locked_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS group_registration_attempts (
@@ -1864,6 +1870,30 @@ status TEXT NOT NULL DEFAULT 'active',
   await refreshGroupDormancy(db);
 
   await addColumnIfMissing(db, 'groups', 'firebase_registration_id', 'TEXT');
+  await addColumnIfMissing(db, 'groups', 'onboarding_mode', "TEXT NOT NULL DEFAULT 'new'");
+  await addColumnIfMissing(db, 'groups', 'onboarding_locked', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumnIfMissing(db, 'groups', 'onboarding_locked_at', 'TEXT');
+
+  // Preserve the lock for groups whose first digital meeting was already closed.
+  await db.runAsync(
+    `UPDATE groups
+     SET onboarding_locked = 1,
+         onboarding_locked_at = COALESCE(onboarding_locked_at, (
+           SELECT gm.closed_at
+           FROM group_meetings gm
+           WHERE gm.group_id = groups.id
+             AND gm.meeting_number = 1
+             AND gm.status = 'closed'
+           LIMIT 1
+         ))
+     WHERE EXISTS (
+       SELECT 1
+       FROM group_meetings gm
+       WHERE gm.group_id = groups.id
+         AND gm.meeting_number = 1
+         AND gm.status = 'closed'
+     )`,
+  );
 
   await addColumnIfMissing(db, 'meeting_closures', 'cash_at_hand', 'REAL');
   await addColumnIfMissing(db, 'meeting_closures', 'cash_expected', 'REAL');
@@ -2682,6 +2712,52 @@ export async function recordGroupActivity(
        last_activity_at = ?
      WHERE id = ?`,
     now(),
+    groupId,
+  );
+}
+
+export async function getGroupOnboardingLock(groupId: number): Promise<{
+  onboarding_mode: 'new' | 'existing';
+  onboarding_locked: boolean;
+  onboarding_locked_at: string | null;
+}> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{
+    onboarding_mode: 'new' | 'existing';
+    onboarding_locked: number;
+    onboarding_locked_at: string | null;
+  }>(
+    `SELECT onboarding_mode, onboarding_locked, onboarding_locked_at
+     FROM groups WHERE id = ? LIMIT 1`,
+    groupId,
+  );
+
+  if (!row) throw new Error('Group not found.');
+  return {
+    onboarding_mode: row.onboarding_mode,
+    onboarding_locked: Number(row.onboarding_locked) === 1,
+    onboarding_locked_at: row.onboarding_locked_at,
+  };
+}
+
+export async function setGroupOnboardingMode(
+  groupId: number,
+  mode: 'new' | 'existing',
+): Promise<void> {
+  const db = await getDatabase();
+  const group = await db.getFirstAsync<{
+    onboarding_locked: number;
+  }>(
+    `SELECT onboarding_locked FROM groups WHERE id = ? LIMIT 1`,
+    groupId,
+  );
+  if (!group) throw new Error('Group not found.');
+  if (Number(group.onboarding_locked) === 1) {
+    throw new Error('Onboarding is permanently locked because the first digital meeting has been closed.');
+  }
+  await db.runAsync(
+    `UPDATE groups SET onboarding_mode = ? WHERE id = ? AND onboarding_locked = 0`,
+    mode,
     groupId,
   );
 }
@@ -8787,6 +8863,18 @@ export async function closeMeeting(
     timestamp,
     meetingId,
   );
+
+  // Closing the first digital meeting permanently locks existing-group onboarding.
+  if (Number(meeting.meeting_number) === 1) {
+    await db.runAsync(
+      `UPDATE groups
+       SET onboarding_locked = 1,
+           onboarding_locked_at = COALESCE(onboarding_locked_at, ?)
+       WHERE id = ?`,
+      timestamp,
+      meeting.group_id,
+    );
+  }
 
   await addMeetingAudit(
     db,
