@@ -105,7 +105,15 @@ export default function LoanDisbursementScreen() {
   const maximumMemberLoan = Math.max(0, memberSavings * loanMultiple - currentLoanBalance);
   const requestedAmount = Number(amount.replace(/,/g, '').trim());
   const periods = Number(periodCount);
-  const interestMethod = rules?.loan_interest_method ?? 'fixed';
+  const interestCalculator = rules?.loan_interest_calculator ?? 'common_vsla';
+  // Common VSLA mode uses declining-balance interest on the outstanding principal.
+  // Standard mode respects the group's selected fixed, flat, or declining method.
+  const interestMethod: LoanInterestMethod =
+    interestCalculator === 'common_vsla'
+      ? 'declining'
+      : rules?.loan_interest_method ?? 'fixed';
+  const repaymentAmountMode = rules?.loan_repayment_amount_mode ?? 'flexible';
+  const repaymentPeriodMode = rules?.loan_repayment_period_mode ?? 'flexible';
   const interestRate = Number(rules?.loan_interest_percentage ?? 0);
   const interestPeriod = rules?.loan_interest_period ?? 'per month';
   const preview = useMemo(
@@ -233,7 +241,14 @@ export default function LoanDisbursementScreen() {
   };
 
   const createAndProcessApplication = async () => {
-    if (!groupId || !meetingId || !executiveMemberId || !selectedMemberId || !rules || !policy) return;
+    if (!groupId || !meetingId || !executiveMemberId || !selectedMemberId || !rules) {
+      Alert.alert('Loan Details Missing', 'Please check the group, meeting, executive, selected member, and saved Setup Rules before continuing.');
+      return;
+    }
+    if (!policy) {
+      Alert.alert('Loan Policy Unavailable', 'The group loan policy could not be loaded. Return to the screen and try again. No loan has been created.');
+      return;
+    }
     setSaving(true);
     try {
       const applicationId = await createLoanApplication(
@@ -335,16 +350,21 @@ export default function LoanDisbursementScreen() {
 
         <View style={styles.rulesCard}>
           <Text style={styles.cardTitle}>Saved Loan Rules</Text>
+          <View style={styles.ruleRow}><Text style={styles.ruleName}>Interest calculator</Text><Text style={styles.ruleValue}>{interestCalculator === 'common_vsla' ? 'Common VSLA' : 'Standard'}</Text></View>
           <View style={styles.ruleRow}><Text style={styles.ruleName}>Interest method</Text><Text style={styles.ruleValue}>{methodLabel(interestMethod)}</Text></View>
           <View style={styles.ruleRow}><Text style={styles.ruleName}>Interest rate</Text><Text style={styles.ruleValue}>{interestRate}%</Text></View>
+          <View style={styles.ruleRow}><Text style={styles.ruleName}>Repayment amount</Text><Text style={styles.ruleValue}>{repaymentAmountMode === 'fixed' ? 'Fixed instalment' : 'Flexible amount'}</Text></View>
+          <View style={styles.ruleRow}><Text style={styles.ruleName}>Repayment period</Text><Text style={styles.ruleValue}>{repaymentPeriodMode === 'fixed' ? 'Fixed' : 'Flexible'}</Text></View>
           <View style={styles.ruleRow}><Text style={styles.ruleName}>Interest period</Text><Text style={styles.ruleValue}>{interestPeriod}</Text></View>
           <View style={styles.ruleRow}><Text style={styles.ruleName}>Maximum repayment term</Text><Text style={styles.ruleValue}>{Number(rules?.maximum_loan_repayment_period ?? 12)} months</Text></View>
           <Text style={styles.methodDescription}>
-            {interestMethod === 'fixed'
-              ? 'Fixed: one total interest charge based on the original principal, divided across the repayment instalments.'
-              : interestMethod === 'flat'
-                ? 'Flat: interest is calculated on the original principal for each repayment period.'
-                : 'Declining: interest is calculated on the outstanding principal at the start of each repayment period.'}
+            {interestCalculator === 'common_vsla'
+              ? 'Common VSLA: interest is calculated each repayment period on the outstanding principal (declining balance).'
+              : interestMethod === 'fixed'
+                ? 'Fixed: one total interest charge based on the original principal, divided across the repayment instalments.'
+                : interestMethod === 'flat'
+                  ? 'Flat: interest is calculated on the original principal for each repayment period.'
+                  : 'Declining: interest is calculated on the outstanding principal at the start of each repayment period.'}
           </Text>
           {periodUnsupported && (
             <Text style={styles.warning}>
