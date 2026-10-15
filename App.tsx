@@ -12,6 +12,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { initializeI18n } from './src/translations/i18n';
+import LanguageScreen from './src/screens/LanguageScreen';
 
 import PreAppAuthorizationScreen from './src/screens/PreAppAuthorizationScreen';
 import HomeScreen from './src/screens/HomeScreen';
@@ -39,6 +40,7 @@ import ExistingGroupOnboardingScreen from './src/screens/ExistingGroupOnboarding
 export type RootStackParamList = {
   Onboarding: undefined;
   Welcome: undefined;
+  Language: undefined;
   PreAppAuthorization: undefined;
   Home: undefined;
   Constitution: undefined;
@@ -195,6 +197,15 @@ function WelcomeScreen({ navigation }: { navigation: any }) {
         </Text>
       </Pressable>
 
+      <Pressable
+        style={welcomeStyles.languageButton}
+        onPress={() => navigation.navigate('Language')}
+      >
+        <Text style={welcomeStyles.languageButtonText}>
+          🌍 Choose Language
+        </Text>
+      </Pressable>
+
       <Text style={welcomeStyles.note}>
         Group login continues to require the group's pre-app authorization.
       </Text>
@@ -262,6 +273,19 @@ const welcomeStyles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
   },
+  languageButton: {
+    backgroundColor: '#166534',
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    marginBottom: 13,
+  },
+  languageButtonText: {
+    color: '#ffffff',
+    textAlign: 'center',
+    fontSize: 16,
+    fontWeight: '700',
+  },
   note: {
     color: '#64748b',
     textAlign: 'center',
@@ -281,10 +305,7 @@ export default function App() {
       try {
         await initializeI18n();
       } catch (error) {
-        console.error(
-          'Language initialization failed:',
-          error
-        );
+        console.error('Language initialization failed:', error);
       } finally {
         if (isMounted) {
           setLanguageReady(true);
@@ -334,104 +355,43 @@ export default function App() {
         />
 
         <Stack.Screen
+          name="Language"
+          component={LanguageScreen}
+        />
+
+        <Stack.Screen
           name="PreAppAuthorization"
           component={PreAppAuthorizationScreen}
         />
 
-        <Stack.Screen
-          name="Home"
-          component={HomeScreen}
-        />
-
-        <Stack.Screen
-          name="Constitution"
-          component={ConstitutionScreen}
-        />
-
-        <Stack.Screen
-          name="BackupRestore"
-          component={BackupRestoreScreen}
-        />
-
-        <Stack.Screen
-          name="SetupRules"
-          component={SetupRulesScreen}
-        />
-
-        <Stack.Screen
-          name="GroupManagement"
-          component={GroupManagementScreen}
-        />
-
-        <Stack.Screen
-          name="AddMembers"
-          component={AddMembersScreen}
-        />
-
-        <Stack.Screen
-          name="NewMeeting"
-          component={NewMeetingScreen}
-        />
-
-        <Stack.Screen
-          name="CloseMeeting"
-          component={CloseMeetingScreen}
-        />
-
-        <Stack.Screen
-          name="MeetingRollCall"
-          component={RollCallScreen}
-        />
-
+        <Stack.Screen name="Home" component={HomeScreen} />
+        <Stack.Screen name="Constitution" component={ConstitutionScreen} />
+        <Stack.Screen name="BackupRestore" component={BackupRestoreScreen} />
+        <Stack.Screen name="SetupRules" component={SetupRulesScreen} />
+        <Stack.Screen name="GroupManagement" component={GroupManagementScreen} />
+        <Stack.Screen name="AddMembers" component={AddMembersScreen} />
+        <Stack.Screen name="NewMeeting" component={NewMeetingScreen} />
+        <Stack.Screen name="CloseMeeting" component={CloseMeetingScreen} />
+        <Stack.Screen name="MeetingRollCall" component={RollCallScreen} />
         <Stack.Screen
           name="FinancialTransactions"
           component={FinancialTransactionsScreen}
         />
-
-        <Stack.Screen
-          name="Savings"
-          component={SavingsScreen}
-        />
-
+        <Stack.Screen name="Savings" component={SavingsScreen} />
         <Stack.Screen
           name="LoanDisbursement"
           component={LoanDisbursementScreen}
         />
-
-        <Stack.Screen
-          name="Fines"
-          component={FinesScreen}
-        />
-
-        <Stack.Screen
-          name="Insurance"
-          component={InsuranceScreen}
-        />
-
-        <Stack.Screen
-          name="ExternalFunds"
-          component={ExternalFundsScreen}
-        />
-
-        <Stack.Screen
-          name="Repayment"
-          component={LoanRepaymentScreen}
-        />
-
-        <Stack.Screen
-          name="Loans"
-          component={LoansScreen}
-        />
-
+        <Stack.Screen name="Fines" component={FinesScreen} />
+        <Stack.Screen name="Insurance" component={InsuranceScreen} />
+        <Stack.Screen name="ExternalFunds" component={ExternalFundsScreen} />
+        <Stack.Screen name="Repayment" component={LoanRepaymentScreen} />
+        <Stack.Screen name="Loans" component={LoansScreen} />
         <Stack.Screen
           name="MiscellaneousExpense"
           component={MiscellaneousExpenseScreen}
         />
-
-        <Stack.Screen
-          name="Expenditure"
-          component={ExpenditureScreen}
-        />
+        <Stack.Screen name="Expenditure" component={ExpenditureScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );
