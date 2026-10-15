@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   ActivityIndicator,
   Alert,
@@ -31,6 +32,8 @@ export default function LanguageScreen({
 }: {
   navigation: any;
 }) {
+  const { t } = useTranslation();
+
   const [selectedLanguage, setSelectedLanguage] =
     useState<AppLanguage>(
       (i18n.language as AppLanguage) || 'en',
@@ -62,12 +65,8 @@ export default function LanguageScreen({
       await changeAppLanguage(language);
 
       Alert.alert(
-        'Language saved',
-        `${
-          supportedLanguages.find(
-            (item) => item.code === language,
-          )?.name
-        } selected successfully.`,
+        t('common.success'),
+        t('messages.savedSuccessfully'),
         [
           {
             text: 'OK',
@@ -80,8 +79,8 @@ export default function LanguageScreen({
       setSelectedLanguage(previousLanguage);
 
       Alert.alert(
-        'Could not save language',
-        'Please check your storage setup and try again.',
+        t('common.error'),
+        t('messages.somethingWentWrong'),
       );
     } finally {
       setSaving(false);
@@ -94,16 +93,16 @@ export default function LanguageScreen({
       contentContainerStyle={styles.content}
     >
       <View style={styles.header}>
-        <Text style={styles.title}>Ebadsave VSLA</Text>
+        <Text style={styles.title}>{t('app.name')}</Text>
         <Text style={styles.subtitle}>
-          Save together, grow together
+          {t('app.slogan')}
         </Text>
       </View>
 
-      <Text style={styles.heading}>Choose Your Language</Text>
+      <Text style={styles.heading}>{t('language.title')}</Text>
 
       <Text style={styles.description}>
-        Tap a language to select it.
+        {t('language.description', { defaultValue: 'Tap a language to select it.' })}
       </Text>
 
       {supportedLanguages.map((language) => {
@@ -155,7 +154,7 @@ export default function LanguageScreen({
         <View style={styles.savingRow}>
           <ActivityIndicator color="#16a34a" size="small" />
           <Text style={styles.savingText}>
-            Saving language...
+            {t('language.saving', { defaultValue: 'Saving language...' })}
           </Text>
         </View>
       )}
@@ -168,7 +167,7 @@ export default function LanguageScreen({
         onPress={() => navigation.goBack()}
         disabled={saving}
       >
-        <Text style={styles.backText}>Back</Text>
+        <Text style={styles.backText}>{t('common.back')}</Text>
       </Pressable>
     </ScrollView>
   );
