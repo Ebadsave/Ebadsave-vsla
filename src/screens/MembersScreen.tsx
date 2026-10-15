@@ -20,6 +20,107 @@ import {
 } from '../database/database';
 
 import { useFocusEffect } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
+
+
+const MEMBER_SCREEN_TEXT = {
+  en: {
+    title: 'Members', subtitle: 'Register and manage group members', selectGroup: 'Select Group',
+    noActiveGroup: 'No active group', registerGroupFirst: 'Please register a group before registering members.',
+    openConstitution: 'Open Constitution', currentGroup: 'CURRENT GROUP', member: 'member', members: 'members',
+    registerNewMember: '+ Register New Member', registerMember: 'Register New Member', fullName: 'Full Name *',
+    enterFullName: 'Enter member full name', gender: 'Gender *', male: 'Male', female: 'Female', age: 'Age *',
+    enterAge: 'Enter age', phone: 'Phone', optionalPhone: 'Optional phone number', cell: 'Cell *', enterCell: 'Enter cell',
+    district: 'District *', enterDistrict: 'Enter district', cancel: 'Cancel', registering: 'Registering...',
+    registeredMembers: 'Registered Members', noMembersYet: 'No members yet', registerFirst: 'Register the first member of this group.',
+    error: 'Error', unableGroups: 'Unable to load groups.', unableMembers: 'Unable to load members.',
+    noGroupSelected: 'No Group Selected', selectGroupFirst: 'Please select a group first.', required: 'Required',
+    nameRequired: 'Member name is required.', genderRequired: 'Gender is required.', invalidAge: 'Invalid Age',
+    validAge: 'Please enter a valid age.', cellRequired: 'Cell is required.', districtRequired: 'District is required.',
+    memberRegistered: 'Member Registered', registeredSuccessfully: 'has been registered successfully.', memberNumber: 'Member Number:',
+    registrationFailed: 'Registration Failed', couldNotRegister: 'The member could not be registered.', years: 'years',
+  },
+  nyn: {
+    title: 'Abanyamuryango', subtitle: 'Wandika kandi ucunge abanyamuryango b’ekibiina', selectGroup: 'Hitamu ekibiina',
+    noActiveGroup: 'Tihariho kibiina ekikora', registerGroupFirst: 'Banza wandikise ekibiina otandike kwandika abanyamuryango.',
+    openConstitution: 'Guraho amateeka g’ekibiina', currentGroup: 'EKIBIINA EKIRIMO', member: 'omunyamuryango', members: 'abanyamuryango',
+    registerNewMember: '+ Wandiika omunyamuryango omuhya', registerMember: 'Wandiika omunyamuryango omuhya', fullName: 'Amabara goona *',
+    enterFullName: 'Yingiza amabara goona g’omunyamuryango', gender: 'Ekikazi/ekishaija *', male: 'Ekishaija', female: 'Ekikazi', age: 'Emyaka *',
+    enterAge: 'Yingiza emyaka', phone: 'Esimu', optionalPhone: 'Namba y’esimu (si ya bujurizi)', cell: 'Cell *', enterCell: 'Yingiza cell',
+    district: 'Disiturikiti *', enterDistrict: 'Yingiza disiturikiti', cancel: 'Rekera', registering: 'Nikirikwandikwa...',
+    registeredMembers: 'Abanyamuryango abamaze kwandikwa', noMembersYet: 'Tihariho banyamuryango', registerFirst: 'Wandiika omunyamuryango w’okubanza w’ekibiina eki.',
+    error: 'Ensobi', unableGroups: 'Tihasobokire kutwara ebibiina.', unableMembers: 'Tihasobokire kutwara abanyamuryango.',
+    noGroupSelected: 'Tihariho kibiina kihairweho', selectGroupFirst: 'Banza uhitemu ekibiina.', required: 'Nikyetaagisa',
+    nameRequired: 'Amabara g’omunyamuryango nigyetagisa.', genderRequired: 'Ekikazi/ekishaija nikyetaagisa.', invalidAge: 'Emyaka etariyo',
+    validAge: 'Yingiza emyaka ehikire.', cellRequired: 'Cell neyetaagisa.', districtRequired: 'Disiturikiti neyetaagisa.',
+    memberRegistered: 'Omunyamuryango ayandikirwe', registeredSuccessfully: 'ayandikirwe gye.', memberNumber: 'Namba y’omunyamuryango:',
+    registrationFailed: 'Okukwandiika tikusobokire', couldNotRegister: 'Omunyamuryango tarikubaasa kwandikwa.', years: 'emyaka',
+  },
+  lg: {
+    title: 'Abammemba', subtitle: 'Wandiisa era ofuge abammemba b’ekibiina', selectGroup: 'Londa ekibiina',
+    noActiveGroup: 'Tewali kibiina kikola', registerGroupFirst: 'Sooka owandiise ekibiina nga tonnawandiisa bammemba.',
+    openConstitution: 'Ggulawo amateeka g’ekibiina', currentGroup: 'EKIBIINA EKIRIWO', member: 'mmemba', members: 'bammemba',
+    registerNewMember: '+ Wandiisa Mmemba Omupya', registerMember: 'Wandiisa Mmemba Omupya', fullName: 'Amannya Gonna *',
+    enterFullName: 'Yingiza amannya gonna ag’omummemba', gender: 'Ekikula *', male: 'Musajja', female: 'Mukazi', age: 'Emyaka *',
+    enterAge: 'Yingiza emyaka', phone: 'Essimu', optionalPhone: 'Namba y’essimu (si ya buwaze)', cell: 'Cell *', enterCell: 'Yingiza cell',
+    district: 'Disitulikiti *', enterDistrict: 'Yingiza disitulikiti', cancel: 'Sazaamu', registering: 'Awandiisibwa...',
+    registeredMembers: 'Bammemba Abawandiisiddwa', noMembersYet: 'Tewali bammemba', registerFirst: 'Wandiisa mmemba asoose mu kibiina kino.',
+    error: 'Ensobi', unableGroups: 'Tekisobose kutikka bibiina.', unableMembers: 'Tekisobose kutikka bammemba.',
+    noGroupSelected: 'Tewali kibiina kirondeddwa', selectGroupFirst: 'Sooka olonde ekibiina.', required: 'Kyetaagisa',
+    nameRequired: 'Amannya g’omummemba geetaagisa.', genderRequired: 'Ekikula kyetaagisa.', invalidAge: 'Emyaka si mituufu',
+    validAge: 'Yingiza emyaka emituufu.', cellRequired: 'Cell yeetaagisa.', districtRequired: 'Disitulikiti yeetaagisa.',
+    memberRegistered: 'Mmemba Awandiisiddwa', registeredSuccessfully: 'awandiisiddwa bulungi.', memberNumber: 'Namba y’omummemba:',
+    registrationFailed: 'Okwewandiisa Kugaanye', couldNotRegister: 'Ommemba tasobola kuwandiisibwa.', years: 'emyaka',
+  },
+  sw: {
+    title: 'Wanachama', subtitle: 'Sajili na usimamie wanachama wa kikundi', selectGroup: 'Chagua Kikundi',
+    noActiveGroup: 'Hakuna kikundi kinachotumika', registerGroupFirst: 'Tafadhali sajili kikundi kabla ya kusajili wanachama.',
+    openConstitution: 'Fungua Katiba', currentGroup: 'KIKUNDI CHA SASA', member: 'mwanachama', members: 'wanachama',
+    registerNewMember: '+ Sajili Mwanachama Mpya', registerMember: 'Sajili Mwanachama Mpya', fullName: 'Majina Kamili *',
+    enterFullName: 'Ingiza majina kamili ya mwanachama', gender: 'Jinsia *', male: 'Mwanaume', female: 'Mwanamke', age: 'Umri *',
+    enterAge: 'Ingiza umri', phone: 'Simu', optionalPhone: 'Namba ya simu (si lazima)', cell: 'Seli *', enterCell: 'Ingiza seli',
+    district: 'Wilaya *', enterDistrict: 'Ingiza wilaya', cancel: 'Ghairi', registering: 'Inasajili...',
+    registeredMembers: 'Wanachama Waliosajiliwa', noMembersYet: 'Bado hakuna wanachama', registerFirst: 'Sajili mwanachama wa kwanza wa kikundi hiki.',
+    error: 'Hitilafu', unableGroups: 'Imeshindwa kupakia vikundi.', unableMembers: 'Imeshindwa kupakia wanachama.',
+    noGroupSelected: 'Hakuna Kikundi Kilichochaguliwa', selectGroupFirst: 'Tafadhali chagua kikundi kwanza.', required: 'Inahitajika',
+    nameRequired: 'Jina la mwanachama linahitajika.', genderRequired: 'Jinsia inahitajika.', invalidAge: 'Umri Si Sahihi',
+    validAge: 'Tafadhali ingiza umri sahihi.', cellRequired: 'Seli inahitajika.', districtRequired: 'Wilaya inahitajika.',
+    memberRegistered: 'Mwanachama Amesajiliwa', registeredSuccessfully: 'amesajiliwa kwa mafanikio.', memberNumber: 'Namba ya Mwanachama:',
+    registrationFailed: 'Usajili Umeshindwa', couldNotRegister: 'Mwanachama hakuweza kusajiliwa.', years: 'miaka',
+  },
+  fr: {
+    title: 'Membres', subtitle: 'Inscrire et gérer les membres du groupe', selectGroup: 'Choisir un groupe',
+    noActiveGroup: 'Aucun groupe actif', registerGroupFirst: 'Veuillez inscrire un groupe avant d’inscrire des membres.',
+    openConstitution: 'Ouvrir la constitution', currentGroup: 'GROUPE ACTUEL', member: 'membre', members: 'membres',
+    registerNewMember: '+ Inscrire un nouveau membre', registerMember: 'Inscrire un nouveau membre', fullName: 'Nom complet *',
+    enterFullName: 'Saisir le nom complet du membre', gender: 'Sexe *', male: 'Homme', female: 'Femme', age: 'Âge *',
+    enterAge: 'Saisir l’âge', phone: 'Téléphone', optionalPhone: 'Numéro de téléphone (facultatif)', cell: 'Cellule *', enterCell: 'Saisir la cellule',
+    district: 'District *', enterDistrict: 'Saisir le district', cancel: 'Annuler', registering: 'Inscription...',
+    registeredMembers: 'Membres inscrits', noMembersYet: 'Aucun membre pour le moment', registerFirst: 'Inscrivez le premier membre de ce groupe.',
+    error: 'Erreur', unableGroups: 'Impossible de charger les groupes.', unableMembers: 'Impossible de charger les membres.',
+    noGroupSelected: 'Aucun groupe sélectionné', selectGroupFirst: 'Veuillez d’abord choisir un groupe.', required: 'Obligatoire',
+    nameRequired: 'Le nom du membre est obligatoire.', genderRequired: 'Le sexe est obligatoire.', invalidAge: 'Âge invalide',
+    validAge: 'Veuillez saisir un âge valide.', cellRequired: 'La cellule est obligatoire.', districtRequired: 'Le district est obligatoire.',
+    memberRegistered: 'Membre inscrit', registeredSuccessfully: 'a été inscrit avec succès.', memberNumber: 'Numéro du membre :',
+    registrationFailed: 'Échec de l’inscription', couldNotRegister: 'Le membre n’a pas pu être inscrit.', years: 'ans',
+  },
+  rw: {
+    title: 'Abanyamuryango', subtitle: 'Andika kandi ucunge abanyamuryango b’itsinda', selectGroup: 'Hitamo itsinda',
+    noActiveGroup: 'Nta tsinda rikora', registerGroupFirst: 'Banza wandikishe itsinda mbere yo kwandika abanyamuryango.',
+    openConstitution: 'Fungura amategeko y’itsinda', currentGroup: 'ITSINDA RIHARI', member: 'umunyamuryango', members: 'abanyamuryango',
+    registerNewMember: '+ Andika umunyamuryango mushya', registerMember: 'Andika umunyamuryango mushya', fullName: 'Amazina yose *',
+    enterFullName: 'Andika amazina yose y’umunyamuryango', gender: 'Igitsina *', male: 'Gabo', female: 'Gore', age: 'Imyaka *',
+    enterAge: 'Andika imyaka', phone: 'Telefoni', optionalPhone: 'Nimero ya telefoni (si ngombwa)', cell: 'Akagari *', enterCell: 'Andika akagari',
+    district: 'Akarere *', enterDistrict: 'Andika akarere', cancel: 'Hagarika', registering: 'Birandikwa...',
+    registeredMembers: 'Abanyamuryango banditswe', noMembersYet: 'Nta banyamuryango baraboneka', registerFirst: 'Andika umunyamuryango wa mbere w’iri tsinda.',
+    error: 'Ikosa', unableGroups: 'Ntibishobotse gufungura amatsinda.', unableMembers: 'Ntibishobotse gufungura abanyamuryango.',
+    noGroupSelected: 'Nta tsinda ryatoranyijwe', selectGroupFirst: 'Banza uhitemo itsinda.', required: 'Birakenewe',
+    nameRequired: 'Amazina y’umunyamuryango arakenewe.', genderRequired: 'Igitsina kirakenewe.', invalidAge: 'Imyaka si yo',
+    validAge: 'Andika imyaka nyayo.', cellRequired: 'Akagari karakenewe.', districtRequired: 'Akarere karakenewe.',
+    memberRegistered: 'Umunyamuryango yanditswe', registeredSuccessfully: 'yanditswe neza.', memberNumber: 'Nimero y’umunyamuryango:',
+    registrationFailed: 'Kwiyandikisha byanze', couldNotRegister: 'Umunyamuryango ntiyashoboye kwandikwa.', years: 'imyaka',
+  },
+} as const;
 
 type MembersScreenProps = {
   navigation: any;
@@ -28,6 +129,10 @@ type MembersScreenProps = {
 export default function MembersScreen({
   navigation,
 }: MembersScreenProps) {
+  const { i18n } = useTranslation();
+  const languageCode = i18n.language.split('-')[0] as keyof typeof MEMBER_SCREEN_TEXT;
+  const words = MEMBER_SCREEN_TEXT[languageCode] ?? MEMBER_SCREEN_TEXT.en;
+
   const [groups, setGroups] = useState<GroupRecord[]>([]);
   const [selectedGroup, setSelectedGroup] =
     useState<GroupRecord | null>(null);
@@ -107,11 +212,11 @@ export default function MembersScreen({
       );
 
       Alert.alert(
-        'Error',
-        'Unable to load groups.',
+        words.error,
+        words.unableGroups,
       );
     }
-  }, [selectedGroup]);
+  }, [selectedGroup, words]);
 
   useFocusEffect(
     useCallback(() => {
@@ -137,8 +242,8 @@ export default function MembersScreen({
       );
 
       Alert.alert(
-        'Error',
-        'Unable to load members.',
+        words.error,
+        words.unableMembers,
       );
     }
   };
@@ -155,8 +260,8 @@ export default function MembersScreen({
   const handleRegisterMember = async () => {
     if (!selectedGroup) {
       Alert.alert(
-        'No Group Selected',
-        'Please select a group first.',
+        words.noGroupSelected,
+        words.selectGroupFirst,
       );
       return;
     }
@@ -170,16 +275,16 @@ export default function MembersScreen({
 
     if (!cleanName) {
       Alert.alert(
-        'Required',
-        'Member name is required.',
+        words.required,
+        words.nameRequired,
       );
       return;
     }
 
     if (!cleanGender) {
       Alert.alert(
-        'Required',
-        'Gender is required.',
+        words.required,
+        words.genderRequired,
       );
       return;
     }
@@ -192,24 +297,24 @@ export default function MembersScreen({
       numericAge <= 0
     ) {
       Alert.alert(
-        'Invalid Age',
-        'Please enter a valid age.',
+        words.invalidAge,
+        words.validAge,
       );
       return;
     }
 
     if (!cleanCell) {
       Alert.alert(
-        'Required',
-        'Cell is required.',
+        words.required,
+        words.cellRequired,
       );
       return;
     }
 
     if (!cleanDistrict) {
       Alert.alert(
-        'Required',
-        'District is required.',
+        words.required,
+        words.districtRequired,
       );
       return;
     }
@@ -247,13 +352,13 @@ export default function MembersScreen({
 
       if (newMember) {
         Alert.alert(
-          'Member Registered',
-          `${newMember.full_name} has been registered successfully.\n\nMember Number: ${newMember.member_number}`,
+          words.memberRegistered,
+          `${newMember.full_name} ${words.registeredSuccessfully}\n\n${words.memberNumber} ${newMember.member_number}`,
         );
       } else {
         Alert.alert(
-          'Member Registered',
-          `${cleanName} has been registered successfully.`,
+          words.memberRegistered,
+          `${cleanName} ${words.registeredSuccessfully}`,
         );
       }
     } catch (error) {
@@ -265,10 +370,10 @@ export default function MembersScreen({
       const message =
         error instanceof Error
           ? error.message
-          : 'The member could not be registered.';
+          : words.couldNotRegister;
 
       Alert.alert(
-        'Registration Failed',
+        words.registrationFailed,
         message,
       );
     } finally {
@@ -289,11 +394,11 @@ export default function MembersScreen({
 
         <View style={styles.headerTitleContainer}>
           <Text style={styles.headerTitle}>
-            Members
+            {words.title}
           </Text>
 
           <Text style={styles.headerSubtitle}>
-            Register and manage group members
+            {words.subtitle}
           </Text>
         </View>
       </View>
@@ -305,18 +410,17 @@ export default function MembersScreen({
         {/* Group Selection */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>
-            Select Group
+            {words.selectGroup}
           </Text>
 
           {groups.length === 0 ? (
             <View style={styles.emptyBox}>
               <Text style={styles.emptyTitle}>
-                No active group
+                {words.noActiveGroup}
               </Text>
 
               <Text style={styles.emptyText}>
-                Please register a group before
-                registering members.
+                {words.registerGroupFirst}
               </Text>
 
               <TouchableOpacity
@@ -330,7 +434,7 @@ export default function MembersScreen({
                 <Text
                   style={styles.secondaryButtonText}
                 >
-                  Open Constitution
+                  {words.openConstitution}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -401,7 +505,7 @@ export default function MembersScreen({
               <Text
                 style={styles.selectedGroupLabel}
               >
-                CURRENT GROUP
+                {words.currentGroup}
               </Text>
 
               <Text
@@ -419,10 +523,7 @@ export default function MembersScreen({
               <Text
                 style={styles.memberCount}
               >
-                {members.length} member
-                {members.length === 1
-                  ? ''
-                  : 's'}
+                {members.length} {members.length === 1 ? words.member : words.members}
               </Text>
             </View>
 
@@ -438,7 +539,7 @@ export default function MembersScreen({
                 <Text
                   style={styles.registerButtonText}
                 >
-                  + Register New Member
+                  {words.registerNewMember}
                 </Text>
               </TouchableOpacity>
             )}
@@ -447,23 +548,23 @@ export default function MembersScreen({
             {showRegisterForm && (
               <View style={styles.formCard}>
                 <Text style={styles.formTitle}>
-                  Register New Member
+                  {words.registerMember}
                 </Text>
 
                 <Text style={styles.inputLabel}>
-                  Full Name *
+                  {words.fullName}
                 </Text>
 
                 <TextInput
                   style={styles.input}
                   value={memberName}
                   onChangeText={setMemberName}
-                  placeholder="Enter member full name"
+                  placeholder={words.enterFullName}
                   placeholderTextColor="#9ca3af"
                 />
 
                 <Text style={styles.inputLabel}>
-                  Gender *
+                  {words.gender}
                 </Text>
 
                 <View style={styles.genderRow}>
@@ -487,7 +588,7 @@ export default function MembersScreen({
                               styles.genderButtonTextSelected,
                           ]}
                         >
-                          {item}
+                          {item === 'Male' ? words.male : words.female}
                         </Text>
                       </TouchableOpacity>
                     ),
@@ -495,52 +596,52 @@ export default function MembersScreen({
                 </View>
 
                 <Text style={styles.inputLabel}>
-                  Age *
+                  {words.age}
                 </Text>
 
                 <TextInput
                   style={styles.input}
                   value={age}
                   onChangeText={setAge}
-                  placeholder="Enter age"
+                  placeholder={words.enterAge}
                   placeholderTextColor="#9ca3af"
                   keyboardType="number-pad"
                 />
 
                 <Text style={styles.inputLabel}>
-                  Phone
+                  {words.phone}
                 </Text>
 
                 <TextInput
                   style={styles.input}
                   value={phone}
                   onChangeText={setPhone}
-                  placeholder="Optional phone number"
+                  placeholder={words.optionalPhone}
                   placeholderTextColor="#9ca3af"
                   keyboardType="phone-pad"
                 />
 
                 <Text style={styles.inputLabel}>
-                  Cell *
+                  {words.cell}
                 </Text>
 
                 <TextInput
                   style={styles.input}
                   value={cell}
                   onChangeText={setCell}
-                  placeholder="Enter cell"
+                  placeholder={words.enterCell}
                   placeholderTextColor="#9ca3af"
                 />
 
                 <Text style={styles.inputLabel}>
-                  District *
+                  {words.district}
                 </Text>
 
                 <TextInput
                   style={styles.input}
                   value={district}
                   onChangeText={setDistrict}
-                  placeholder="Enter district"
+                  placeholder={words.enterDistrict}
                   placeholderTextColor="#9ca3af"
                 />
 
@@ -556,7 +657,7 @@ export default function MembersScreen({
                     <Text
                       style={styles.cancelButtonText}
                     >
-                      Cancel
+                      {words.cancel}
                     </Text>
                   </TouchableOpacity>
 
@@ -575,8 +676,8 @@ export default function MembersScreen({
                       style={styles.saveButtonText}
                     >
                       {saving
-                        ? 'Registering...'
-                        : 'Register Member'}
+                        ? words.registering
+                        : words.registerMember}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -586,7 +687,7 @@ export default function MembersScreen({
             {/* Members List */}
             <View style={styles.membersSection}>
               <Text style={styles.sectionTitle}>
-                Registered Members
+                {words.registeredMembers}
               </Text>
 
               {members.length === 0 ? (
@@ -594,14 +695,13 @@ export default function MembersScreen({
                   <Text
                     style={styles.emptyMembersTitle}
                   >
-                    No members yet
+                    {words.noMembersYet}
                   </Text>
 
                   <Text
                     style={styles.emptyMembersText}
                   >
-                    Register the first member of
-                    this group.
+                    {words.registerFirst}
                   </Text>
                 </View>
               ) : (
@@ -644,7 +744,7 @@ export default function MembersScreen({
                       >
                         {member.gender}
                         {' • '}
-                        {member.age} years
+                        {member.age} {words.years}
                       </Text>
 
                       {member.phone && (
