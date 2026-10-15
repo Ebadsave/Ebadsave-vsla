@@ -9,7 +9,11 @@ import {
 } from 'react-native';
 
 import { NavigationContainer } from '@react-navigation/native';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import {
+  createNativeStackNavigator,
+  NativeStackNavigationProp,
+} from '@react-navigation/native-stack';
+import { useTranslation } from 'react-i18next';
 
 import { initializeI18n } from './src/translations/i18n';
 import LanguageScreen from './src/screens/LanguageScreen';
@@ -135,80 +139,79 @@ export type RootStackParamList = {
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
-function WelcomeScreen({ navigation }: { navigation: any }) {
+type WelcomeScreenNavigationProp = NativeStackNavigationProp<
+  RootStackParamList,
+  'Welcome'
+>;
+
+function WelcomeScreen({
+  navigation,
+}: {
+  navigation: WelcomeScreenNavigationProp;
+}) {
+  const { t } = useTranslation();
+
   return (
     <View style={welcomeStyles.container}>
       <View style={welcomeStyles.header}>
-        <Text style={welcomeStyles.title}>Ebadsave VSLA</Text>
+        <Text style={welcomeStyles.title}>{t('app.name')}</Text>
         <Text style={welcomeStyles.subtitle}>
-          Save together, grow together
+          {t('app.slogan')}
         </Text>
       </View>
 
-      <Text style={welcomeStyles.heading}>Welcome</Text>
+      <Text style={welcomeStyles.heading}>{t('welcome.heading')}</Text>
 
       <Text style={welcomeStyles.instruction}>
-        Choose how you want to continue.
+        {t('welcome.instruction')}
       </Text>
 
       <Pressable
         style={welcomeStyles.primaryButton}
         onPress={() => navigation.navigate('PreAppAuthorization')}
       >
-        <Text style={welcomeStyles.primaryText}>
-          1. Group login
-        </Text>
+        <Text style={welcomeStyles.primaryText}>{t('welcome.groupLogin')}</Text>
       </Pressable>
 
       <Pressable
         style={welcomeStyles.primaryButton}
         onPress={() => navigation.navigate('Constitution')}
       >
-        <Text style={welcomeStyles.primaryText}>
-          2. Create new group
-        </Text>
+        <Text style={welcomeStyles.primaryText}>{t('welcome.createGroup')}</Text>
       </Pressable>
 
       <Pressable
         style={welcomeStyles.secondaryButton}
         onPress={() =>
           Alert.alert(
-            'Personal account',
-            'Personal account creation is not connected in this project yet. Your group data and existing login rules have not been changed.'
+            t('welcome.personalAccountAlertTitle'),
+            t('welcome.personalAccountAlertMessage')
           )
         }
       >
-        <Text style={welcomeStyles.secondaryText}>
-          3. Create personal account
-        </Text>
+        <Text style={welcomeStyles.secondaryText}>{t('welcome.createPersonalAccount')}</Text>
       </Pressable>
 
       <Pressable
         style={welcomeStyles.secondaryButton}
         onPress={() =>
           Alert.alert(
-            'Personal login',
-            'Personal login is not connected in this project yet. We need to define and connect its authentication flow before it can safely sign you in.'
+            t('welcome.personalLoginAlertTitle'),
+            t('welcome.personalLoginAlertMessage')
           )
         }
       >
-        <Text style={welcomeStyles.secondaryText}>
-          4. Personal login
-        </Text>
+        <Text style={welcomeStyles.secondaryText}>{t('welcome.personalLogin')}</Text>
       </Pressable>
 
       <Pressable
         style={welcomeStyles.languageButton}
         onPress={() => navigation.navigate('Language')}
       >
-        <Text style={welcomeStyles.languageButtonText}>
-          🌍 Choose Language
-        </Text>
+        <Text style={welcomeStyles.languageButtonText}>🌍 {t('language.title')}</Text>
       </Pressable>
 
-      <Text style={welcomeStyles.note}>
-        Group login continues to require the group's pre-app authorization.
-      </Text>
+      <Text style={welcomeStyles.note}>{t('welcome.authorizationNote')}</Text>
     </View>
   );
 }
@@ -324,9 +327,7 @@ export default function App() {
     return (
       <View style={loadingStyles.container}>
         <ActivityIndicator size="large" color="#16a34a" />
-        <Text style={loadingStyles.text}>
-          Loading Ebadsave VSLA...
-        </Text>
+        <Text style={loadingStyles.text}>Loading Ebadsave VSLA...</Text>
       </View>
     );
   }
