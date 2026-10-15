@@ -21,7 +21,9 @@
     "expo-sqlite": "~16.0.0",
     "expo-crypto": "~14.0.2",
     "firebase": "^12.0.0",
+    "i18next": "^25.5.2",
     "react": "19.1.0",
+    "react-i18next": "^16.3.5",
     "react-native": "0.81.4",
     "react-native-screens": "~4.16.0",
     "react-native-safe-area-context": "~5.6.0"
@@ -31,4 +33,3 @@
     "typescript": "~5.9.2"
   }
 }
-
