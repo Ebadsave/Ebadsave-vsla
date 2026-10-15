@@ -74,6 +74,9 @@ maximumSharesPerMeeting: 5,
 maximumLoanMultiple: 3,
 loanInterestPercentage: 5,
 loanInterestMethod: 'fixed',
+loanRepaymentAmountMode: 'flexible',
+loanRepaymentPeriodMode: 'flexible',
+loanInterestCalculator: 'common_vsla',
 loanInterestPeriod: 'per month',
 maximumLoanRepaymentPeriod: 12,
 socialFundContribution: 0,
@@ -243,6 +246,9 @@ try {
       Number(rules.maximumLoanMultiple),  
     loanInterestPercentage:  
       Number(rules.loanInterestPercentage),  
+    loanRepaymentAmountMode: rules.loanRepaymentAmountMode === 'fixed' ? 'fixed' : 'flexible',
+    loanRepaymentPeriodMode: rules.loanRepaymentPeriodMode === 'fixed' ? 'fixed' : 'flexible',
+    loanInterestCalculator: rules.loanInterestCalculator === 'standard' ? 'standard' : 'common_vsla',
     maximumLoanRepaymentPeriod:  
       Number(rules.maximumLoanRepaymentPeriod),  
     socialFundContribution:  
