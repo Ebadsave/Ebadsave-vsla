@@ -56,6 +56,7 @@ export default function LoanRepaymentScreen({
     useState<number | null>(null);
 
   const [loanBalance, setLoanBalance] = useState(0);
+  const [loadingBalance, setLoadingBalance] = useState(false);
 
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('Loan repayment');
@@ -78,7 +79,7 @@ export default function LoanRepaymentScreen({
 
       setMembers(
         groupMembers.filter(
-          (member) => member.status === 'active',
+          (member) => String(member.status ?? '').toLowerCase() === 'active',
         ),
       );
     } catch (error) {
@@ -103,31 +104,15 @@ export default function LoanRepaymentScreen({
    */
   const loadLoanBalance = async (
     memberId: number,
-  ) => {
-    if (!groupId) return;
-
-    try {
-      const result = await getMemberLoanBalance(
-        groupId,
-        memberId,
-      );
-
-      setLoanBalance(
-        Number(result?.balance ?? 0),
-      );
-    } catch (error) {
-      console.error(
-        'Failed to load loan balance:',
-        error,
-      );
-
-      setLoanBalance(0);
-
-      Alert.alert(
-        'Error',
-        'Unable to load loan balance.',
-      );
+  ): Promise<number> => {
+    if (!groupId) {
+      throw new Error('Group was not found.');
     }
+
+    const result = await getMemberLoanBalance(groupId, memberId);
+    const balance = Math.max(0, Number(result?.balance ?? 0));
+    setLoanBalance(balance);
+    return balance;
   };
 
   useEffect(() => {
@@ -141,13 +126,24 @@ export default function LoanRepaymentScreen({
   const handleMemberSelect = async (
     memberId: number,
   ) => {
-    if (loading) return;
+    if (loading || loadingBalance) return;
 
     setSelectedMemberId(memberId);
     setAmount('');
     setLoanBalance(0);
+    setLoadingBalance(true);
 
-    await loadLoanBalance(memberId);
+    try {
+      await loadLoanBalance(memberId);
+    } catch (error) {
+      setLoanBalance(0);
+      Alert.alert(
+        'Loan Balance',
+        error instanceof Error ? error.message : 'Unable to load this member’s loan balance.',
+      );
+    } finally {
+      setLoadingBalance(false);
+    }
   };
 
   /*
@@ -167,6 +163,11 @@ export default function LoanRepaymentScreen({
         'Select Member',
         'Please select a member.',
       );
+      return;
+    }
+
+    if (loadingBalance) {
+      Alert.alert('Please Wait', 'The member’s current loan balance is still loading.');
       return;
     }
 
@@ -248,52 +249,50 @@ export default function LoanRepaymentScreen({
   const confirmRepayment = async (
     repaymentAmount: number,
   ) => {
-    if (
-      !groupId ||
-      selectedMemberId === null
-    ) {
-      return;
-    }
+    const memberId = selectedMemberId;
+    if (!groupId || memberId === null) return;
 
     try {
       setLoading(true);
 
+      // Refresh before writing so an outdated screen balance cannot authorize
+      // a payment that exceeds the current amount due.
+      const currentBalance = await getMemberLoanBalance(groupId, memberId);
+      const latestDue = Math.max(0, Number(currentBalance?.balance ?? 0));
+
+      if (latestDue <= 0) {
+        setLoanBalance(0);
+        Alert.alert('No Outstanding Loan', 'This member has no outstanding loan balance.');
+        return;
+      }
+
+      if (repaymentAmount > latestDue) {
+        setLoanBalance(latestDue);
+        Alert.alert(
+          'Amount Due Changed',
+          `The current amount due is ${formatCurrency(latestDue, currency)}. Please enter an amount no greater than this and try again.`,
+        );
+        return;
+      }
+
       await recordLoanRepayment(
         groupId,
-        selectedMemberId,
+        memberId,
         repaymentAmount,
         meetingId,
         reason.trim() || 'Loan repayment',
       );
 
-      /*
-       * Reload the balance directly from
-       * the database after saving.
-       */
-      await loadLoanBalance(
-        selectedMemberId,
-      );
-
-      /*
-       * Calculate the expected remaining balance
-       * for the success message.
-       */
-      const remaining =
-        Math.max(
-          0,
-          loanBalance - repaymentAmount,
-        );
+      // Use the database result after recording, rather than calculating
+      // from a potentially stale React state value.
+      const updatedBalance = await getMemberLoanBalance(groupId, memberId);
+      const remaining = Math.max(0, Number(updatedBalance?.balance ?? 0));
+      setLoanBalance(remaining);
 
       Alert.alert(
         'Success',
-        `Repayment of ${formatCurrency(
-          repaymentAmount,
-          currency,
-        )} recorded.\n\n` +
-          `Remaining loan balance: ${formatCurrency(
-            remaining,
-            currency,
-          )}`,
+        `Amount Paid: ${formatCurrency(repaymentAmount, currency)}\n\n` +
+          `Amount Due: ${formatCurrency(remaining, currency)}`,
       );
 
       setAmount('');
@@ -301,9 +300,7 @@ export default function LoanRepaymentScreen({
     } catch (error) {
       Alert.alert(
         'Repayment Failed',
-        error instanceof Error
-          ? error.message
-          : 'Unable to record repayment.',
+        error instanceof Error ? error.message : 'Unable to record repayment.',
       );
     } finally {
       setLoading(false);
@@ -374,7 +371,7 @@ export default function LoanRepaymentScreen({
                     member.id,
                   )
                 }
-                disabled={loading}
+                disabled={loading || loadingBalance}
               >
                 <Text
                   style={
@@ -397,14 +394,11 @@ export default function LoanRepaymentScreen({
         {selectedMember && (
           <View style={styles.balanceCard}>
             <Text style={styles.balanceLabel}>
-              Outstanding Loan
+              Amount Due
             </Text>
 
             <Text style={styles.balance}>
-              {formatCurrency(
-                loanBalance,
-                currency,
-              )}
+              {loadingBalance ? 'Loading…' : formatCurrency(loanBalance, currency)}
             </Text>
 
             <Text style={styles.memberText}>
@@ -418,7 +412,7 @@ export default function LoanRepaymentScreen({
         )}
 
         <Text style={styles.sectionTitle}>
-          Repayment Amount
+          Amount Paid
         </Text>
 
         <TextInput
@@ -433,9 +427,9 @@ export default function LoanRepaymentScreen({
             )
           }
           keyboardType="numeric"
-          placeholder="Enter repayment amount"
+          placeholder="Enter amount paid"
           placeholderTextColor="#6b7280"
-          editable={!loading}
+          editable={!loading && !loadingBalance && selectedMemberId !== null && loanBalance > 0}
         />
 
         <Text style={styles.sectionTitle}>
@@ -455,14 +449,17 @@ export default function LoanRepaymentScreen({
           style={[
             styles.repayButton,
             (loading ||
-              selectedMemberId ===
-                null) &&
+              loadingBalance ||
+              selectedMemberId === null ||
+              loanBalance <= 0) &&
               styles.disabledButton,
           ]}
           onPress={handleRepayment}
           disabled={
             loading ||
-            selectedMemberId === null
+            loadingBalance ||
+            selectedMemberId === null ||
+            loanBalance <= 0
           }
         >
           <Text style={styles.buttonText}>
