@@ -49,24 +49,38 @@ function calculatePreview(
   ratePercent: number,
   periods: number,
   method: LoanInterestMethod,
+  interestPeriod: string = 'per month',
+  cycleDurationMonths: number = 12,
 ): { interest: number; total: number; instalment: number } {
   if (principal <= 0 || periods <= 0 || ratePercent < 0) {
     return { interest: 0, total: 0, instalment: 0 };
   }
 
   const principalPerPeriod = principal / periods;
+  const fixedTotal = principal * ratePercent / 100;
+  const cycleLength = Math.max(1, Math.floor(cycleDurationMonths || 12));
   let remaining = principal;
   let interest = 0;
+
   for (let index = 0; index < periods; index += 1) {
     if (method === 'fixed') {
-      interest += (principal * ratePercent) / 100 / periods;
-    } else if (method === 'flat') {
-      interest += (principal * ratePercent) / 100;
+      interest += fixedTotal / periods;
     } else {
-      interest += (remaining * ratePercent) / 100;
+      const chargeThisPeriod =
+        interestPeriod === 'per loan'
+          ? index === 0
+          : interestPeriod === 'per cycle'
+            ? index % cycleLength === 0
+            : true;
+      if (chargeThisPeriod) {
+        interest += method === 'flat'
+          ? principal * ratePercent / 100
+          : remaining * ratePercent / 100;
+      }
     }
     remaining = Math.max(0, remaining - (index === periods - 1 ? remaining : principalPerPeriod));
   }
+
   const total = principal + interest;
   return { interest, total, instalment: total / periods };
 }
@@ -116,11 +130,14 @@ export default function LoanDisbursementScreen() {
   const repaymentPeriodMode = rules?.loan_repayment_period_mode ?? 'flexible';
   const interestRate = Number(rules?.loan_interest_percentage ?? 0);
   const interestPeriod = rules?.loan_interest_period ?? 'per month';
+  const cycleDurationMonths = Number(rules?.cycle_duration_months ?? 12);
+  const effectivePeriodCount = repaymentPeriodMode === 'fixed' && rules
+    ? Number(rules.maximum_loan_repayment_period)
+    : periods;
   const preview = useMemo(
-    () => calculatePreview(requestedAmount, interestRate, periods, interestMethod),
-    [requestedAmount, interestRate, periods, interestMethod],
+    () => calculatePreview(requestedAmount, interestRate, effectivePeriodCount, interestMethod, interestPeriod, cycleDurationMonths),
+    [requestedAmount, interestRate, effectivePeriodCount, interestMethod, interestPeriod, cycleDurationMonths],
   );
-  const periodUnsupported = interestPeriod !== 'per month';
   const policyNeedsReview = Boolean(policy?.require_committee_approval) || Boolean(policy?.require_guarantor);
 
   const loadData = useCallback(async () => {
@@ -159,6 +176,16 @@ export default function LoanDisbursementScreen() {
     void loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    if (!rules) return;
+    const maximum = Math.max(1, Number(rules.maximum_loan_repayment_period ?? 12));
+    if (rules.loan_repayment_period_mode === 'fixed') {
+      setPeriodCount(String(maximum));
+    } else if (Number(periodCount) > maximum) {
+      setPeriodCount(String(maximum));
+    }
+  }, [rules, periodCount]);
+
   const handleMemberSelect = async (memberId: number) => {
     if (!groupId || saving) return;
     setSelectedMemberId(memberId);
@@ -194,13 +221,6 @@ export default function LoanDisbursementScreen() {
       Alert.alert('Setup Rules Required', 'Save the group’s loan rules in Setup Rules before continuing.');
       return;
     }
-    if (periodUnsupported) {
-      Alert.alert(
-        'Interest Period Needs Database Support',
-        `This group selected “${interestPeriod}” in Setup Rules. The current loan-contract calculator safely supports “per month” only. Change Interest Period to “per month” in Setup Rules before disbursing, or add database support for this period first. No loan has been created.`,
-      );
-      return;
-    }
     if (!selectedMemberId || !selectedMember) {
       Alert.alert('Select Member', 'Select the member applying for the loan.');
       return;
@@ -217,7 +237,10 @@ export default function LoanDisbursementScreen() {
       Alert.alert('Insufficient Loan Fund', `Available Loan Fund: ${money(loanFund, currency)}.`);
       return;
     }
-    if (!Number.isInteger(periods) || periods < 1 || periods > Number(rules.maximum_loan_repayment_period)) {
+    const requiredPeriods = repaymentPeriodMode === 'fixed'
+      ? Number(rules.maximum_loan_repayment_period)
+      : periods;
+    if (!Number.isInteger(requiredPeriods) || requiredPeriods < 1 || requiredPeriods > Number(rules.maximum_loan_repayment_period)) {
       Alert.alert('Invalid Repayment Period', `Enter between 1 and ${Number(rules.maximum_loan_repayment_period)} months, as allowed by Setup Rules.`);
       return;
     }
@@ -226,10 +249,11 @@ export default function LoanDisbursementScreen() {
       return;
     }
 
-    const estimate = calculatePreview(requestedAmount, interestRate, periods, interestMethod);
+    const effectivePeriods = effectivePeriodCount;
+    const estimate = calculatePreview(requestedAmount, interestRate, effectivePeriods, interestMethod, interestPeriod, cycleDurationMonths);
     Alert.alert(
       'Confirm Loan Terms',
-      `Member: ${selectedMember.full_name} (${selectedMember.member_number})\nPrincipal: ${money(requestedAmount, currency)}\nInterest method: ${methodLabel(interestMethod)}\nRate: ${interestRate}% per month\nTerm: ${periods} month(s)\nEstimated interest: ${money(estimate.interest, currency)}\nEstimated total due: ${money(estimate.total, currency)}\n\nThe saved Setup Rules will be used for the application.`,
+      `Member: ${selectedMember.full_name} (${selectedMember.member_number})\nPrincipal: ${money(requestedAmount, currency)}\nInterest method: ${methodLabel(interestMethod)}\nRate: ${interestRate}% (${interestPeriod})\nTerm: ${effectivePeriods} month(s)\nRepayment amount mode: ${repaymentAmountMode}\nRepayment period mode: ${repaymentPeriodMode}\nEstimated interest: ${money(estimate.interest, currency)}\nEstimated total due: ${money(estimate.total, currency)}\n\nThe saved Setup Rules will be used for the application.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -259,7 +283,7 @@ export default function LoanDisbursementScreen() {
           requestedAmount,
           interestMethod,
           interestRate,
-          repaymentPeriodCount: periods,
+          repaymentPeriodCount: effectivePeriodCount,
           repaymentPeriodUnit: 'months',
           reason: reason.trim(),
           requestedByMemberId: executiveMemberId,
@@ -359,18 +383,13 @@ export default function LoanDisbursementScreen() {
           <View style={styles.ruleRow}><Text style={styles.ruleName}>Maximum repayment term</Text><Text style={styles.ruleValue}>{Number(rules?.maximum_loan_repayment_period ?? 12)} months</Text></View>
           <Text style={styles.methodDescription}>
             {interestCalculator === 'common_vsla'
-              ? 'Common VSLA: interest is calculated each repayment period on the outstanding principal (declining balance).'
+              ? `Common VSLA: interest is calculated on the outstanding principal (${interestPeriod}).`
               : interestMethod === 'fixed'
                 ? 'Fixed: one total interest charge based on the original principal, divided across the repayment instalments.'
                 : interestMethod === 'flat'
                   ? 'Flat: interest is calculated on the original principal for each repayment period.'
                   : 'Declining: interest is calculated on the outstanding principal at the start of each repayment period.'}
           </Text>
-          {periodUnsupported && (
-            <Text style={styles.warning}>
-              Loan creation is paused because “{interestPeriod}” is not yet supported by the current contract calculator. Select “per month” in Setup Rules until database support is added.
-            </Text>
-          )}
           {policyNeedsReview && (
             <Text style={styles.notice}>
               Approval requirements are enabled. Submitting will save a pending application; it will not disburse money until the required committee approvals and/or guarantor signature are recorded.
@@ -424,16 +443,16 @@ export default function LoanDisbursementScreen() {
           keyboardType="number-pad"
           placeholder={`1–${Number(rules?.maximum_loan_repayment_period ?? 12)} months`}
           placeholderTextColor="#6b7280"
-          editable={!saving}
+          editable={!saving && repaymentPeriodMode !== 'fixed'}
         />
 
-        {Number.isFinite(requestedAmount) && requestedAmount > 0 && Number.isInteger(periods) && periods > 0 && periods <= Number(rules?.maximum_loan_repayment_period ?? 12) && !periodUnsupported && (
+        {Number.isFinite(requestedAmount) && requestedAmount > 0 && Number.isInteger(effectivePeriodCount) && effectivePeriodCount > 0 && effectivePeriodCount <= Number(rules?.maximum_loan_repayment_period ?? 12) && (
           <View style={styles.previewCard}>
             <Text style={styles.cardTitle}>Estimated Repayment</Text>
             <View style={styles.ruleRow}><Text style={styles.ruleName}>Interest method</Text><Text style={styles.ruleValue}>{methodLabel(interestMethod)}</Text></View>
             <View style={styles.ruleRow}><Text style={styles.ruleName}>Estimated interest</Text><Text style={styles.ruleValue}>{money(preview.interest, currency)}</Text></View>
             <View style={styles.ruleRow}><Text style={styles.ruleName}>Estimated total due</Text><Text style={styles.totalValue}>{money(preview.total, currency)}</Text></View>
-            <View style={styles.ruleRow}><Text style={styles.ruleName}>Average instalment</Text><Text style={styles.ruleValue}>{money(preview.instalment, currency)}</Text></View>
+            <View style={styles.ruleRow}><Text style={styles.ruleName}>{repaymentAmountMode === 'fixed' ? 'Required instalment' : 'Average instalment'}</Text><Text style={styles.ruleValue}>{money(preview.instalment, currency)}</Text></View>
             <Text style={styles.smallNote}>Final contract amounts and due date are calculated and saved by the database when the loan is disbursed.</Text>
           </View>
         )}
@@ -442,9 +461,9 @@ export default function LoanDisbursementScreen() {
         <TextInput style={styles.input} value={reason} onChangeText={setReason} placeholder="Reason for the loan" placeholderTextColor="#6b7280" editable={!saving} />
 
         <TouchableOpacity
-          style={[styles.disburseButton, (saving || !selectedMemberId || periodUnsupported) && styles.disabledButton]}
+          style={[styles.disburseButton, (saving || !selectedMemberId) && styles.disabledButton]}
           onPress={() => { void submitLoan(); }}
-          disabled={saving || !selectedMemberId || periodUnsupported}
+          disabled={saving || !selectedMemberId}
         >
           {saving ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.buttonText}>{policyNeedsReview ? 'Submit Loan Application' : 'Confirm & Disburse Loan'}</Text>}
         </TouchableOpacity>
