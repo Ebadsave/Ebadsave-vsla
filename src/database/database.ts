@@ -1882,6 +1882,16 @@ status TEXT NOT NULL DEFAULT 'active',
     "TEXT NOT NULL DEFAULT 'common_vsla'",
   );
 
+  // Snapshot the group's loan rules on each application/contract so changing
+  // Setup Rules later does not silently change loans already requested.
+  await addColumnIfMissing(db, 'loan_applications', 'interest_calculator', "TEXT NOT NULL DEFAULT 'standard'");
+  await addColumnIfMissing(db, 'loan_applications', 'interest_period', "TEXT NOT NULL DEFAULT 'per month'");
+  await addColumnIfMissing(db, 'loan_applications', 'repayment_amount_mode', "TEXT NOT NULL DEFAULT 'flexible'");
+  await addColumnIfMissing(db, 'loan_applications', 'repayment_period_mode', "TEXT NOT NULL DEFAULT 'flexible'");
+  await addColumnIfMissing(db, 'loan_records', 'interest_calculator', "TEXT NOT NULL DEFAULT 'standard'");
+  await addColumnIfMissing(db, 'loan_records', 'repayment_amount_mode', "TEXT NOT NULL DEFAULT 'flexible'");
+  await addColumnIfMissing(db, 'loan_records', 'repayment_period_mode', "TEXT NOT NULL DEFAULT 'flexible'");
+
   await addColumnIfMissing(
     db,
     'vsla_setup_rules',
@@ -5778,36 +5788,49 @@ function calculateLoanInterestSchedule(
   rate: number,
   periods: number,
   method: LoanInterestMethod,
+  interestPeriod: string = 'per month',
+  cycleDurationMonths: number = 12,
 ): Array<{ principalDue: number; interestDue: number }> {
+  if (!Number.isFinite(principal) || principal <= 0 ||
+      !Number.isFinite(rate) || rate < 0 ||
+      !Number.isInteger(periods) || periods < 1) {
+    throw new Error('Loan terms are invalid for interest calculation.');
+  }
+
   const principalPerPeriod = principal / periods;
   const fixedTotal = principal * rate / 100;
-  const flatPerPeriod = principal * rate / 100;
   const rows: Array<{ principalDue: number; interestDue: number }> = [];
+  const cycleLength = Math.max(1, Math.floor(cycleDurationMonths || 12));
   let remaining = principal;
-  let decliningTotal = 0;
 
   for (let index = 0; index < periods; index += 1) {
     const principalDue = index === periods - 1
       ? remaining
       : Math.min(remaining, principalPerPeriod);
     let interestDue = 0;
+
     if (method === 'fixed') {
+      // One loan-level charge spread evenly over the repayment schedule.
       interestDue = fixedTotal / periods;
-    } else if (method === 'flat') {
-      interestDue = flatPerPeriod;
     } else {
-      interestDue = remaining * rate / 100;
-      decliningTotal += interestDue;
+      const chargeThisPeriod =
+        interestPeriod === 'per loan'
+          ? index === 0
+          : interestPeriod === 'per cycle'
+            ? index % cycleLength === 0
+            : true;
+
+      if (chargeThisPeriod) {
+        interestDue = method === 'flat'
+          ? principal * rate / 100
+          : remaining * rate / 100;
+      }
     }
+
     rows.push({ principalDue, interestDue });
     remaining = Math.max(0, remaining - principalDue);
   }
 
-  // Keep the final installment aligned with the contract-level total despite rounding.
-  if (method === 'declining' && rows.length > 0) {
-    const computed = rows.reduce((sum, row) => sum + row.interestDue, 0);
-    decliningTotal = computed;
-  }
   return rows;
 }
 
@@ -5842,6 +5865,8 @@ export async function disburseApprovedLoanApplication(
     repayment_period_count: number; repayment_period_unit: LoanRepaymentPeriodUnit;
     requested_due_date: string | null; reason: string; status: string;
     disbursed_transaction_id: number | null;
+    interest_calculator?: LoanInterestCalculator; interest_period?: string;
+    repayment_amount_mode?: LoanRepaymentAmountMode; repayment_period_mode?: LoanRepaymentPeriodMode;
   }>('SELECT * FROM loan_applications WHERE id = ? LIMIT 1', applicationId);
   if (!application) throw new Error('Loan application not found.');
   if (application.status === 'disbursed' || application.disbursed_transaction_id) throw new Error('This loan application has already been disbursed.');
@@ -5855,6 +5880,8 @@ export async function disburseApprovedLoanApplication(
     repayment_period_count: number; repayment_period_unit: LoanRepaymentPeriodUnit;
     requested_due_date: string | null; reason: string; status: string;
     disbursed_transaction_id: number | null;
+    interest_calculator?: LoanInterestCalculator; interest_period?: string;
+    repayment_amount_mode?: LoanRepaymentAmountMode; repayment_period_mode?: LoanRepaymentPeriodMode;
   }>('SELECT * FROM loan_applications WHERE id = ? LIMIT 1', applicationId);
   if (!application) throw new Error('Loan application not found.');
   if (decision !== 'approved' || application.status !== 'approved') throw new Error('The loan application has not satisfied its approval requirements.');
@@ -5897,9 +5924,20 @@ export async function disburseApprovedLoanApplication(
 
   const timestamp = now();
   const issueDate = new Date(timestamp);
+  const interestCalculator: LoanInterestCalculator =
+    application.interest_calculator === 'common_vsla' ? 'common_vsla' : 'standard';
+  const contractInterestMethod: LoanInterestMethod = interestCalculator === 'common_vsla'
+    ? 'declining'
+    : application.interest_method;
+  const contractInterestPeriod = normalizeText(application.interest_period) || normalizeText(setup?.loan_interest_period) || 'per month';
+  const contractAmountMode: LoanRepaymentAmountMode =
+    application.repayment_amount_mode === 'fixed' ? 'fixed' : (setup?.loan_repayment_amount_mode === 'fixed' ? 'fixed' : 'flexible');
+  const contractPeriodMode: LoanRepaymentPeriodMode =
+    application.repayment_period_mode === 'fixed' ? 'fixed' : (setup?.loan_repayment_period_mode === 'fixed' ? 'fixed' : 'flexible');
   const schedule = calculateLoanInterestSchedule(
     Number(application.requested_amount), Number(application.interest_rate),
-    Number(application.repayment_period_count), application.interest_method,
+    Number(application.repayment_period_count), contractInterestMethod,
+    contractInterestPeriod, Number(setup?.cycle_duration_months ?? 12),
   );
   const totalInterest = schedule.reduce((sum, item) => sum + item.interestDue, 0);
   const dueDate = application.requested_due_date || loanDateForPeriod(issueDate, Number(application.repayment_period_count), application.repayment_period_unit);
@@ -5924,14 +5962,16 @@ export async function disburseApprovedLoanApplication(
       `INSERT INTO loan_records (
         group_id, member_id, application_id, disbursement_transaction_id, meeting_id, principal_amount,
         interest_method, interest_rate, interest_period, repayment_period_count, repayment_period_unit,
-        issue_date, due_date, total_interest, total_due, status, reason, created_by_member_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
+        issue_date, due_date, total_interest, total_due, status, reason, created_by_member_id,
+        interest_calculator, repayment_amount_mode, repayment_period_mode, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)`,
       application.group_id, application.member_id, applicationId, transactionId, application.meeting_id,
-      Number(application.requested_amount), application.interest_method, Number(application.interest_rate),
-      application.repayment_period_unit === 'weeks' ? 'per week' : 'per month',
+      Number(application.requested_amount), contractInterestMethod, Number(application.interest_rate),
+      contractInterestPeriod,
       Number(application.repayment_period_count), application.repayment_period_unit,
       timestamp, dueDate, totalInterest, Number(application.requested_amount) + totalInterest,
-      normalizeText(application.reason), executiveMemberId, timestamp, timestamp,
+      normalizeText(application.reason), executiveMemberId,
+      interestCalculator, contractAmountMode, contractPeriodMode, timestamp, timestamp,
     );
     const loanId = contract.lastInsertRowId;
     for (let index = 0; index < schedule.length; index += 1) {
@@ -5952,7 +5992,8 @@ export async function disburseApprovedLoanApplication(
     if (applicationUpdate.changes !== 1) throw new Error('The application status changed. The disbursement was cancelled.');
     await addLoanAudit(db, application.group_id, loanId, executiveMemberId, 'loan_disbursed', {
       applicationId, transactionId, principal: Number(application.requested_amount),
-      interestMethod: application.interest_method, interestRate: Number(application.interest_rate),
+      interestCalculator, interestMethod: contractInterestMethod, interestRate: Number(application.interest_rate),
+      interestPeriod: contractInterestPeriod, repaymentAmountMode: contractAmountMode, repaymentPeriodMode: contractPeriodMode,
       repaymentPeriodCount: Number(application.repayment_period_count), repaymentPeriodUnit: application.repayment_period_unit,
       dueDate, totalInterest, totalDue: Number(application.requested_amount) + totalInterest,
     });
@@ -6002,21 +6043,55 @@ export async function createLoanContract(
   const existing = await db.getFirstAsync<{ id: number }>(`SELECT id FROM loan_records WHERE disbursement_transaction_id = ? LIMIT 1`, disbursementTransactionId);
   if (existing) throw new Error('Repayment terms have already been saved for this loan.');
   let applicationDueDate: string | null = null;
+  let applicationRules: {
+    interest_calculator?: LoanInterestCalculator;
+    interest_period?: string;
+    repayment_amount_mode?: LoanRepaymentAmountMode;
+    repayment_period_mode?: LoanRepaymentPeriodMode;
+    interest_method?: LoanInterestMethod;
+    interest_rate?: number;
+    repayment_period_count?: number;
+    repayment_period_unit?: LoanRepaymentPeriodUnit;
+  } | null = null;
   if (terms.applicationId != null) {
-    const application = await db.getFirstAsync<{ group_id: number; member_id: number; status: string; requested_amount: number; requested_due_date: string | null }>(
-      'SELECT group_id, member_id, status, requested_amount, requested_due_date FROM loan_applications WHERE id = ? LIMIT 1', terms.applicationId,
+    const application = await db.getFirstAsync<{
+      group_id: number; member_id: number; status: string; requested_amount: number; requested_due_date: string | null;
+      interest_calculator?: LoanInterestCalculator; interest_period?: string;
+      repayment_amount_mode?: LoanRepaymentAmountMode; repayment_period_mode?: LoanRepaymentPeriodMode;
+      interest_method?: LoanInterestMethod; interest_rate?: number;
+      repayment_period_count?: number; repayment_period_unit?: LoanRepaymentPeriodUnit;
+    }>(
+      'SELECT group_id, member_id, status, requested_amount, requested_due_date, interest_calculator, interest_period, repayment_amount_mode, repayment_period_mode, interest_method, interest_rate, repayment_period_count, repayment_period_unit FROM loan_applications WHERE id = ? LIMIT 1',
+      terms.applicationId,
     );
     if (!application || Number(application.group_id) !== groupId || Number(application.member_id) !== memberId) throw new Error('Loan application does not match this borrower and group.');
     if (application.status !== 'approved') throw new Error('The loan application must be approved before disbursement.');
     if (Math.abs(Number(application.requested_amount) - principalAmount) > 0.0001) throw new Error('Disbursed principal must match the approved application amount.');
     applicationDueDate = application.requested_due_date;
+    applicationRules = application;
   }
 
   const timestamp = now();
   const issueDate = new Date(timestamp);
-  const schedule = calculateLoanInterestSchedule(principalAmount, terms.interestRate, terms.repaymentPeriodCount, terms.interestMethod);
+  const interestCalculator: LoanInterestCalculator =
+    applicationRules?.interest_calculator === 'common_vsla' ? 'common_vsla' : 'standard';
+  const contractInterestMethod: LoanInterestMethod = interestCalculator === 'common_vsla'
+    ? 'declining'
+    : (applicationRules?.interest_method ?? terms.interestMethod);
+  const contractInterestRate = Number(applicationRules?.interest_rate ?? terms.interestRate);
+  const contractInterestPeriod = normalizeText(applicationRules?.interest_period) || 'per month';
+  const contractAmountMode: LoanRepaymentAmountMode =
+    applicationRules?.repayment_amount_mode === 'fixed' ? 'fixed' : 'flexible';
+  const contractPeriodMode: LoanRepaymentPeriodMode =
+    applicationRules?.repayment_period_mode === 'fixed' ? 'fixed' : 'flexible';
+  const contractPeriods = Number(applicationRules?.repayment_period_count ?? terms.repaymentPeriodCount);
+  const contractUnit: LoanRepaymentPeriodUnit = applicationRules?.repayment_period_unit ?? terms.repaymentPeriodUnit;
+  const schedule = calculateLoanInterestSchedule(
+    principalAmount, contractInterestRate, contractPeriods, contractInterestMethod,
+    contractInterestPeriod, 12,
+  );
   const totalInterest = schedule.reduce((sum, item) => sum + item.interestDue, 0);
-  const dueDate = terms.dueDate || applicationDueDate || loanDateForPeriod(issueDate, terms.repaymentPeriodCount, terms.repaymentPeriodUnit);
+  const dueDate = terms.dueDate || applicationDueDate || loanDateForPeriod(issueDate, contractPeriods, contractUnit);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(new Date(`${dueDate}T00:00:00`).getTime())) throw new Error('Enter a valid due date in YYYY-MM-DD format.');
 
   await db.execAsync('BEGIN TRANSACTION;');
@@ -6026,14 +6101,14 @@ export async function createLoanContract(
         group_id, member_id, application_id, disbursement_transaction_id, meeting_id, principal_amount,
         interest_method, interest_rate, interest_period, repayment_period_count,
         repayment_period_unit, issue_date, due_date, total_interest, total_due, status,
-        reason, created_by_member_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
+        reason, created_by_member_id, interest_calculator, repayment_amount_mode,
+        repayment_period_mode, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)`,
       groupId, memberId, terms.applicationId ?? null, disbursementTransactionId, meetingId, principalAmount,
-      terms.interestMethod, terms.interestRate,
-      terms.repaymentPeriodUnit === 'weeks' ? 'per week' : 'per month',
-      terms.repaymentPeriodCount, terms.repaymentPeriodUnit, timestamp, dueDate,
+      contractInterestMethod, contractInterestRate, contractInterestPeriod,
+      contractPeriods, contractUnit, timestamp, dueDate,
       totalInterest, principalAmount + totalInterest, normalizeText(reason),
-      terms.createdByMemberId ?? null, timestamp, timestamp,
+      terms.createdByMemberId ?? null, interestCalculator, contractAmountMode, contractPeriodMode, timestamp, timestamp,
     );
     const loanId = inserted.lastInsertRowId;
     for (let index = 0; index < schedule.length; index += 1) {
@@ -6043,14 +6118,16 @@ export async function createLoanContract(
           loan_id, installment_number, due_date, principal_due, interest_due,
           principal_paid, interest_paid, status, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, 0, 0, 'pending', ?, ?)`,
-        loanId, index + 1, index === schedule.length - 1 ? dueDate : loanDateForPeriod(issueDate, index + 1, terms.repaymentPeriodUnit),
+        loanId, index + 1, index === schedule.length - 1 ? dueDate : loanDateForPeriod(issueDate, index + 1, contractUnit),
         item.principalDue, item.interestDue, timestamp, timestamp,
       );
     }
     await addLoanAudit(db, groupId, loanId, terms.createdByMemberId ?? null, 'loan_terms_created', {
-      disbursementTransactionId, principalAmount, interestMethod: terms.interestMethod,
-      interestRate: terms.interestRate, repaymentPeriodCount: terms.repaymentPeriodCount,
-      repaymentPeriodUnit: terms.repaymentPeriodUnit, dueDate, totalInterest,
+      disbursementTransactionId, principalAmount, interestCalculator,
+      interestMethod: contractInterestMethod, interestRate: contractInterestRate,
+      interestPeriod: contractInterestPeriod, repaymentAmountMode: contractAmountMode,
+      repaymentPeriodMode: contractPeriodMode, repaymentPeriodCount: contractPeriods,
+      repaymentPeriodUnit: contractUnit, dueDate, totalInterest,
     });
     if (terms.applicationId != null) {
       await db.runAsync(
@@ -6148,14 +6225,34 @@ export async function createLoanApplication(
 ): Promise<number> {
   const db = await getDatabase();
   const setup = await getVSLASetupRules(groupId);
-  // The group admin's saved Setup Rules choice is the default for every new loan.
-  // Already-created applications and loan contracts retain their original method.
-  const interestMethod = setup?.loan_interest_method ?? input.interestMethod;
+  if (!setup) throw new Error('Save the group loan Setup Rules before creating a loan application.');
+
+  // Saved group rules are authoritative for all new applications.
+  const interestCalculator: LoanInterestCalculator =
+    setup.loan_interest_calculator === 'standard' ? 'standard' : 'common_vsla';
+  const interestMethod: LoanInterestMethod = interestCalculator === 'common_vsla'
+    ? 'declining'
+    : (setup.loan_interest_method ?? input.interestMethod);
+  const interestRate = Number(setup.loan_interest_percentage ?? input.interestRate);
+  const interestPeriod = normalizeText(setup.loan_interest_period) || 'per month';
+  const repaymentAmountMode: LoanRepaymentAmountMode =
+    setup.loan_repayment_amount_mode === 'fixed' ? 'fixed' : 'flexible';
+  const repaymentPeriodMode: LoanRepaymentPeriodMode =
+    setup.loan_repayment_period_mode === 'fixed' ? 'fixed' : 'flexible';
+  const maximumPeriod = Math.max(1, Number(setup.maximum_loan_repayment_period ?? 12));
+  const repaymentPeriodCount = repaymentPeriodMode === 'fixed'
+    ? maximumPeriod
+    : input.repaymentPeriodCount;
+  const repaymentPeriodUnit: LoanRepaymentPeriodUnit = repaymentPeriodMode === 'fixed'
+    ? 'months'
+    : input.repaymentPeriodUnit;
+
   if (!Number.isFinite(input.requestedAmount) || input.requestedAmount <= 0) throw new Error('Requested loan amount must be greater than zero.');
   if (!['fixed', 'flat', 'declining'].includes(interestMethod)) throw new Error('Choose a supported interest method in Setup Rules.');
-  if (!Number.isFinite(input.interestRate) || input.interestRate < 0) throw new Error('Interest rate cannot be negative.');
-  if (!Number.isInteger(input.repaymentPeriodCount) || input.repaymentPeriodCount < 1 || input.repaymentPeriodCount > 120) throw new Error('Repayment period must be between 1 and 120 periods.');
-  if (!['weeks', 'months'].includes(input.repaymentPeriodUnit)) throw new Error('Choose weeks or months.');
+  if (!Number.isFinite(interestRate) || interestRate < 0) throw new Error('Interest rate cannot be negative.');
+  if (!Number.isInteger(repaymentPeriodCount) || repaymentPeriodCount < 1 || repaymentPeriodCount > maximumPeriod) throw new Error(`Repayment period must be between 1 and ${maximumPeriod} months, as allowed by Setup Rules.`);
+  if (!['weeks', 'months'].includes(repaymentPeriodUnit)) throw new Error('Choose weeks or months.');
+  if (!['per month', 'per cycle', 'per loan'].includes(interestPeriod)) throw new Error('Choose a supported interest period in Setup Rules.');
   if (input.requestedDueDate && (!/^\d{4}-\d{2}-\d{2}$/.test(input.requestedDueDate) || Number.isNaN(new Date(`${input.requestedDueDate}T00:00:00`).getTime()))) throw new Error('Enter a valid due date in YYYY-MM-DD format.');
   await requireMemberPresentForLoan(db, groupId, memberId, meetingId);
   const freeze = await isLoanDisbursementFrozen(groupId, memberId);
@@ -6182,11 +6279,13 @@ export async function createLoanApplication(
     `INSERT INTO loan_applications (
       group_id, member_id, meeting_id, requested_amount, interest_method, interest_rate,
       repayment_period_count, repayment_period_unit, requested_due_date, reason, status,
-      requested_by_member_id, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
-    groupId, memberId, meetingId, input.requestedAmount, interestMethod, input.interestRate,
-    input.repaymentPeriodCount, input.repaymentPeriodUnit, input.requestedDueDate ?? null,
-    normalizeText(input.reason), input.requestedByMemberId ?? null, timestamp, timestamp,
+      requested_by_member_id, interest_calculator, interest_period,
+      repayment_amount_mode, repayment_period_mode, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
+    groupId, memberId, meetingId, input.requestedAmount, interestMethod, interestRate,
+    repaymentPeriodCount, repaymentPeriodUnit, input.requestedDueDate ?? null,
+    normalizeText(input.reason), input.requestedByMemberId ?? null,
+    interestCalculator, interestPeriod, repaymentAmountMode, repaymentPeriodMode, timestamp, timestamp,
   );
   await addLoanAudit(db, groupId, null, input.requestedByMemberId ?? null, 'loan_application_created', {
     applicationId: result.lastInsertRowId, memberId, requestedAmount: input.requestedAmount,
@@ -6510,6 +6609,32 @@ export async function recordLoanRepayment(
       throw new Error(
         `Loan repayment cannot exceed the member's outstanding loan balance of ${loan.balance.toLocaleString()}.`,
       );
+    }
+
+    const nextInstallment = await db.getFirstAsync<{
+      principal_due: number; principal_paid: number; interest_due: number; interest_paid: number;
+      repayment_amount_mode: LoanRepaymentAmountMode | null;
+    }>(
+      `SELECT s.principal_due, s.principal_paid, s.interest_due, s.interest_paid,
+              lr.repayment_amount_mode
+       FROM loan_repayment_schedule s
+       JOIN loan_records lr ON lr.id = s.loan_id
+       WHERE lr.group_id = ? AND lr.member_id = ? AND lr.status = 'active'
+         AND (s.principal_paid + 0.000001 < s.principal_due OR s.interest_paid + 0.000001 < s.interest_due)
+       ORDER BY s.due_date ASC, lr.issue_date ASC, s.installment_number ASC
+       LIMIT 1`,
+      groupId, memberId,
+    );
+    // A loan keeps the repayment rule saved when it was disbursed, even if
+    // the administrator later changes Setup Rules for future loans.
+    if (nextInstallment?.repayment_amount_mode === 'fixed') {
+      const installmentOutstanding = Math.max(0,
+        Number(nextInstallment.principal_due) - Number(nextInstallment.principal_paid) +
+        Number(nextInstallment.interest_due) - Number(nextInstallment.interest_paid));
+      const requiredPayment = Math.min(installmentOutstanding, loan.balance);
+      if (Math.abs(amount - requiredPayment) > 0.01) {
+        throw new Error(`This loan requires a fixed instalment of ${requiredPayment.toLocaleString()}. Enter that amount to record the repayment.`);
+      }
     }
 
     const result = await db.runAsync(
