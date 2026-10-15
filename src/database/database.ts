@@ -6490,21 +6490,8 @@ export async function recordLoanRepayment(
   meetingId: number | null = null,
   reason = 'Loan repayment',
 ): Promise<number> {
-  const loan = await getMemberLoanBalance(
-    groupId,
-    memberId,
-  );
-
-  if (loan.balance <= 0) {
-    throw new Error(
-      'This member has no outstanding loan. Loan repayment cannot be recorded.',
-    );
-  }
-
-  if (amount > loan.balance) {
-    throw new Error(
-      `Loan repayment cannot exceed the member's outstanding loan balance of ${loan.balance.toLocaleString()}.`,
-    );
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error('Loan repayment amount must be a number greater than zero.');
   }
 
   const db = await getDatabase();
@@ -6513,6 +6500,18 @@ export async function recordLoanRepayment(
   const timestamp = now();
   await db.execAsync('BEGIN TRANSACTION;');
   try {
+    // Re-check the current balance inside the transaction to reduce the risk
+    // of recording a payment against a stale screen balance.
+    const loan = await getMemberLoanBalance(groupId, memberId);
+    if (loan.balance <= 0) {
+      throw new Error('This member has no outstanding loan. Loan repayment cannot be recorded.');
+    }
+    if (amount > loan.balance + 0.000001) {
+      throw new Error(
+        `Loan repayment cannot exceed the member's outstanding loan balance of ${loan.balance.toLocaleString()}.`,
+      );
+    }
+
     const result = await db.runAsync(
       `INSERT INTO financial_transactions (
         group_id, account_type, amount, reason, member_id, meeting_id,
