@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 
 import {
   getAllGroups,
@@ -69,6 +70,7 @@ const money = (currency: string, value: number) => {
 };
 
 export default function HomeScreen({ navigation }: HomeScreenProps) {
+  const { t } = useTranslation();
   const [activeGroup, setActiveGroup] = useState<GroupRecord | null>(null);
   const [executiveMemberId, setExecutiveMemberId] = useState<number | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard>(emptyDashboard);
@@ -427,37 +429,37 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
 
   const cards = [
     {
-      title: 'Total Savings',
+      title: t('home.totalSavings'),
       value: money(dashboard.currency, dashboard.savings),
       icon: 'S',
       action: () => openCardDetails('savings'),
     },
     {
-      title: 'Loans Out',
+      title: t('home.loansOut'),
       value: money(dashboard.currency, dashboard.loansOut),
       icon: 'L',
       action: () => openCardDetails('loansOut'),
     },
     {
-      title: 'Members',
+      title: t('home.members'),
       value: String(dashboard.members),
       icon: 'M',
       action: () => openCardDetails('members'),
     },
     {
-      title: 'Loan Fund',
+      title: t('home.loanFund', 'Loan Fund'),
       value: money(dashboard.currency, dashboard.loanFund),
       icon: 'F',
       action: () => openCardDetails('loanFund'),
     },
     {
-      title: 'Insurance Fund',
+      title: t('home.insuranceFund'),
       value: money(dashboard.currency, dashboard.insuranceFund),
       icon: 'I',
       action: () => openCardDetails('insuranceFund'),
     },
     {
-      title: 'Fines Fund',
+      title: t('home.finesFund'),
       value: money(dashboard.currency, dashboard.fines),
       icon: 'N',
       action: () => openCardDetails('fines'),
@@ -473,9 +475,9 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
           </View>
 
           <View style={styles.titleContainer}>
-            <Text style={styles.appName}>Ebadsave VSLA</Text>
+            <Text style={styles.appName}>{t('app.name')}</Text>
             <Text style={styles.tagline}>
-              save together,grow together
+              {t('app.slogan')}
             </Text>
           </View>
         </View>
@@ -485,7 +487,7 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
             style={styles.headerButton}
             onPress={() => navigation.navigate('Constitution')}
           >
-            <Text style={styles.headerButtonText}>Constitution</Text>
+            <Text style={styles.headerButtonText}>{t('navigation.constitution')}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -497,14 +499,14 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
               })
             }
           >
-            <Text style={styles.headerButtonText}>Setup Rules</Text>
+            <Text style={styles.headerButtonText}>{t('home.setupRules', 'Setup Rules')}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.headerButton}
             onPress={() => navigation.navigate('BackupRestore')}
           >
-            <Text style={styles.headerButtonText}>Backup & Restore</Text>
+            <Text style={styles.headerButtonText}>{t('backup.title')}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -516,7 +518,7 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
         <Text style={styles.groupTitle}>
           {activeGroup
             ? `KYA ${activeGroup.group_number} • ${activeGroup.group_name}`
-            : 'No active group'}
+            : t('home.noActiveGroup', 'No active group')}
         </Text>
 
         <TouchableOpacity
@@ -526,9 +528,9 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
           onPress={() => navigation.navigate('BackupRestore')}
           activeOpacity={0.85}
         >
-          <Text style={styles.backupRestoreActionTitle}>Backup & Restore</Text>
+          <Text style={styles.backupRestoreActionTitle}>{t('backup.title')}</Text>
           <Text style={styles.backupRestoreActionSubtitle}>
-            Save a backup or restore a verified backup file
+            {t('backup.homeDescription', 'Save a backup or restore a verified backup file')}
           </Text>
         </TouchableOpacity>
 
@@ -551,7 +553,7 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
         </View>
 
         <View style={styles.meetingPanel}>
-          <Text style={styles.sectionTitle}>Meeting</Text>
+          <Text style={styles.sectionTitle}>{t('meetings.title')}</Text>
 
           {dashboard.openMeetingId ? (
             <TouchableOpacity
@@ -559,11 +561,11 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
               onPress={currentMeeting}
             >
               <Text style={styles.primaryButtonText}>
-                Current Meeting
+                {t('home.currentMeeting', 'Current Meeting')}
               </Text>
 
               <Text style={styles.buttonSubtext}>
-                Resume meeting #{currentMeetingNumber ?? 'open'}
+                {t('home.resumeMeeting', 'Resume meeting')} #{currentMeetingNumber ?? 'open'}
               </Text>
             </TouchableOpacity>
           ) : (
@@ -572,11 +574,11 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
               onPress={startMeeting}
             >
               <Text style={styles.primaryButtonText}>
-                Start New Meeting
+                {t('meetings.newMeeting')}
               </Text>
 
               <Text style={styles.buttonSubtext}>
-                Register and continue with a new meeting
+                {t('home.newMeetingDescription', 'Register and continue with a new meeting')}
               </Text>
             </TouchableOpacity>
           )}
@@ -587,7 +589,7 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
               onPress={previousSummary}
             >
               <Text style={styles.secondaryButtonText}>
-                Read Previous Meeting Summary
+                {t('home.previousMeetingSummary', 'Read Previous Meeting Summary')}
                 {lastMeetingNumber ? ` #${lastMeetingNumber}` : ''}
               </Text>
             </TouchableOpacity>
@@ -595,38 +597,38 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
         </View>
 
         <View style={styles.activityContainer}>
-          <Text style={styles.sectionTitle}>Database Status</Text>
+          <Text style={styles.sectionTitle}>{t('home.databaseStatus', 'Database Status')}</Text>
 
           <View style={styles.statusBox}>
             <Text style={styles.statusText}>
               {loading
-                ? 'Updating database totals…'
-                : 'Home totals are linked to the database.'}
+                ? t('home.updatingTotals', 'Updating database totals…')
+                : t('home.databaseLinked', 'Home totals are linked to the database.')}
             </Text>
 
             <Text style={styles.statusText}>
-              Loan fund: {money(dashboard.currency, dashboard.loanFund)}
+              {t('home.loanFund', 'Loan Fund')}: {money(dashboard.currency, dashboard.loanFund)}
             </Text>
 
             <Text style={styles.statusText}>
-              Insurance:{' '}
+              {t('home.insuranceFund')}:{' '}
               {money(dashboard.currency, dashboard.insuranceFund)}
             </Text>
 
             <Text style={styles.statusText}>
-              Fines: {money(dashboard.currency, dashboard.fines)}
+              {t('home.finesFund')}: {money(dashboard.currency, dashboard.fines)}
             </Text>
           </View>
         </View>
 
         <View style={styles.navigationSection}>
-          <Text style={styles.sectionTitle}>Group Management</Text>
+          <Text style={styles.sectionTitle}>{t('home.groupManagement', 'Group Management')}</Text>
 
           <TouchableOpacity
             style={styles.actionButton}
             onPress={openAddMembers}
           >
-            <Text style={styles.actionButtonText}>Add Members</Text>
+            <Text style={styles.actionButtonText}>{t('home.addMembers', 'Add Members')}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -634,7 +636,7 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
             onPress={() => navigateWithGroup('MemberCollection')}
           >
             <Text style={styles.actionButtonText}>
-              Member Collection
+              {t('home.memberCollection', 'Member Collection')}
             </Text>
           </TouchableOpacity>
 
@@ -642,7 +644,7 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
             style={styles.actionButton}
             onPress={() => navigateWithGroup('Expenditure')}
           >
-            <Text style={styles.actionButtonText}>Expenditure</Text>
+            <Text style={styles.actionButtonText}>{t('home.expenditure', 'Expenditure')}</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -655,11 +657,11 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
       >
         <View style={styles.modalBackdrop}>
           <View style={styles.loanFundModal}>
-            <Text style={styles.modalTitle}>{cardDetails?.title || 'Card details'}</Text>
-            <Text style={styles.modalSubtitle}>{cardDetails?.subtitle || 'Details from your group records.'}</Text>
+            <Text style={styles.modalTitle}>{cardDetails?.title || t('home.cardDetails', 'Card details')}</Text>
+            <Text style={styles.modalSubtitle}>{cardDetails?.subtitle || t('home.groupRecordDetails', 'Details from your group records.')}</Text>
 
             {cardDetailsLoading ? (
-              <Text style={styles.modalLoading}>Loading records…</Text>
+              <Text style={styles.modalLoading}>{t('common.loading')}</Text>
             ) : (
               <ScrollView style={styles.breakdownList}>
                 {cardDetails?.rows.length ? cardDetails.rows.map((row, index) => (
@@ -675,11 +677,11 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
                     ) : null}
                   </View>
                 )) : (
-                  <Text style={styles.modalLoading}>No matching records found.</Text>
+                  <Text style={styles.modalLoading}>{t('home.noMatchingRecords', 'No matching records found.')}</Text>
                 )}
                 <View style={styles.breakdownDivider} />
                 <View style={styles.breakdownRow}>
-                  <Text style={styles.breakdownTotalLabel}>{cardDetails?.totalLabel || 'Total'}</Text>
+                  <Text style={styles.breakdownTotalLabel}>{cardDetails?.totalLabel || t('home.total', 'Total')}</Text>
                   {typeof cardDetails?.totalValue === 'number' ? (
                     <Text style={styles.breakdownTotalAmount}>
                       {cardDetails?.title.startsWith('Members') ? String(cardDetails.totalValue) : money(dashboard.currency, cardDetails.totalValue)}
@@ -696,7 +698,7 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
               style={styles.modalCloseButton}
               onPress={() => setCardDetailsVisible(false)}
             >
-              <Text style={styles.modalCloseText}>Close</Text>
+              <Text style={styles.modalCloseText}>{t('common.close')}</Text>
             </TouchableOpacity>
           </View>
         </View>
