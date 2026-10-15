@@ -74,6 +74,9 @@ export type VSLASetupRuleRecord = {
   maximum_loan_multiple: number;
   loan_interest_percentage: number;
   loan_interest_method: LoanInterestMethod;
+  loan_repayment_amount_mode: LoanRepaymentAmountMode;
+  loan_repayment_period_mode: LoanRepaymentPeriodMode;
+  loan_interest_calculator: LoanInterestCalculator;
   loan_interest_period: string;
   maximum_loan_repayment_period: number;
   social_fund_contribution: number;
@@ -256,6 +259,9 @@ export type VSLASetupRuleUpdates = {
   maximumLoanMultiple?: number;
   loanInterestPercentage?: number;
   loanInterestMethod?: LoanInterestMethod;
+  loanRepaymentAmountMode?: LoanRepaymentAmountMode;
+  loanRepaymentPeriodMode?: LoanRepaymentPeriodMode;
+  loanInterestCalculator?: LoanInterestCalculator;
   loanInterestPeriod?: string;
   maximumLoanRepaymentPeriod?: number;
   socialFundContribution?: number;
@@ -724,6 +730,9 @@ async function createDefaultVSLASetupRules(
       maximum_loan_multiple,
       loan_interest_percentage,
       loan_interest_method,
+      loan_repayment_amount_mode,
+      loan_repayment_period_mode,
+      loan_interest_calculator,
       loan_interest_period,
       maximum_loan_repayment_period,
       social_fund_contribution,
@@ -740,7 +749,7 @@ async function createDefaultVSLASetupRules(
       created_at,
       updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     groupId,
     1000,
     1,
@@ -748,6 +757,9 @@ async function createDefaultVSLASetupRules(
     3,
     5,
     'fixed',
+    'flexible',
+    'flexible',
+    'common_vsla',
     'per month',
     12,
     0,
@@ -1847,6 +1859,27 @@ status TEXT NOT NULL DEFAULT 'active',
     'vsla_setup_rules',
     'loan_interest_method',
     "TEXT NOT NULL DEFAULT 'fixed'",
+  );
+
+  await addColumnIfMissing(
+    db,
+    'vsla_setup_rules',
+    'loan_repayment_amount_mode',
+    "TEXT NOT NULL DEFAULT 'flexible'",
+  );
+
+  await addColumnIfMissing(
+    db,
+    'vsla_setup_rules',
+    'loan_repayment_period_mode',
+    "TEXT NOT NULL DEFAULT 'flexible'",
+  );
+
+  await addColumnIfMissing(
+    db,
+    'vsla_setup_rules',
+    'loan_interest_calculator',
+    "TEXT NOT NULL DEFAULT 'common_vsla'",
   );
 
   await addColumnIfMissing(
@@ -3489,6 +3522,31 @@ export async function updateVSLASetupRules(
     throw new Error('Choose Fixed, Flat, or Declining interest.');
   }
 
+  const loanRepaymentAmountMode =
+    data.loanRepaymentAmountMode ??
+    current.loan_repayment_amount_mode ??
+    'flexible';
+
+  const loanRepaymentPeriodMode =
+    data.loanRepaymentPeriodMode ??
+    current.loan_repayment_period_mode ??
+    'flexible';
+
+  const loanInterestCalculator =
+    data.loanInterestCalculator ??
+    current.loan_interest_calculator ??
+    'common_vsla';
+
+  if (!['flexible', 'fixed'].includes(loanRepaymentAmountMode)) {
+    throw new Error('Choose flexible or fixed repayment amount.');
+  }
+  if (!['flexible', 'fixed'].includes(loanRepaymentPeriodMode)) {
+    throw new Error('Choose flexible or fixed repayment period.');
+  }
+  if (!['standard', 'common_vsla'].includes(loanInterestCalculator)) {
+    throw new Error('Choose Standard or Common VSLA interest calculator.');
+  }
+
   const loanInterestPeriod =
     normalizeText(
       data.loanInterestPeriod ??
@@ -3752,6 +3810,9 @@ export async function updateVSLASetupRules(
        maximum_loan_multiple = ?,
        loan_interest_percentage = ?,
        loan_interest_method = ?,
+       loan_repayment_amount_mode = ?,
+       loan_repayment_period_mode = ?,
+       loan_interest_calculator = ?,
        loan_interest_period = ?,
        maximum_loan_repayment_period = ?,
        social_fund_contribution = ?,
@@ -3777,6 +3838,9 @@ export async function updateVSLASetupRules(
     maximumLoanMultiple,
     loanInterestPercentage,
     loanInterestMethod,
+    loanRepaymentAmountMode,
+    loanRepaymentPeriodMode,
+    loanInterestCalculator,
     loanInterestPeriod,
     maximumLoanRepaymentPeriod,
     socialFundContribution,
@@ -5658,6 +5722,9 @@ export async function issueLoan(
    ============================================================ */
 
 export type LoanInterestMethod = 'fixed' | 'flat' | 'declining';
+export type LoanRepaymentAmountMode = 'flexible' | 'fixed';
+export type LoanRepaymentPeriodMode = 'flexible' | 'fixed';
+export type LoanInterestCalculator = 'standard' | 'common_vsla';
 export type LoanRepaymentPeriodUnit = 'weeks' | 'months';
 export type LoanContractInput = {
   interestMethod: LoanInterestMethod;
