@@ -70,6 +70,12 @@ function parseDate(value: string): Date {
   return new Date(year, month - 1, day);
 }
 
+function addDays(date: Date, days: number): Date {
+  const result = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  result.setDate(result.getDate() + days);
+  return result;
+}
+
 function addMonths(date: Date, months: number): Date {
   const result = new Date(date.getFullYear(), date.getMonth(), 1);
   result.setMonth(result.getMonth() + months);
@@ -113,6 +119,8 @@ export default function LoanDisbursementScreen() {
   const [dueDate, setDueDate] = useState(() => formatDate(addMonths(new Date(), 1)));
   const [calendarMonth, setCalendarMonth] = useState(() => new Date());
   const [calendarVisible, setCalendarVisible] = useState(false);
+  const [interestDayOffset, setInterestDayOffset] = useState(30);
+  const [interestDayVisible, setInterestDayVisible] = useState(false);
   const [reason, setReason] = useState('Agriculture');
   const [reasonVisible, setReasonVisible] = useState(false);
   const [search, setSearch] = useState('');
@@ -145,6 +153,10 @@ export default function LoanDisbursementScreen() {
     () => calculatePreview(requestedAmount, interestRate),
     [requestedAmount, interestRate],
   );
+  const estimatedInterestDate = formatDate(addDays(new Date(), interestDayOffset));
+  const estimatedInterestDateLabel = parseDate(estimatedInterestDate).toLocaleDateString(undefined, {
+    day: 'numeric', month: 'long', year: 'numeric',
+  });
   const policyNeedsReview = Boolean(policy?.require_committee_approval) || Boolean(policy?.require_guarantor);
 
   const loadData = useCallback(async () => {
@@ -270,15 +282,23 @@ export default function LoanDisbursementScreen() {
       Alert.alert('Invalid Repayment Date', `Choose a repayment date within ${maximumTermMonths} months, as allowed by Setup Rules.`);
       return;
     }
+    if (interestPeriod !== 'per loan' &&
+        (!Number.isInteger(interestDayOffset) || interestDayOffset < 27 || interestDayOffset > 37)) {
+      Alert.alert('Invalid Monthly Interest Date', 'Choose one interest date between 27 and 37 days after the loan issue date.');
+      return;
+    }
     if (!['Agriculture', 'Business', 'Education', 'Emergency'].includes(reason)) {
       Alert.alert('Reason Required', 'Select a reason for this loan.');
       return;
     }
 
     const estimate = calculatePreview(requestedAmount, interestRate);
+    const interestScheduleSummary = interestPeriod === 'per loan'
+      ? 'Interest schedule: one time; no monthly interest date is required.'
+      : `First monthly interest date: ${interestDayOffset} days after the actual issue date (estimated ${estimatedInterestDateLabel} if issued today). Subsequent dates repeat monthly from that scheduled date.`;
     Alert.alert(
       'Confirm Loan Terms',
-      `Member: ${selectedMember.full_name} (${selectedMember.member_number})\nPrincipal: ${money(requestedAmount, currency)}\nInterest method: ${methodLabel(interestMethod, interestPeriod)}\nRate: ${interestRate}% (${interestPeriod === 'per loan' ? 'one time' : 'per month'})\nRepayment due date: ${dueDate}\nInitial month interest only: ${money(estimate.interest, currency)}\nBalance after initial interest: ${money(estimate.total, currency)}\n\nFurther monthly interest is charged through recurring meeting checks. Setup Rules set the maximum repayment term.`,
+      `Member: ${selectedMember.full_name} (${selectedMember.member_number})\nPrincipal: ${money(requestedAmount, currency)}\nInterest method: ${methodLabel(interestMethod, interestPeriod)}\nRate: ${interestRate}% (${interestPeriod === 'per loan' ? 'one time' : 'per month'})\n${interestScheduleSummary}\nRepayment due date: ${dueDate}\nInitial month interest only: ${money(estimate.interest, currency)}\nBalance after initial interest: ${money(estimate.total, currency)}\n\nRepayments are allowed on any day. Setup Rules set the maximum repayment term.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -320,6 +340,7 @@ export default function LoanDisbursementScreen() {
           repaymentPeriodCount: effectivePeriodCount,
           repaymentPeriodUnit: 'months',
           requestedDueDate: dueDate,
+          interestDayOffset: interestPeriod === 'per loan' ? null : interestDayOffset,
           reason: reason.trim(),
           requestedByMemberId: executiveMemberId,
         },
@@ -466,6 +487,26 @@ export default function LoanDisbursementScreen() {
           editable={!saving}
         />
 
+        {interestPeriod !== 'per loan' && (
+          <>
+            <Text style={styles.sectionTitle}>First Monthly Interest Date</Text>
+            <TouchableOpacity
+              accessibilityRole="button"
+              style={styles.datePickerButton}
+              onPress={() => setInterestDayVisible(true)}
+              disabled={saving}
+            >
+              <View>
+                <Text style={styles.datePickerLabel}>Selected interval after loan issue</Text>
+                <Text style={styles.datePickerValue}>{interestDayOffset} days after issue</Text>
+                <Text style={styles.smallNote}>Estimated date if issued today: {estimatedInterestDateLabel}</Text>
+              </View>
+              <Text style={styles.dropdownArrow}>▾</Text>
+            </TouchableOpacity>
+            <Text style={styles.smallNote}>Choose 27–37 days after the actual loan issue date. The date shown above is an estimate; if an application is pending, the schedule starts from the actual disbursement date. Later monthly dates follow this selected date. The final repayment due date below is separate.</Text>
+          </>
+        )}
+
         <Text style={styles.sectionTitle}>Repayment Due Date</Text>
         <TouchableOpacity
           accessibilityRole="button"
@@ -514,6 +555,40 @@ export default function LoanDisbursementScreen() {
         >
           {saving ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.buttonText}>{policyNeedsReview ? 'Submit Loan Application' : 'Confirm & Disburse Loan'}</Text>}
         </TouchableOpacity>
+        <Modal visible={interestDayVisible} transparent animationType="fade" onRequestClose={() => setInterestDayVisible(false)}>
+          <View style={styles.modalBackdrop}>
+            <View style={styles.interestDayCard}>
+              <Text style={styles.cardTitle}>Choose first monthly interest date</Text>
+              <Text style={styles.smallNote}>Select one interval from 27 to 37 days after the actual loan issue date. Dates below assume disbursement today.</Text>
+              <ScrollView style={styles.interestDayList} keyboardShouldPersistTaps="handled">
+                {Array.from({ length: 11 }, (_, index) => index + 27).map((offset) => {
+                  const optionDate = parseDate(formatDate(addDays(new Date(), offset)));
+                  const optionDateLabel = optionDate.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
+                  const selected = offset === interestDayOffset;
+                  return (
+                    <TouchableOpacity
+                      key={offset}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      style={[styles.reasonOption, selected && styles.reasonOptionSelected]}
+                      onPress={() => { setInterestDayOffset(offset); setInterestDayVisible(false); }}
+                      disabled={saving}
+                    >
+                      <Text style={[styles.reasonOptionText, selected && styles.reasonOptionTextSelected]}>
+                        {offset} days after issue{selected ? '  ✓' : ''}
+                      </Text>
+                      <Text style={styles.smallNote}>{optionDateLabel} (estimate)</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+              <TouchableOpacity style={styles.cancelButton} onPress={() => setInterestDayVisible(false)}>
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
         <Modal visible={calendarVisible} transparent animationType="fade" onRequestClose={() => setCalendarVisible(false)}>
           <View style={styles.modalBackdrop}>
             <View style={styles.calendarCard}>
@@ -626,6 +701,8 @@ const styles = StyleSheet.create({
   dropdownArrow: { color: '#166534', fontSize: 24, fontWeight: '800', marginLeft: 12 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.45)', alignItems: 'center', justifyContent: 'center', padding: 18 },
   calendarCard: { width: '100%', maxWidth: 380, backgroundColor: '#ffffff', borderRadius: 16, padding: 16 },
+  interestDayCard: { width: '100%', maxWidth: 380, maxHeight: '85%', backgroundColor: '#ffffff', borderRadius: 16, padding: 16 },
+  interestDayList: { flexGrow: 0, marginTop: 10 },
   reasonCard: { width: '100%', maxWidth: 360, backgroundColor: '#ffffff', borderRadius: 16, padding: 16 },
   calendarHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   calendarNav: { width: 40, height: 40, borderRadius: 10, backgroundColor: '#f0fdf4', alignItems: 'center', justifyContent: 'center' },
