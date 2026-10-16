@@ -121,6 +121,7 @@ export default function LoanDisbursementScreen() {
   const [calendarVisible, setCalendarVisible] = useState(false);
   const [interestDayOffset, setInterestDayOffset] = useState(30);
   const [interestDayVisible, setInterestDayVisible] = useState(false);
+  const [interestCalendarMonth, setInterestCalendarMonth] = useState(() => new Date());
   const [reason, setReason] = useState('Agriculture');
   const [reasonVisible, setReasonVisible] = useState(false);
   const [search, setSearch] = useState('');
@@ -283,8 +284,8 @@ export default function LoanDisbursementScreen() {
       return;
     }
     if (interestPeriod !== 'per loan' &&
-        (!Number.isInteger(interestDayOffset) || interestDayOffset < 27 || interestDayOffset > 37)) {
-      Alert.alert('Invalid Monthly Interest Date', 'Choose one interest date between 27 and 37 days after the loan issue date.');
+        (!Number.isInteger(interestDayOffset) || interestDayOffset < 27 || interestDayOffset > 35)) {
+      Alert.alert('Invalid Monthly Interest Date', 'Choose one interest date between 27 and 35 days after the loan issue date.');
       return;
     }
     if (!['Agriculture', 'Business', 'Education', 'Emergency'].includes(reason)) {
@@ -493,17 +494,18 @@ export default function LoanDisbursementScreen() {
             <TouchableOpacity
               accessibilityRole="button"
               style={styles.datePickerButton}
-              onPress={() => setInterestDayVisible(true)}
+              onPress={() => { setInterestCalendarMonth(parseDate(estimatedInterestDate)); setInterestDayVisible(true); }}
               disabled={saving}
             >
               <View>
-                <Text style={styles.datePickerLabel}>Selected interval after loan issue</Text>
-                <Text style={styles.datePickerValue}>{interestDayOffset} days after issue</Text>
+                <Text style={styles.datePickerLabel}>Selected first monthly interest date</Text>
+                <Text style={styles.datePickerValue}>{estimatedInterestDateLabel}</Text>
+                <Text style={styles.smallNote}>{interestDayOffset} days after issue (estimated)</Text>
                 <Text style={styles.smallNote}>Estimated date if issued today: {estimatedInterestDateLabel}</Text>
               </View>
               <Text style={styles.dropdownArrow}>▾</Text>
             </TouchableOpacity>
-            <Text style={styles.smallNote}>Choose 27–37 days after the actual loan issue date. The date shown above is an estimate; if an application is pending, the schedule starts from the actual disbursement date. Later monthly dates follow this selected date. The final repayment due date below is separate.</Text>
+            <Text style={styles.smallNote}>Choose a calendar date 27–35 days after the expected loan issue date. The date shown above is an estimate; if an application is pending, the schedule starts from the actual disbursement date. Later monthly dates follow this selected date. The final repayment due date below is separate.</Text>
           </>
         )}
 
@@ -557,34 +559,53 @@ export default function LoanDisbursementScreen() {
         </TouchableOpacity>
         <Modal visible={interestDayVisible} transparent animationType="fade" onRequestClose={() => setInterestDayVisible(false)}>
           <View style={styles.modalBackdrop}>
-            <View style={styles.interestDayCard}>
+            <View style={styles.calendarCard}>
               <Text style={styles.cardTitle}>Choose first monthly interest date</Text>
-              <Text style={styles.smallNote}>Select one interval from 27 to 37 days after the actual loan issue date. Dates below assume disbursement today.</Text>
-              <ScrollView style={styles.interestDayList} keyboardShouldPersistTaps="handled">
-                {Array.from({ length: 11 }, (_, index) => index + 27).map((offset) => {
-                  const optionDate = parseDate(formatDate(addDays(new Date(), offset)));
-                  const optionDateLabel = optionDate.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
-                  const selected = offset === interestDayOffset;
+              <Text style={styles.smallNote}>Choose a date between 27 and 35 days after the expected issue date. The date is recalculated from the actual disbursement date when the loan is issued.</Text>
+              <View style={styles.calendarHeader}>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  style={styles.calendarNav}
+                  onPress={() => setInterestCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}
+                  disabled={formatDate(new Date(interestCalendarMonth.getFullYear(), interestCalendarMonth.getMonth(), 1)) <= formatDate(new Date(addDays(new Date(), 27).getFullYear(), addDays(new Date(), 27).getMonth(), 1))}
+                ><Text style={styles.calendarNavText}>‹</Text></TouchableOpacity>
+                <Text style={styles.calendarMonth}>{monthLabel(interestCalendarMonth)}</Text>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  style={styles.calendarNav}
+                  onPress={() => setInterestCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}
+                  disabled={formatDate(new Date(interestCalendarMonth.getFullYear(), interestCalendarMonth.getMonth(), 1)) >= formatDate(new Date(addDays(new Date(), 35).getFullYear(), addDays(new Date(), 35).getMonth(), 1))}
+                ><Text style={styles.calendarNavText}>›</Text></TouchableOpacity>
+              </View>
+              <View style={styles.calendarGrid}>
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => <Text key={day} style={styles.calendarWeekday}>{day}</Text>)}
+                {Array.from({ length: new Date(interestCalendarMonth.getFullYear(), interestCalendarMonth.getMonth(), 1).getDay() }, (_, index) => <View key={`interest-blank-${index}`} style={styles.calendarDay} />)}
+                {Array.from({ length: new Date(interestCalendarMonth.getFullYear(), interestCalendarMonth.getMonth() + 1, 0).getDate() }, (_, index) => {
+                  const day = index + 1;
+                  const date = new Date(interestCalendarMonth.getFullYear(), interestCalendarMonth.getMonth(), day);
+                  const dateValue = formatDate(date);
+                  const minInterestDate = formatDate(addDays(new Date(), 27));
+                  const maxInterestDate = formatDate(addDays(new Date(), 35));
+                  const disabled = dateValue < minInterestDate || dateValue > maxInterestDate;
+                  const selected = dateValue === estimatedInterestDate;
                   return (
                     <TouchableOpacity
-                      key={offset}
+                      key={`interest-${dateValue}`}
                       accessibilityRole="button"
-                      accessibilityState={{ selected }}
-                      style={[styles.reasonOption, selected && styles.reasonOptionSelected]}
-                      onPress={() => { setInterestDayOffset(offset); setInterestDayVisible(false); }}
-                      disabled={saving}
-                    >
-                      <Text style={[styles.reasonOptionText, selected && styles.reasonOptionTextSelected]}>
-                        {offset} days after issue{selected ? '  ✓' : ''}
-                      </Text>
-                      <Text style={styles.smallNote}>{optionDateLabel} (estimate)</Text>
-                    </TouchableOpacity>
+                      accessibilityState={{ selected, disabled }}
+                      style={[styles.calendarDay, selected && styles.calendarDaySelected, disabled && styles.calendarDayDisabled]}
+                      disabled={disabled || saving}
+                      onPress={() => {
+                        const offset = Math.round((new Date(`${dateValue}T12:00:00`).getTime() - new Date(`${formatDate(new Date())}T12:00:00`).getTime()) / 86400000);
+                        setInterestDayOffset(offset);
+                        setInterestDayVisible(false);
+                      }}
+                    ><Text style={[styles.calendarDayText, selected && styles.calendarDayTextSelected, disabled && styles.calendarDayTextDisabled]}>{day}</Text></TouchableOpacity>
                   );
                 })}
-              </ScrollView>
-              <TouchableOpacity style={styles.cancelButton} onPress={() => setInterestDayVisible(false)}>
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
+              </View>
+              <Text style={styles.smallNote}>Only eligible dates from {formatDate(addDays(new Date(), 27))} through {formatDate(addDays(new Date(), 35))} can be selected.</Text>
+              <TouchableOpacity style={styles.cancelButton} onPress={() => setInterestDayVisible(false)}><Text style={styles.cancelButtonText}>Cancel</Text></TouchableOpacity>
             </View>
           </View>
         </Modal>
