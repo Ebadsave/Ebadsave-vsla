@@ -85,10 +85,9 @@ function calculatePreview(
   return { interest, total, instalment: total / periods };
 }
 
-function methodLabel(method: LoanInterestMethod): string {
-  if (method === 'flat') return 'Flat interest';
-  if (method === 'declining') return 'Declining balance';
-  return 'Fixed interest';
+function methodLabel(method: LoanInterestMethod, interestPeriod: string): string {
+  if (interestPeriod === 'per loan') return 'One-time interest';
+  return method === 'declining' ? 'Monthly interest (declining)' : 'Monthly interest (fixed)';
 }
 
 export default function LoanDisbursementScreen() {
@@ -119,21 +118,22 @@ export default function LoanDisbursementScreen() {
   const maximumMemberLoan = Math.max(0, memberSavings * loanMultiple - currentLoanBalance);
   const requestedAmount = Number(amount.replace(/,/g, '').trim());
   const periods = Number(periodCount);
-  const interestCalculator = rules?.loan_interest_calculator ?? 'common_vsla';
-  // Common VSLA mode uses declining-balance interest on the outstanding principal.
-  // Standard mode respects the group's selected fixed, flat, or declining method.
-  const interestMethod: LoanInterestMethod =
-    interestCalculator === 'common_vsla'
+  const storedInterestCalculator = rules?.loan_interest_calculator === 'standard' ? 'standard' : 'common_vsla';
+  const storedInterestMethod: LoanInterestMethod = rules?.loan_interest_method ?? 'fixed';
+  const storedInterestPeriod = rules?.loan_interest_period ?? 'per month';
+  const oneTimeInterest = storedInterestPeriod === 'per loan' ||
+    (storedInterestCalculator === 'standard' && storedInterestMethod === 'fixed');
+  const interestMethod: LoanInterestMethod = oneTimeInterest
+    ? 'flat'
+    : storedInterestCalculator === 'common_vsla'
       ? 'declining'
-      : rules?.loan_interest_method ?? 'fixed';
-  const repaymentAmountMode = rules?.loan_repayment_amount_mode ?? 'flexible';
-  const repaymentPeriodMode = rules?.loan_repayment_period_mode ?? 'flexible';
+      : storedInterestMethod === 'declining' ? 'declining' : 'flat';
+  // The setup choices for fixed/flexible repayment modes have been removed.
+  // Members make flexible repayments and select a loan term below.
   const interestRate = Number(rules?.loan_interest_percentage ?? 0);
-  const interestPeriod = rules?.loan_interest_period ?? 'per month';
+  const interestPeriod = oneTimeInterest ? 'per loan' : 'per month';
   const cycleDurationMonths = Number(rules?.cycle_duration_months ?? 12);
-  const effectivePeriodCount = repaymentPeriodMode === 'fixed' && rules
-    ? Number(rules.maximum_loan_repayment_period)
-    : periods;
+  const effectivePeriodCount = periods;
   const preview = useMemo(
     () => calculatePreview(requestedAmount, interestRate, effectivePeriodCount, interestMethod, interestPeriod, cycleDurationMonths),
     [requestedAmount, interestRate, effectivePeriodCount, interestMethod, interestPeriod, cycleDurationMonths],
@@ -237,9 +237,7 @@ export default function LoanDisbursementScreen() {
       Alert.alert('Insufficient Loan Fund', `Available Loan Fund: ${money(loanFund, currency)}.`);
       return;
     }
-    const requiredPeriods = repaymentPeriodMode === 'fixed'
-      ? Number(rules.maximum_loan_repayment_period)
-      : periods;
+    const requiredPeriods = periods;
     if (!Number.isInteger(requiredPeriods) || requiredPeriods < 1 || requiredPeriods > Number(rules.maximum_loan_repayment_period)) {
       Alert.alert('Invalid Repayment Period', `Enter between 1 and ${Number(rules.maximum_loan_repayment_period)} months, as allowed by Setup Rules.`);
       return;
@@ -253,7 +251,7 @@ export default function LoanDisbursementScreen() {
     const estimate = calculatePreview(requestedAmount, interestRate, effectivePeriods, interestMethod, interestPeriod, cycleDurationMonths);
     Alert.alert(
       'Confirm Loan Terms',
-      `Member: ${selectedMember.full_name} (${selectedMember.member_number})\nPrincipal: ${money(requestedAmount, currency)}\nInterest method: ${methodLabel(interestMethod)}\nRate: ${interestRate}% (${interestPeriod})\nTerm: ${effectivePeriods} month(s)\nRepayment amount mode: ${repaymentAmountMode}\nRepayment period mode: ${repaymentPeriodMode}\nEstimated interest: ${money(estimate.interest, currency)}\nEstimated total due: ${money(estimate.total, currency)}\n\nThe saved Setup Rules will be used for the application.`,
+      `Member: ${selectedMember.full_name} (${selectedMember.member_number})\nPrincipal: ${money(requestedAmount, currency)}\nInterest method: ${methodLabel(interestMethod, interestPeriod)}\nRate: ${interestRate}% (${interestPeriod === 'per loan' ? 'one time' : 'per month'})\nTerm: ${effectivePeriods} month(s)\nEstimated interest: ${money(estimate.interest, currency)}\nEstimated total due: ${money(estimate.total, currency)}\n\nThe saved Setup Rules will be used for the application.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -303,7 +301,7 @@ export default function LoanDisbursementScreen() {
           const result = await disburseApprovedLoanApplication(applicationId, executiveMemberId);
           Alert.alert(
             'Loan Disbursed',
-            `Loan issued to ${selectedMember?.full_name}.\nPrincipal: ${money(requestedAmount, currency)}\nInterest: ${money(result.totalInterest, currency)}\nTotal due: ${money(result.totalDue, currency)}\nDue date: ${result.dueDate}`,
+            `Loan issued to ${selectedMember?.full_name}.\nPrincipal: ${money(requestedAmount, currency)}\nInterest charged initially: ${money(result.totalInterest, currency)}\nCurrent balance after initial interest: ${money(result.totalDue, currency)}\nDue date: ${result.dueDate}`,
           );
         }
       }
@@ -374,21 +372,16 @@ export default function LoanDisbursementScreen() {
 
         <View style={styles.rulesCard}>
           <Text style={styles.cardTitle}>Saved Loan Rules</Text>
-          <View style={styles.ruleRow}><Text style={styles.ruleName}>Interest calculator</Text><Text style={styles.ruleValue}>{interestCalculator === 'common_vsla' ? 'Common VSLA' : 'Standard'}</Text></View>
-          <View style={styles.ruleRow}><Text style={styles.ruleName}>Interest method</Text><Text style={styles.ruleValue}>{methodLabel(interestMethod)}</Text></View>
+          <View style={styles.ruleRow}><Text style={styles.ruleName}>Interest method</Text><Text style={styles.ruleValue}>{methodLabel(interestMethod, interestPeriod)}</Text></View>
           <View style={styles.ruleRow}><Text style={styles.ruleName}>Interest rate</Text><Text style={styles.ruleValue}>{interestRate}%</Text></View>
-          <View style={styles.ruleRow}><Text style={styles.ruleName}>Repayment amount</Text><Text style={styles.ruleValue}>{repaymentAmountMode === 'fixed' ? 'Fixed instalment' : 'Flexible amount'}</Text></View>
-          <View style={styles.ruleRow}><Text style={styles.ruleName}>Repayment period</Text><Text style={styles.ruleValue}>{repaymentPeriodMode === 'fixed' ? 'Fixed' : 'Flexible'}</Text></View>
-          <View style={styles.ruleRow}><Text style={styles.ruleName}>Interest period</Text><Text style={styles.ruleValue}>{interestPeriod}</Text></View>
+          <View style={styles.ruleRow}><Text style={styles.ruleName}>Interest frequency</Text><Text style={styles.ruleValue}>{interestPeriod === 'per loan' ? 'One time' : 'Monthly'}</Text></View>
           <View style={styles.ruleRow}><Text style={styles.ruleName}>Maximum repayment term</Text><Text style={styles.ruleValue}>{Number(rules?.maximum_loan_repayment_period ?? 12)} months</Text></View>
           <Text style={styles.methodDescription}>
-            {interestCalculator === 'common_vsla'
-              ? `Common VSLA: interest is calculated on the outstanding principal (${interestPeriod}).`
-              : interestMethod === 'fixed'
-                ? 'Fixed: one total interest charge based on the original principal, divided across the repayment instalments.'
-                : interestMethod === 'flat'
-                  ? 'Flat: interest is calculated on the original principal for each repayment period.'
-                  : 'Declining: interest is calculated on the outstanding principal at the start of each repayment period.'}
+            {interestPeriod === 'per loan'
+              ? 'Interest is applied only once to the original loan principal.'
+              : interestMethod === 'declining'
+                ? 'Monthly interest is recalculated on the remaining balance owed.'
+                : 'The same fixed monthly interest charge is based on the original principal.'}
           </Text>
           {policyNeedsReview && (
             <Text style={styles.notice}>
@@ -443,17 +436,19 @@ export default function LoanDisbursementScreen() {
           keyboardType="number-pad"
           placeholder={`1–${Number(rules?.maximum_loan_repayment_period ?? 12)} months`}
           placeholderTextColor="#6b7280"
-          editable={!saving && repaymentPeriodMode !== 'fixed'}
+          editable={!saving}
         />
 
         {Number.isFinite(requestedAmount) && requestedAmount > 0 && Number.isInteger(effectivePeriodCount) && effectivePeriodCount > 0 && effectivePeriodCount <= Number(rules?.maximum_loan_repayment_period ?? 12) && (
           <View style={styles.previewCard}>
             <Text style={styles.cardTitle}>Estimated Repayment</Text>
-            <View style={styles.ruleRow}><Text style={styles.ruleName}>Interest method</Text><Text style={styles.ruleValue}>{methodLabel(interestMethod)}</Text></View>
+            <View style={styles.ruleRow}><Text style={styles.ruleName}>Interest method</Text><Text style={styles.ruleValue}>{methodLabel(interestMethod, interestPeriod)}</Text></View>
             <View style={styles.ruleRow}><Text style={styles.ruleName}>Estimated interest</Text><Text style={styles.ruleValue}>{money(preview.interest, currency)}</Text></View>
             <View style={styles.ruleRow}><Text style={styles.ruleName}>Estimated total due</Text><Text style={styles.totalValue}>{money(preview.total, currency)}</Text></View>
-            <View style={styles.ruleRow}><Text style={styles.ruleName}>{repaymentAmountMode === 'fixed' ? 'Required instalment' : 'Average instalment'}</Text><Text style={styles.ruleValue}>{money(preview.instalment, currency)}</Text></View>
-            <Text style={styles.smallNote}>Final contract amounts and due date are calculated and saved by the database when the loan is disbursed.</Text>
+            <View style={styles.ruleRow}><Text style={styles.ruleName}>Average instalment (estimate)</Text><Text style={styles.ruleValue}>{money(preview.instalment, currency)}</Text></View>
+            <Text style={styles.smallNote}>
+              This is an estimate. For monthly interest, the actual charge is calculated when the monthly interest check runs: declining uses the balance still owed, while fixed uses the original principal. The loan term above determines the due date; repayments remain flexible.
+            </Text>
           </View>
         )}
 
