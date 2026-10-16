@@ -67,6 +67,55 @@ function isMatchingMeetingRule(date: Date, rule: string): boolean {
   return ordinal === MEETING_ORDINALS.indexOf(match[1] as typeof MEETING_ORDINALS[number]) + 1;
 }
 
+function matchesMeetingSchedule(date: Date, rawRule: string): boolean {
+  const rule = rawRule || 'weekly';
+  const weekly = rule.match(/^weekly_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/);
+  if (weekly || rule === 'weekly') {
+    const dayName = weekly?.[1] ?? 'monday';
+    return date.getDay() === (MEETING_WEEKDAYS.find((item) => item.key === dayName)?.day ?? 1);
+  }
+
+  const twiceDates = rule.match(/^twice_dates_(\d{1,2})_(\d{1,2})$/);
+  if (twiceDates || rule === 'biweekly') {
+    const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+    const configuredDays = twiceDates ? [Number(twiceDates[1]), Number(twiceDates[2])] : [5, 20];
+    return configuredDays.some((day) => Math.min(day, daysInMonth) === date.getDate());
+  }
+
+  const twiceRules = rule.match(/^twice_rules_(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)_(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/);
+  if (twiceRules) {
+    return isMatchingMeetingRule(date, `${twiceRules[1]}_${twiceRules[2]}`) || isMatchingMeetingRule(date, `${twiceRules[3]}_${twiceRules[4]}`);
+  }
+
+  const monthlyDate = rule.match(/^monthly_date_(\d{1,2})$/);
+  if (monthlyDate || rule === 'monthly') {
+    const requestedDay = monthlyDate ? Number(monthlyDate[1]) : 15;
+    const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+    return date.getDate() === Math.min(requestedDay, lastDay);
+  }
+
+  const monthlyRule = rule.match(/^monthly_rule_(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/);
+  if (monthlyRule) return isMatchingMeetingRule(date, `${monthlyRule[1]}_${monthlyRule[2]}`);
+  if (/^(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/.test(rule)) {
+    return isMatchingMeetingRule(date, rule);
+  }
+  return false;
+}
+
+function getUpcomingMeetingDates(rawRule: string, fromDate: Date, count = 3): Date[] {
+  const dates: Date[] = [];
+  const start = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate());
+  for (let offset = 0; offset < 370 && dates.length < count; offset += 1) {
+    const candidate = new Date(start.getFullYear(), start.getMonth(), start.getDate() + offset);
+    if (matchesMeetingSchedule(candidate, rawRule)) dates.push(candidate);
+  }
+  return dates;
+}
+
+function formatMeetingDate(date: Date): string {
+  return date.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 const DEFAULT_RULES: VSLASetupRuleUpdates = {
 shareValue: 1000,
 minimumSharesPerMeeting: 1,
@@ -839,6 +888,16 @@ Setup Rules
     </>}
     <Text style={styles.description}>This schedule can coordinate meeting dates, repayment checks, and monthly interest calculations. Members can still repay on any day.</Text>
 
+    <View style={styles.schedulePreview}>
+      <Text style={styles.schedulePreviewTitle}>Upcoming scheduled meetings</Text>
+      {getUpcomingMeetingDates(scheduleValue, new Date(), 3).map((date, index) => (
+        <Text key={`${toLocalDateString(date)}-${index}`} style={styles.schedulePreviewDate}>
+          {index + 1}. {formatMeetingDate(date)}
+        </Text>
+      ))}
+      <Text style={styles.schedulePreviewNote}>These dates are a guide only. Executives can still start a meeting on another day.</Text>
+    </View>
+
 <Text style={styles.label}>
       Cycle Duration (Months)
     </Text>  
@@ -1177,6 +1236,33 @@ calendarSelection: {
   fontSize: 12,
   fontWeight: '700',
   marginTop: 10,
+},
+
+schedulePreview: {
+  backgroundColor: '#f0fdf4',
+  borderColor: '#bbf7d0',
+  borderWidth: 1,
+  borderRadius: 10,
+  padding: 12,
+  marginTop: 4,
+  marginBottom: 18,
+},
+schedulePreviewTitle: {
+  color: '#166534',
+  fontSize: 14,
+  fontWeight: '700',
+  marginBottom: 8,
+},
+schedulePreviewDate: {
+  color: '#1f2937',
+  fontSize: 13,
+  marginBottom: 5,
+},
+schedulePreviewNote: {
+  color: '#4b5563',
+  fontSize: 12,
+  lineHeight: 17,
+  marginTop: 5,
 },
 
 optionRow: {
