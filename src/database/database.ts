@@ -1493,6 +1493,7 @@ status TEXT NOT NULL DEFAULT 'active',
         CHECK (interest_method IN ('fixed', 'flat', 'declining')),
       interest_rate REAL NOT NULL DEFAULT 0 CHECK (interest_rate >= 0),
       interest_period TEXT NOT NULL DEFAULT 'per month',
+      monthly_recalculation_enabled INTEGER NOT NULL DEFAULT 0 CHECK (monthly_recalculation_enabled IN (0, 1)),
       repayment_period_count INTEGER NOT NULL DEFAULT 1 CHECK (repayment_period_count > 0),
       repayment_period_unit TEXT NOT NULL DEFAULT 'months'
         CHECK (repayment_period_unit IN ('weeks', 'months')),
@@ -1530,6 +1531,27 @@ status TEXT NOT NULL DEFAULT 'active',
       UNIQUE(loan_id, installment_number),
       FOREIGN KEY (loan_id) REFERENCES loan_records(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS loan_contract_interest_charges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      loan_id INTEGER NOT NULL,
+      member_id INTEGER NOT NULL,
+      meeting_id INTEGER NOT NULL,
+      charge_date TEXT NOT NULL,
+      opening_balance REAL NOT NULL,
+      interest_percentage REAL NOT NULL,
+      interest_method TEXT NOT NULL CHECK (interest_method IN ('fixed', 'flat', 'declining')),
+      interest_amount REAL NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(loan_id, meeting_id),
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (loan_id) REFERENCES loan_records(id) ON DELETE CASCADE,
+      FOREIGN KEY (member_id) REFERENCES members(id),
+      FOREIGN KEY (meeting_id) REFERENCES group_meetings(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_contract_interest_loan_date
+      ON loan_contract_interest_charges(loan_id, charge_date);
 
     CREATE TABLE IF NOT EXISTS loan_guarantors (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1891,6 +1913,7 @@ status TEXT NOT NULL DEFAULT 'active',
   await addColumnIfMissing(db, 'loan_records', 'interest_calculator', "TEXT NOT NULL DEFAULT 'standard'");
   await addColumnIfMissing(db, 'loan_records', 'repayment_amount_mode', "TEXT NOT NULL DEFAULT 'flexible'");
   await addColumnIfMissing(db, 'loan_records', 'repayment_period_mode', "TEXT NOT NULL DEFAULT 'flexible'");
+  await addColumnIfMissing(db, 'loan_records', 'monthly_recalculation_enabled', 'INTEGER NOT NULL DEFAULT 0');
 
   await addColumnIfMissing(
     db,
@@ -2024,7 +2047,7 @@ const BACKUP_TABLES = [
   'notification_queue', 'notification_delivery', 'meeting_audit_records',
   'sync_queue', 'member_passbook_records', 'member_statement_records',
   'loan_interest_charges', 'meeting_loan_interest_charges', 'loan_policy_settings', 'loan_committee_members', 'loan_applications',
-  'loan_records', 'loan_repayment_schedule', 'loan_guarantors',
+  'loan_records', 'loan_repayment_schedule', 'loan_contract_interest_charges', 'loan_guarantors',
   'loan_committee_approvals', 'loan_deductions',
   'loan_emergency_freezes', 'loan_audit_log',
 ] as const;
@@ -3246,16 +3269,9 @@ export async function applyMeetingDayLoanInterest(
   const meetingDate = dateOnly(meeting.meeting_date);
   if (!meetingDate) throw new Error('The meeting date is not valid.');
   const setup = await getVSLASetupRules(groupId);
-  // Meeting-day interest uses the actual elapsed days (27–35), regardless of
-  // the legacy period label. The group's saved rate and interest method still apply.
-  const percentage = Number(setup?.loan_interest_percentage ?? 0);
-  const method: LoanInterestMethod = setup?.loan_interest_method ?? 'fixed';
-  if (!Number.isFinite(percentage) || percentage <= 0) {
-    return {
-      meetingId, meetingDate, checkedMembers: 0, chargedMembers: 0, totalInterest: 0,
-      skippedByPeriod: false, message: 'No meeting-day interest was charged because the saved interest rate is zero.',
-    };
-  }
+  const legacyPeriod = String(setup?.loan_interest_period ?? 'per month').trim().toLowerCase();
+  const legacyPercentage = Number(setup?.loan_interest_percentage ?? 0);
+  const legacyMethod: LoanInterestMethod = setup?.loan_interest_method ?? 'fixed';
 
   const members = await db.getAllAsync<{ id: number }>(
     `SELECT id FROM members WHERE group_id = ? AND LOWER(TRIM(status)) = 'active' ORDER BY id`,
@@ -3264,20 +3280,135 @@ export async function applyMeetingDayLoanInterest(
   let checkedMembers = 0;
   let chargedMembers = 0;
   let totalInterest = 0;
+  let skippedLegacyByPeriod = legacyPeriod !== 'per month';
 
   for (const member of members) {
+    // Newly-created monthly contracts are charged from the loan's saved terms,
+    // not today's Setup Rules, so later rule edits do not change existing loans.
+    const contractLoans = await db.getAllAsync<{
+      id: number;
+      principal_amount: number;
+      interest_method: LoanInterestMethod;
+      interest_rate: number;
+      interest_period: string;
+      issue_date: string;
+      status: string;
+      monthly_recalculation_enabled: number;
+    }>(
+      `SELECT id, principal_amount, interest_method, interest_rate, interest_period,
+              issue_date, status, monthly_recalculation_enabled
+       FROM loan_records
+       WHERE group_id = ? AND member_id = ? AND status IN ('active', 'frozen')
+       ORDER BY issue_date ASC, id ASC`,
+      groupId, member.id,
+    );
+
+    if (contractLoans.length > 0) {
+      checkedMembers += 1;
+      let memberCharged = false;
+
+      for (const loan of contractLoans) {
+        if (Number(loan.monthly_recalculation_enabled ?? 0) !== 1 ||
+            loan.status !== 'active' ||
+            String(loan.interest_period).trim().toLowerCase() !== 'per month' ||
+            !['flat', 'declining'].includes(loan.interest_method)) {
+          continue;
+        }
+        const rate = Number(loan.interest_rate);
+        if (!Number.isFinite(rate) || rate <= 0) continue;
+
+        const alreadyCharged = await db.getFirstAsync<{ id: number }>(
+          `SELECT id FROM loan_contract_interest_charges WHERE loan_id = ? AND meeting_id = ? LIMIT 1`,
+          loan.id, meetingId,
+        );
+        if (alreadyCharged) continue;
+
+        const priorCharge = await db.getFirstAsync<{ charge_date: string | null }>(
+          `SELECT MAX(charge_date) AS charge_date
+           FROM loan_contract_interest_charges WHERE loan_id = ?`,
+          loan.id,
+        );
+        const referenceDate = dateOnly(priorCharge?.charge_date) ?? dateOnly(loan.issue_date);
+        if (!referenceDate) continue;
+        const elapsedDays = daysBetweenDates(referenceDate, meetingDate);
+        if (elapsedDays < 27 || elapsedDays > 35) continue;
+
+        const outstanding = await db.getFirstAsync<{ balance: number }>(
+          `SELECT COALESCE(SUM(
+              MAX(0, principal_due - principal_paid) + MAX(0, interest_due - interest_paid)
+            ), 0) AS balance
+           FROM loan_repayment_schedule WHERE loan_id = ?`,
+          loan.id,
+        );
+        const outstandingBalance = Math.max(0, Number(outstanding?.balance ?? 0));
+        if (outstandingBalance <= 0) continue;
+
+        // Fixed monthly interest uses the original principal every month.
+        // Declining monthly interest uses the actual remaining amount owed,
+        // including previously accrued interest that has not yet been repaid.
+        const interestBasis = loan.interest_method === 'flat'
+          ? Number(loan.principal_amount)
+          : outstandingBalance;
+        const interestAmount = Number((interestBasis * rate / 100).toFixed(2));
+        if (!Number.isFinite(interestAmount) || interestAmount <= 0) continue;
+
+        const nextInstallment = await db.getFirstAsync<{ id: number; interest_due: number }>(
+          `SELECT id, interest_due FROM loan_repayment_schedule
+           WHERE loan_id = ?
+             AND (principal_paid + 0.000001 < principal_due OR interest_paid + 0.000001 < interest_due)
+           ORDER BY due_date ASC, installment_number ASC LIMIT 1`,
+          loan.id,
+        );
+        if (!nextInstallment) continue;
+
+        await db.execAsync('BEGIN TRANSACTION;');
+        try {
+          const inserted = await db.runAsync(
+            `INSERT OR IGNORE INTO loan_contract_interest_charges (
+              group_id, loan_id, member_id, meeting_id, charge_date, opening_balance,
+              interest_percentage, interest_method, interest_amount, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            groupId, loan.id, member.id, meetingId, meetingDate, interestBasis,
+            rate, loan.interest_method, interestAmount, now(),
+          );
+
+          if (Number(inserted.changes ?? 0) === 1) {
+            await db.runAsync(
+              `UPDATE loan_repayment_schedule
+               SET interest_due = interest_due + ?, updated_at = ? WHERE id = ?`,
+              interestAmount, now(), nextInstallment.id,
+            );
+            await db.runAsync(
+              `UPDATE loan_records
+               SET total_interest = total_interest + ?, total_due = total_due + ?, updated_at = ?
+               WHERE id = ? AND status = 'active'`,
+              interestAmount, interestAmount, now(), loan.id,
+            );
+            await db.execAsync('COMMIT;');
+            totalInterest += interestAmount;
+            if (!memberCharged) {
+              chargedMembers += 1;
+              memberCharged = true;
+            }
+          } else {
+            await db.execAsync('ROLLBACK;');
+          }
+        } catch (error) {
+          await db.execAsync('ROLLBACK;');
+          throw error;
+        }
+      }
+      // Do not fall through to the legacy member-level calculation for contract borrowers.
+      continue;
+    }
+
+    // Keep compatibility for old loans without a saved loan contract.
+    if (legacyPeriod !== 'per month' || !Number.isFinite(legacyPercentage) || legacyPercentage <= 0) continue;
     const alreadyForMeeting = await db.getFirstAsync<{ id: number }>(
       `SELECT id FROM meeting_loan_interest_charges WHERE group_id = ? AND member_id = ? AND meeting_id = ? LIMIT 1`,
       groupId, member.id, meetingId,
     );
     if (alreadyForMeeting) continue;
-
-    // Loan contracts already have interest calculated in their saved schedule. Do not double charge them here.
-    const contract = await db.getFirstAsync<{ id: number }>(
-      `SELECT id FROM loan_records WHERE group_id = ? AND member_id = ? AND status IN ('active', 'frozen') LIMIT 1`,
-      groupId, member.id,
-    );
-    if (contract) continue;
 
     const issued = await db.getFirstAsync<{ total: number; latest_date: string | null }>(
       `SELECT COALESCE(SUM(ABS(amount)), 0) AS total, MAX(substr(created_at, 1, 10)) AS latest_date
@@ -3316,9 +3447,8 @@ export async function applyMeetingDayLoanInterest(
     const days = daysBetweenDates(referenceDate, meetingDate);
     if (days < 27 || days > 35) continue;
 
-    // Fixed interest is a one-time charge. Since legacy loans are aggregated per member,
-    // treat all uncontracted outstanding principal for that member as one legacy loan balance.
-    if (method === 'fixed') {
+    // The old 'fixed' method remains a one-time charge for legacy loans.
+    if (legacyMethod === 'fixed') {
       const anyPriorInterest = await db.getFirstAsync<{ count: number }>(
         `SELECT
            (SELECT COUNT(*) FROM loan_interest_charges
@@ -3332,16 +3462,18 @@ export async function applyMeetingDayLoanInterest(
       if (Number(anyPriorInterest?.count ?? 0) > 0) continue;
     }
 
-    // Compound meeting-day interest: previously charged meeting interest is added to
-    // the balance for the next eligible period. Fixed remains a one-time charge below.
     const accumulatedMeetingInterest = await db.getFirstAsync<{ total: number }>(
       `SELECT COALESCE(SUM(interest_amount), 0) AS total
        FROM meeting_loan_interest_charges WHERE group_id = ? AND member_id = ?`,
       groupId, member.id,
     );
     const compoundBalance = outstandingPrincipal + Number(accumulatedMeetingInterest?.total ?? 0);
-    const interestBasis = method === 'declining' ? compoundBalance : method === 'flat' ? originalPrincipal + Number(accumulatedMeetingInterest?.total ?? 0) : originalPrincipal;
-    const interestAmount = Number((interestBasis * percentage / 100).toFixed(2));
+    const interestBasis = legacyMethod === 'declining'
+      ? compoundBalance
+      : legacyMethod === 'flat'
+        ? originalPrincipal + Number(accumulatedMeetingInterest?.total ?? 0)
+        : originalPrincipal;
+    const interestAmount = Number((interestBasis * legacyPercentage / 100).toFixed(2));
     if (!Number.isFinite(interestAmount) || interestAmount <= 0) continue;
 
     const insertion = await db.runAsync(
@@ -3349,7 +3481,7 @@ export async function applyMeetingDayLoanInterest(
         group_id, member_id, meeting_id, charge_date, opening_balance,
         interest_percentage, interest_method, interest_amount, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      groupId, member.id, meetingId, meetingDate, interestBasis, percentage, method, interestAmount, now(),
+      groupId, member.id, meetingId, meetingDate, interestBasis, legacyPercentage, legacyMethod, interestAmount, now(),
     );
     if (Number(insertion.changes ?? 0) > 0) {
       chargedMembers += 1;
@@ -3358,15 +3490,19 @@ export async function applyMeetingDayLoanInterest(
   }
 
   return {
-    meetingId, meetingDate, checkedMembers, chargedMembers,
+    meetingId,
+    meetingDate,
+    checkedMembers,
+    chargedMembers,
     totalInterest: Number(totalInterest.toFixed(2)),
-    skippedByPeriod: false,
+    skippedByPeriod: skippedLegacyByPeriod && chargedMembers === 0,
     message: chargedMembers > 0
-      ? `Meeting-day interest recorded for ${chargedMembers} member(s): ${totalInterest.toLocaleString()} in group currency.`
-      : 'No meeting-day interest was due. A charge is only considered 27–35 days after the latest loan issue or interest charge.',
+      ? `Monthly interest recorded for ${chargedMembers} member(s): ${totalInterest.toLocaleString()} in group currency.`
+      : skippedLegacyByPeriod
+        ? `No legacy monthly interest was applied because this group selected “${legacyPeriod}”. Existing monthly contracts continue using their saved terms.`
+        : 'No monthly interest was due. A contract charge is considered 27–35 days after the loan issue or previous monthly charge.',
   };
 }
-
 export async function applyMonthlyLoanInterest(
   groupId: number,
   memberId: number,
@@ -5756,6 +5892,7 @@ export type LoanContractRecord = {
   interest_method: LoanInterestMethod;
   interest_rate: number;
   interest_period: string;
+  monthly_recalculation_enabled: number;
   repayment_period_count: number;
   repayment_period_unit: LoanRepaymentPeriodUnit;
   issue_date: string;
@@ -5818,7 +5955,7 @@ function calculateLoanInterestSchedule(
           ? index === 0
           : interestPeriod === 'per cycle'
             ? index % cycleLength === 0
-            : true;
+            : index === 0; // Monthly contracts accrue later months from the real unpaid balance at meetings.
 
       if (chargeThisPeriod) {
         interestDue = method === 'flat'
@@ -5924,12 +6061,19 @@ export async function disburseApprovedLoanApplication(
 
   const timestamp = now();
   const issueDate = new Date(timestamp);
-  const interestCalculator: LoanInterestCalculator =
+  const storedInterestCalculator: LoanInterestCalculator =
     application.interest_calculator === 'common_vsla' ? 'common_vsla' : 'standard';
-  const contractInterestMethod: LoanInterestMethod = interestCalculator === 'common_vsla'
-    ? 'declining'
-    : application.interest_method;
-  const contractInterestPeriod = normalizeText(application.interest_period) || normalizeText(setup?.loan_interest_period) || 'per month';
+  const storedInterestMethod = application.interest_method;
+  const storedInterestPeriod = normalizeText(application.interest_period) || normalizeText(setup?.loan_interest_period) || 'per month';
+  const oneTimeInterest = storedInterestPeriod === 'per loan' ||
+    (storedInterestCalculator === 'standard' && storedInterestMethod === 'fixed');
+  const interestCalculator: LoanInterestCalculator = 'standard';
+  const contractInterestMethod: LoanInterestMethod = oneTimeInterest
+    ? 'flat'
+    : storedInterestCalculator === 'common_vsla'
+      ? 'declining'
+      : storedInterestMethod === 'declining' ? 'declining' : 'flat';
+  const contractInterestPeriod = oneTimeInterest ? 'per loan' : 'per month';
   const contractAmountMode: LoanRepaymentAmountMode =
     application.repayment_amount_mode === 'fixed' ? 'fixed' : (setup?.loan_repayment_amount_mode === 'fixed' ? 'fixed' : 'flexible');
   const contractPeriodMode: LoanRepaymentPeriodMode =
@@ -5963,15 +6107,16 @@ export async function disburseApprovedLoanApplication(
         group_id, member_id, application_id, disbursement_transaction_id, meeting_id, principal_amount,
         interest_method, interest_rate, interest_period, repayment_period_count, repayment_period_unit,
         issue_date, due_date, total_interest, total_due, status, reason, created_by_member_id,
-        interest_calculator, repayment_amount_mode, repayment_period_mode, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)`,
+        interest_calculator, repayment_amount_mode, repayment_period_mode, monthly_recalculation_enabled, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)`,
       application.group_id, application.member_id, applicationId, transactionId, application.meeting_id,
       Number(application.requested_amount), contractInterestMethod, Number(application.interest_rate),
       contractInterestPeriod,
       Number(application.repayment_period_count), application.repayment_period_unit,
       timestamp, dueDate, totalInterest, Number(application.requested_amount) + totalInterest,
       normalizeText(application.reason), executiveMemberId,
-      interestCalculator, contractAmountMode, contractPeriodMode, timestamp, timestamp,
+      interestCalculator, contractAmountMode, contractPeriodMode,
+      contractInterestPeriod === 'per month' ? 1 : 0, timestamp, timestamp,
     );
     const loanId = contract.lastInsertRowId;
     for (let index = 0; index < schedule.length; index += 1) {
@@ -6073,13 +6218,20 @@ export async function createLoanContract(
 
   const timestamp = now();
   const issueDate = new Date(timestamp);
-  const interestCalculator: LoanInterestCalculator =
+  const storedInterestCalculator: LoanInterestCalculator =
     applicationRules?.interest_calculator === 'common_vsla' ? 'common_vsla' : 'standard';
-  const contractInterestMethod: LoanInterestMethod = interestCalculator === 'common_vsla'
-    ? 'declining'
-    : (applicationRules?.interest_method ?? terms.interestMethod);
+  const storedInterestMethod: LoanInterestMethod = applicationRules?.interest_method ?? terms.interestMethod;
+  const storedInterestPeriod = normalizeText(applicationRules?.interest_period) || 'per month';
+  const oneTimeInterest = storedInterestPeriod === 'per loan' ||
+    (storedInterestCalculator === 'standard' && storedInterestMethod === 'fixed');
+  const interestCalculator: LoanInterestCalculator = 'standard';
+  const contractInterestMethod: LoanInterestMethod = oneTimeInterest
+    ? 'flat'
+    : storedInterestCalculator === 'common_vsla'
+      ? 'declining'
+      : storedInterestMethod === 'declining' ? 'declining' : 'flat';
   const contractInterestRate = Number(applicationRules?.interest_rate ?? terms.interestRate);
-  const contractInterestPeriod = normalizeText(applicationRules?.interest_period) || 'per month';
+  const contractInterestPeriod = oneTimeInterest ? 'per loan' : 'per month';
   const contractAmountMode: LoanRepaymentAmountMode =
     applicationRules?.repayment_amount_mode === 'fixed' ? 'fixed' : 'flexible';
   const contractPeriodMode: LoanRepaymentPeriodMode =
@@ -6102,13 +6254,14 @@ export async function createLoanContract(
         interest_method, interest_rate, interest_period, repayment_period_count,
         repayment_period_unit, issue_date, due_date, total_interest, total_due, status,
         reason, created_by_member_id, interest_calculator, repayment_amount_mode,
-        repayment_period_mode, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)`,
+        repayment_period_mode, monthly_recalculation_enabled, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)`,
       groupId, memberId, terms.applicationId ?? null, disbursementTransactionId, meetingId, principalAmount,
       contractInterestMethod, contractInterestRate, contractInterestPeriod,
       contractPeriods, contractUnit, timestamp, dueDate,
       totalInterest, principalAmount + totalInterest, normalizeText(reason),
-      terms.createdByMemberId ?? null, interestCalculator, contractAmountMode, contractPeriodMode, timestamp, timestamp,
+      terms.createdByMemberId ?? null, interestCalculator, contractAmountMode, contractPeriodMode,
+      contractInterestPeriod === 'per month' ? 1 : 0, timestamp, timestamp,
     );
     const loanId = inserted.lastInsertRowId;
     for (let index = 0; index < schedule.length; index += 1) {
@@ -6227,25 +6380,28 @@ export async function createLoanApplication(
   const setup = await getVSLASetupRules(groupId);
   if (!setup) throw new Error('Save the group loan Setup Rules before creating a loan application.');
 
-  // Saved group rules are authoritative for all new applications.
-  const interestCalculator: LoanInterestCalculator =
+  // Saved group rules are authoritative for all new applications. Normalize legacy
+  // saved values to the new One-time / Monthly interest choices. The new UI always
+  // persists the standard calculator, while these fallbacks preserve older groups.
+  const storedInterestCalculator: LoanInterestCalculator =
     setup.loan_interest_calculator === 'standard' ? 'standard' : 'common_vsla';
-  const interestMethod: LoanInterestMethod = interestCalculator === 'common_vsla'
-    ? 'declining'
-    : (setup.loan_interest_method ?? input.interestMethod);
+  const storedInterestMethod: LoanInterestMethod = setup.loan_interest_method ?? input.interestMethod;
+  const storedInterestPeriod = normalizeText(setup.loan_interest_period) || 'per month';
+  const oneTimeInterest = storedInterestPeriod === 'per loan' ||
+    (storedInterestCalculator === 'standard' && storedInterestMethod === 'fixed');
+  const interestCalculator: LoanInterestCalculator = 'standard';
+  const interestMethod: LoanInterestMethod = oneTimeInterest
+    ? 'flat'
+    : storedInterestCalculator === 'common_vsla'
+      ? 'declining'
+      : storedInterestMethod === 'declining' ? 'declining' : 'flat';
   const interestRate = Number(setup.loan_interest_percentage ?? input.interestRate);
-  const interestPeriod = normalizeText(setup.loan_interest_period) || 'per month';
-  const repaymentAmountMode: LoanRepaymentAmountMode =
-    setup.loan_repayment_amount_mode === 'fixed' ? 'fixed' : 'flexible';
-  const repaymentPeriodMode: LoanRepaymentPeriodMode =
-    setup.loan_repayment_period_mode === 'fixed' ? 'fixed' : 'flexible';
+  const interestPeriod = oneTimeInterest ? 'per loan' : 'per month';
+  const repaymentAmountMode: LoanRepaymentAmountMode = 'flexible';
+  const repaymentPeriodMode: LoanRepaymentPeriodMode = 'flexible';
   const maximumPeriod = Math.max(1, Number(setup.maximum_loan_repayment_period ?? 12));
-  const repaymentPeriodCount = repaymentPeriodMode === 'fixed'
-    ? maximumPeriod
-    : input.repaymentPeriodCount;
-  const repaymentPeriodUnit: LoanRepaymentPeriodUnit = repaymentPeriodMode === 'fixed'
-    ? 'months'
-    : input.repaymentPeriodUnit;
+  const repaymentPeriodCount = input.repaymentPeriodCount;
+  const repaymentPeriodUnit: LoanRepaymentPeriodUnit = input.repaymentPeriodUnit;
 
   if (!Number.isFinite(input.requestedAmount) || input.requestedAmount <= 0) throw new Error('Requested loan amount must be greater than zero.');
   if (!['fixed', 'flat', 'declining'].includes(interestMethod)) throw new Error('Choose a supported interest method in Setup Rules.');
@@ -9704,8 +9860,8 @@ export async function setMemberPasscode(
   }
 
   const randomBytes = await Crypto.getRandomBytesAsync(16);
-  const salt = Array.from(randomBytes)
-    .map((byte) => byte.toString(16).padStart(2, '0'))
+  const salt = Array.from(randomBytes as Uint8Array)
+    .map((byte: number) => byte.toString(16).padStart(2, '0'))
     .join('');
   const passcodeHash = await hashPasscode(passcode, salt);
   const timestamp = now();
@@ -9952,7 +10108,7 @@ export async function authorizeMemberForAppAccess(
     passcode,
   );
 
-  if (!verification.success) {
+  if (verification.success === false) {
     const messages: Record<
       Exclude<MemberPasscodeVerificationResult, { success: true }>['reason'],
       string
