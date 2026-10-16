@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -47,42 +48,44 @@ function money(value: number, currency: string): string {
 function calculatePreview(
   principal: number,
   ratePercent: number,
-  periods: number,
-  method: LoanInterestMethod,
-  interestPeriod: string = 'per month',
-  cycleDurationMonths: number = 12,
 ): { interest: number; total: number; instalment: number } {
-  if (principal <= 0 || periods <= 0 || ratePercent < 0) {
+  if (principal <= 0 || ratePercent < 0) {
     return { interest: 0, total: 0, instalment: 0 };
   }
+  // Disbursement charges only the first month's interest. Later monthly
+  // charges are recorded by the recurring meeting-day interest process.
+  const interest = principal * ratePercent / 100;
+  return { interest, total: principal + interest, instalment: 0 };
+}
 
-  const principalPerPeriod = principal / periods;
-  const fixedTotal = principal * ratePercent / 100;
-  const cycleLength = Math.max(1, Math.floor(cycleDurationMonths || 12));
-  let remaining = principal;
-  let interest = 0;
+function formatDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
-  for (let index = 0; index < periods; index += 1) {
-    if (method === 'fixed') {
-      interest += fixedTotal / periods;
-    } else {
-      const chargeThisPeriod =
-        interestPeriod === 'per loan'
-          ? index === 0
-          : interestPeriod === 'per cycle'
-            ? index % cycleLength === 0
-            : true;
-      if (chargeThisPeriod) {
-        interest += method === 'flat'
-          ? principal * ratePercent / 100
-          : remaining * ratePercent / 100;
-      }
-    }
-    remaining = Math.max(0, remaining - (index === periods - 1 ? remaining : principalPerPeriod));
-  }
+function parseDate(value: string): Date {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
 
-  const total = principal + interest;
-  return { interest, total, instalment: total / periods };
+function addMonths(date: Date, months: number): Date {
+  const result = new Date(date.getFullYear(), date.getMonth(), 1);
+  result.setMonth(result.getMonth() + months);
+  const lastDay = new Date(result.getFullYear(), result.getMonth() + 1, 0).getDate();
+  result.setDate(Math.min(date.getDate(), lastDay));
+  return result;
+}
+
+function monthsUntilDue(startDate: Date, dueDate: Date): number {
+  const monthDifference = (dueDate.getFullYear() - startDate.getFullYear()) * 12
+    + dueDate.getMonth() - startDate.getMonth();
+  return Math.max(1, monthDifference + (dueDate.getDate() > startDate.getDate() ? 1 : 0));
+}
+
+function monthLabel(date: Date): string {
+  return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 }
 
 function methodLabel(method: LoanInterestMethod, interestPeriod: string): string {
@@ -107,8 +110,11 @@ export default function LoanDisbursementScreen() {
   const [memberSavings, setMemberSavings] = useState(0);
   const [currentLoanBalance, setCurrentLoanBalance] = useState(0);
   const [amount, setAmount] = useState('');
-  const [periodCount, setPeriodCount] = useState('1');
-  const [reason, setReason] = useState('Loan issued to member');
+  const [dueDate, setDueDate] = useState(() => formatDate(addMonths(new Date(), 1)));
+  const [calendarMonth, setCalendarMonth] = useState(() => new Date());
+  const [calendarVisible, setCalendarVisible] = useState(false);
+  const [reason, setReason] = useState('Agriculture');
+  const [reasonVisible, setReasonVisible] = useState(false);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -117,26 +123,27 @@ export default function LoanDisbursementScreen() {
   const loanMultiple = Number(rules?.maximum_loan_multiple ?? 3);
   const maximumMemberLoan = Math.max(0, memberSavings * loanMultiple - currentLoanBalance);
   const requestedAmount = Number(amount.replace(/,/g, '').trim());
-  const periods = Number(periodCount);
+  const maximumTermMonths = Math.max(1, Number(rules?.maximum_loan_repayment_period ?? 12));
+  const parsedDueDate = parseDate(dueDate);
+  const periods = monthsUntilDue(new Date(), parsedDueDate);
   const storedInterestCalculator = rules?.loan_interest_calculator === 'standard' ? 'standard' : 'common_vsla';
   const storedInterestMethod: LoanInterestMethod = rules?.loan_interest_method ?? 'fixed';
   const storedInterestPeriod = rules?.loan_interest_period ?? 'per month';
-  const oneTimeInterest = storedInterestPeriod === 'per loan' ||
-    (storedInterestCalculator === 'standard' && storedInterestMethod === 'fixed');
+  const oneTimeInterest = storedInterestPeriod === 'per loan';
   const interestMethod: LoanInterestMethod = oneTimeInterest
     ? 'flat'
     : storedInterestCalculator === 'common_vsla'
       ? 'declining'
       : storedInterestMethod === 'declining' ? 'declining' : 'flat';
-  // The setup choices for fixed/flexible repayment modes have been removed.
-  // Members make flexible repayments and select a loan term below.
+  // Repayments remain flexible; the member selects a final repayment date within the saved maximum term.
   const interestRate = Number(rules?.loan_interest_percentage ?? 0);
   const interestPeriod = oneTimeInterest ? 'per loan' : 'per month';
-  const cycleDurationMonths = Number(rules?.cycle_duration_months ?? 12);
   const effectivePeriodCount = periods;
+  const minimumDueDate = formatDate(addMonths(new Date(), 0));
+  const maximumDueDate = formatDate(addMonths(new Date(), maximumTermMonths));
   const preview = useMemo(
-    () => calculatePreview(requestedAmount, interestRate, effectivePeriodCount, interestMethod, interestPeriod, cycleDurationMonths),
-    [requestedAmount, interestRate, effectivePeriodCount, interestMethod, interestPeriod, cycleDurationMonths],
+    () => calculatePreview(requestedAmount, interestRate),
+    [requestedAmount, interestRate],
   );
   const policyNeedsReview = Boolean(policy?.require_committee_approval) || Boolean(policy?.require_guarantor);
 
@@ -159,8 +166,13 @@ export default function LoanDisbursementScreen() {
       const activeMembers = (groupMembers as Member[]).filter(
         (member) => member.status?.toLowerCase() === 'active',
       );
-      setMembers(activeMembers);
-      if (selectedMemberId !== null && !activeMembers.some((member) => member.id === selectedMemberId)) {
+      const eligibility = await Promise.all(activeMembers.map(async (member) => {
+        const balance = await getMemberLoanBalance(groupId, member.id);
+        return { member, eligible: Number(balance?.balance ?? 0) <= 0 };
+      }));
+      const eligibleMembers = eligibility.filter((item) => item.eligible).map((item) => item.member);
+      setMembers(eligibleMembers);
+      if (selectedMemberId !== null && !eligibleMembers.some((member) => member.id === selectedMemberId)) {
         setSelectedMemberId(null);
         setMemberSavings(0);
         setCurrentLoanBalance(0);
@@ -177,14 +189,11 @@ export default function LoanDisbursementScreen() {
   }, [loadData]);
 
   useEffect(() => {
-    if (!rules) return;
-    const maximum = Math.max(1, Number(rules.maximum_loan_repayment_period ?? 12));
-    if (rules.loan_repayment_period_mode === 'fixed') {
-      setPeriodCount(String(maximum));
-    } else if (Number(periodCount) > maximum) {
-      setPeriodCount(String(maximum));
-    }
-  }, [rules, periodCount]);
+    const maxMonths = Math.max(1, Number(rules?.maximum_loan_repayment_period ?? 12));
+    const latestAllowed = formatDate(addMonths(new Date(), maxMonths));
+    if (dueDate > latestAllowed) setDueDate(latestAllowed);
+    if (dueDate <= formatDate(new Date())) setDueDate(formatDate(addMonths(new Date(), 1)));
+  }, [rules, dueDate]);
 
   const handleMemberSelect = async (memberId: number) => {
     if (!groupId || saving) return;
@@ -195,8 +204,16 @@ export default function LoanDisbursementScreen() {
         getMemberSavings(groupId, memberId),
         getMemberLoanBalance(groupId, memberId),
       ]);
+      if (Number(loan?.balance ?? 0) > 0) {
+        setSelectedMemberId(null);
+        setMemberSavings(0);
+        setCurrentLoanBalance(Number(loan.balance));
+        Alert.alert('Member Not Eligible', 'This member has an outstanding loan and cannot receive another loan until it is fully repaid.');
+        await loadData();
+        return;
+      }
       setMemberSavings(Number(savings ?? 0));
-      setCurrentLoanBalance(Number(loan?.balance ?? 0));
+      setCurrentLoanBalance(0);
     } catch (error) {
       setMemberSavings(0);
       setCurrentLoanBalance(0);
@@ -237,21 +254,31 @@ export default function LoanDisbursementScreen() {
       Alert.alert('Insufficient Loan Fund', `Available Loan Fund: ${money(loanFund, currency)}.`);
       return;
     }
-    const requiredPeriods = periods;
-    if (!Number.isInteger(requiredPeriods) || requiredPeriods < 1 || requiredPeriods > Number(rules.maximum_loan_repayment_period)) {
-      Alert.alert('Invalid Repayment Period', `Enter between 1 and ${Number(rules.maximum_loan_repayment_period)} months, as allowed by Setup Rules.`);
+    const freshBalance = await getMemberLoanBalance(groupId, selectedMemberId);
+    if (Number(freshBalance?.balance ?? 0) > 0) {
+      Alert.alert('Member Not Eligible', 'This member has an outstanding loan. Repay it fully before disbursing another loan.');
+      await loadData();
+      setSelectedMemberId(null);
       return;
     }
-    if (!reason.trim()) {
-      Alert.alert('Reason Required', 'Enter the reason for this loan.');
+    if (dueDate <= formatDate(new Date()) || dueDate > maximumDueDate) {
+      Alert.alert('Invalid Repayment Date', `Choose a future repayment date within the maximum term of ${maximumTermMonths} months from Setup Rules.`);
+      return;
+    }
+    const requiredPeriods = effectivePeriodCount;
+    if (!Number.isInteger(requiredPeriods) || requiredPeriods < 1 || requiredPeriods > maximumTermMonths) {
+      Alert.alert('Invalid Repayment Date', `Choose a repayment date within ${maximumTermMonths} months, as allowed by Setup Rules.`);
+      return;
+    }
+    if (!['Agriculture', 'Business', 'Education', 'Emergency'].includes(reason)) {
+      Alert.alert('Reason Required', 'Select a reason for this loan.');
       return;
     }
 
-    const effectivePeriods = effectivePeriodCount;
-    const estimate = calculatePreview(requestedAmount, interestRate, effectivePeriods, interestMethod, interestPeriod, cycleDurationMonths);
+    const estimate = calculatePreview(requestedAmount, interestRate);
     Alert.alert(
       'Confirm Loan Terms',
-      `Member: ${selectedMember.full_name} (${selectedMember.member_number})\nPrincipal: ${money(requestedAmount, currency)}\nInterest method: ${methodLabel(interestMethod, interestPeriod)}\nRate: ${interestRate}% (${interestPeriod === 'per loan' ? 'one time' : 'per month'})\nTerm: ${effectivePeriods} month(s)\nEstimated interest: ${money(estimate.interest, currency)}\nEstimated total due: ${money(estimate.total, currency)}\n\nThe saved Setup Rules will be used for the application.`,
+      `Member: ${selectedMember.full_name} (${selectedMember.member_number})\nPrincipal: ${money(requestedAmount, currency)}\nInterest method: ${methodLabel(interestMethod, interestPeriod)}\nRate: ${interestRate}% (${interestPeriod === 'per loan' ? 'one time' : 'per month'})\nRepayment due date: ${dueDate}\nInitial month interest only: ${money(estimate.interest, currency)}\nBalance after initial interest: ${money(estimate.total, currency)}\n\nFurther monthly interest is charged through recurring meeting checks. Setup Rules set the maximum repayment term.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -271,6 +298,15 @@ export default function LoanDisbursementScreen() {
       Alert.alert('Loan Policy Unavailable', 'The group loan policy could not be loaded. Return to the screen and try again. No loan has been created.');
       return;
     }
+    const latestMemberBalance = await getMemberLoanBalance(groupId, selectedMemberId);
+    if (Number(latestMemberBalance?.balance ?? 0) > 0) {
+      Alert.alert('Member Not Eligible', 'This member now has an outstanding loan. Repay it fully before disbursing another loan.');
+      setSelectedMemberId(null);
+      setMemberSavings(0);
+      setCurrentLoanBalance(0);
+      await loadData();
+      return;
+    }
     setSaving(true);
     try {
       const applicationId = await createLoanApplication(
@@ -283,6 +319,7 @@ export default function LoanDisbursementScreen() {
           interestRate,
           repaymentPeriodCount: effectivePeriodCount,
           repaymentPeriodUnit: 'months',
+          requestedDueDate: dueDate,
           reason: reason.trim(),
           requestedByMemberId: executiveMemberId,
         },
@@ -306,7 +343,8 @@ export default function LoanDisbursementScreen() {
         }
       }
       setAmount('');
-      setReason('Loan issued to member');
+      setReason('Agriculture');
+      setDueDate(formatDate(addMonths(new Date(), 1)));
       setSelectedMemberId(null);
       setMemberSavings(0);
       setCurrentLoanBalance(0);
@@ -393,7 +431,7 @@ export default function LoanDisbursementScreen() {
         <Text style={styles.sectionTitle}>Select Member</Text>
         <TextInput style={styles.input} value={search} onChangeText={setSearch} placeholder="Search member name or number" placeholderTextColor="#6b7280" editable={!saving} />
         {filteredMembers.length === 0 ? (
-          <Text style={styles.emptyText}>No active members found.</Text>
+          <Text style={styles.emptyText}>No eligible members found. Members with outstanding loans cannot receive another loan.</Text>
         ) : filteredMembers.map((member) => (
           <TouchableOpacity
             key={member.id}
@@ -428,32 +466,46 @@ export default function LoanDisbursementScreen() {
           editable={!saving}
         />
 
-        <Text style={styles.sectionTitle}>Repayment Period (months)</Text>
-        <TextInput
-          style={styles.input}
-          value={periodCount}
-          onChangeText={(value) => setPeriodCount(value.replace(/[^0-9]/g, ''))}
-          keyboardType="number-pad"
-          placeholder={`1–${Number(rules?.maximum_loan_repayment_period ?? 12)} months`}
-          placeholderTextColor="#6b7280"
-          editable={!saving}
-        />
+        <Text style={styles.sectionTitle}>Repayment Due Date</Text>
+        <TouchableOpacity
+          accessibilityRole="button"
+          style={styles.datePickerButton}
+          onPress={() => {
+            setCalendarMonth(parseDate(dueDate));
+            setCalendarVisible(true);
+          }}
+          disabled={saving}
+        >
+          <View>
+            <Text style={styles.datePickerLabel}>Final repayment date</Text>
+            <Text style={styles.datePickerValue}>{parseDate(dueDate).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}</Text>
+          </View>
+          <Text style={styles.dropdownArrow}>▾</Text>
+        </TouchableOpacity>
+        <Text style={styles.smallNote}>Maximum term from Setup Rules: {maximumTermMonths} month(s). Adjust the date using the calendar. Repayments remain flexible; monthly interest is charged only when each recurring meeting check is due.</Text>
 
-        {Number.isFinite(requestedAmount) && requestedAmount > 0 && Number.isInteger(effectivePeriodCount) && effectivePeriodCount > 0 && effectivePeriodCount <= Number(rules?.maximum_loan_repayment_period ?? 12) && (
+        {Number.isFinite(requestedAmount) && requestedAmount > 0 && Number.isInteger(effectivePeriodCount) && effectivePeriodCount > 0 && effectivePeriodCount <= maximumTermMonths && (
           <View style={styles.previewCard}>
             <Text style={styles.cardTitle}>Estimated Repayment</Text>
             <View style={styles.ruleRow}><Text style={styles.ruleName}>Interest method</Text><Text style={styles.ruleValue}>{methodLabel(interestMethod, interestPeriod)}</Text></View>
-            <View style={styles.ruleRow}><Text style={styles.ruleName}>Estimated interest</Text><Text style={styles.ruleValue}>{money(preview.interest, currency)}</Text></View>
-            <View style={styles.ruleRow}><Text style={styles.ruleName}>Estimated total due</Text><Text style={styles.totalValue}>{money(preview.total, currency)}</Text></View>
-            <View style={styles.ruleRow}><Text style={styles.ruleName}>Average instalment (estimate)</Text><Text style={styles.ruleValue}>{money(preview.instalment, currency)}</Text></View>
+            <View style={styles.ruleRow}><Text style={styles.ruleName}>Initial month interest only</Text><Text style={styles.ruleValue}>{money(preview.interest, currency)}</Text></View>
+            <View style={styles.ruleRow}><Text style={styles.ruleName}>Balance after initial interest</Text><Text style={styles.totalValue}>{money(preview.total, currency)}</Text></View>
             <Text style={styles.smallNote}>
-              This is an estimate. For monthly interest, the actual charge is calculated when the monthly interest check runs: declining uses the balance still owed, while fixed uses the original principal. The loan term above determines the due date; repayments remain flexible.
+              Only the first month’s interest is included here. Later monthly interest is charged once per qualifying meeting while the loan remains outstanding; no future months are added at disbursement.
             </Text>
           </View>
         )}
 
         <Text style={styles.sectionTitle}>Reason</Text>
-        <TextInput style={styles.input} value={reason} onChangeText={setReason} placeholder="Reason for the loan" placeholderTextColor="#6b7280" editable={!saving} />
+        <TouchableOpacity
+          accessibilityRole="button"
+          style={styles.datePickerButton}
+          onPress={() => setReasonVisible(true)}
+          disabled={saving}
+        >
+          <Text style={styles.datePickerValue}>{reason}</Text>
+          <Text style={styles.dropdownArrow}>▾</Text>
+        </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.disburseButton, (saving || !selectedMemberId) && styles.disabledButton]}
@@ -462,6 +514,69 @@ export default function LoanDisbursementScreen() {
         >
           {saving ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.buttonText}>{policyNeedsReview ? 'Submit Loan Application' : 'Confirm & Disburse Loan'}</Text>}
         </TouchableOpacity>
+        <Modal visible={calendarVisible} transparent animationType="fade" onRequestClose={() => setCalendarVisible(false)}>
+          <View style={styles.modalBackdrop}>
+            <View style={styles.calendarCard}>
+              <Text style={styles.cardTitle}>Choose repayment date</Text>
+              <View style={styles.calendarHeader}>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  style={styles.calendarNav}
+                  onPress={() => setCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}
+                  disabled={formatDate(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1)) <= formatDate(new Date(new Date().getFullYear(), new Date().getMonth(), 1))}
+                ><Text style={styles.calendarNavText}>‹</Text></TouchableOpacity>
+                <Text style={styles.calendarMonth}>{monthLabel(calendarMonth)}</Text>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  style={styles.calendarNav}
+                  onPress={() => setCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}
+                  disabled={formatDate(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1)) >= formatDate(new Date(parseDate(maximumDueDate).getFullYear(), parseDate(maximumDueDate).getMonth(), 1))}
+                ><Text style={styles.calendarNavText}>›</Text></TouchableOpacity>
+              </View>
+              <View style={styles.calendarGrid}>
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => <Text key={day} style={styles.calendarWeekday}>{day}</Text>)}
+                {Array.from({ length: new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1).getDay() }, (_, index) => <View key={`blank-${index}`} style={styles.calendarDay} />)}
+                {Array.from({ length: new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 0).getDate() }, (_, index) => {
+                  const day = index + 1;
+                  const date = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), day);
+                  const dateValue = formatDate(date);
+                  const disabled = dateValue <= minimumDueDate || dateValue > maximumDueDate;
+                  const selected = dateValue === dueDate;
+                  return (
+                    <TouchableOpacity
+                      key={dateValue}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected, disabled }}
+                      style={[styles.calendarDay, selected && styles.calendarDaySelected, disabled && styles.calendarDayDisabled]}
+                      disabled={disabled || saving}
+                      onPress={() => { setDueDate(dateValue); setCalendarVisible(false); }}
+                    ><Text style={[styles.calendarDayText, selected && styles.calendarDayTextSelected, disabled && styles.calendarDayTextDisabled]}>{day}</Text></TouchableOpacity>
+                  );
+                })}
+              </View>
+              <Text style={styles.smallNote}>Choose a date from tomorrow through {maximumDueDate}.</Text>
+              <TouchableOpacity style={styles.cancelButton} onPress={() => setCalendarVisible(false)}><Text style={styles.cancelButtonText}>Cancel</Text></TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal visible={reasonVisible} transparent animationType="fade" onRequestClose={() => setReasonVisible(false)}>
+          <View style={styles.modalBackdrop}>
+            <View style={styles.reasonCard}>
+              <Text style={styles.cardTitle}>Select loan reason</Text>
+              {['Agriculture', 'Business', 'Education', 'Emergency'].map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: reason === option }}
+                  style={[styles.reasonOption, reason === option && styles.reasonOptionSelected]}
+                  onPress={() => { setReason(option); setReasonVisible(false); }}
+                ><Text style={[styles.reasonOptionText, reason === option && styles.reasonOptionTextSelected]}>{option}{reason === option ? '  ✓' : ''}</Text></TouchableOpacity>
+              ))}
+              <TouchableOpacity style={styles.cancelButton} onPress={() => setReasonVisible(false)}><Text style={styles.cancelButtonText}>Cancel</Text></TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
       </ScrollView>
     </SafeAreaView>
   );
@@ -505,5 +620,30 @@ const styles = StyleSheet.create({
   disburseButton: { backgroundColor: '#16a34a', borderRadius: 10, paddingVertical: 15, alignItems: 'center', marginTop: 24, minHeight: 52, justifyContent: 'center' },
   disabledButton: { opacity: 0.5 },
   buttonText: { color: '#ffffff', fontSize: 15, fontWeight: '800' },
+  datePickerButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 10, paddingHorizontal: 13, paddingVertical: 13, backgroundColor: '#ffffff' },
+  datePickerLabel: { color: '#64748b', fontSize: 12, marginBottom: 4 },
+  datePickerValue: { color: '#111827', fontSize: 16, fontWeight: '700' },
+  dropdownArrow: { color: '#166534', fontSize: 24, fontWeight: '800', marginLeft: 12 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.45)', alignItems: 'center', justifyContent: 'center', padding: 18 },
+  calendarCard: { width: '100%', maxWidth: 380, backgroundColor: '#ffffff', borderRadius: 16, padding: 16 },
+  reasonCard: { width: '100%', maxWidth: 360, backgroundColor: '#ffffff', borderRadius: 16, padding: 16 },
+  calendarHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+  calendarNav: { width: 40, height: 40, borderRadius: 10, backgroundColor: '#f0fdf4', alignItems: 'center', justifyContent: 'center' },
+  calendarNavText: { color: '#166534', fontSize: 28, fontWeight: '700', lineHeight: 30 },
+  calendarMonth: { color: '#0f172a', fontSize: 16, fontWeight: '800' },
+  calendarGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  calendarWeekday: { width: '14.2857%', textAlign: 'center', color: '#64748b', fontSize: 11, fontWeight: '700', paddingVertical: 8 },
+  calendarDay: { width: '14.2857%', height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 9 },
+  calendarDaySelected: { backgroundColor: '#16a34a' },
+  calendarDayDisabled: { opacity: 0.35 },
+  calendarDayText: { color: '#0f172a', fontSize: 14 },
+  calendarDayTextSelected: { color: '#ffffff', fontWeight: '800' },
+  calendarDayTextDisabled: { color: '#94a3b8' },
+  reasonOption: { borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, padding: 13, marginBottom: 8, backgroundColor: '#ffffff' },
+  reasonOptionSelected: { borderColor: '#16a34a', backgroundColor: '#f0fdf4' },
+  reasonOptionText: { color: '#0f172a', fontSize: 15, fontWeight: '600' },
+  reasonOptionTextSelected: { color: '#166534', fontWeight: '800' },
+  cancelButton: { alignItems: 'center', paddingVertical: 12, marginTop: 8 },
+  cancelButtonText: { color: '#64748b', fontSize: 14, fontWeight: '700' },
   muted: { color: '#64748b', marginTop: 10 },
 });
