@@ -886,8 +886,6 @@ Setup Rules
         <View style={styles.optionRow}>{MEETING_WEEKDAYS.map((d) => <TouchableOpacity key={d.key} style={[styles.optionButton, monthlyRuleMatch?.[2] === d.key && styles.optionButtonActive]} onPress={() => updateRule('meetingFrequency', `monthly_rule_${monthlyRuleMatch?.[1] ?? 'last'}_${d.key}`)} disabled={saving}><Text style={[styles.optionText, monthlyRuleMatch?.[2] === d.key && styles.optionButtonActive && styles.optionTextActive]}>{d.label}</Text></TouchableOpacity>)}</View>
       </>}
     </>}
-    <Text style={styles.description}>This schedule can coordinate meeting dates, repayment checks, and monthly interest calculations. Members can still repay on any day.</Text>
-
     <View style={styles.schedulePreview}>
       <Text style={styles.schedulePreviewTitle}>Upcoming scheduled meetings</Text>
       {getUpcomingMeetingDates(scheduleValue, new Date(), 3).map((date, index) => (
@@ -895,7 +893,6 @@ Setup Rules
           {index + 1}. {formatMeetingDate(date)}
         </Text>
       ))}
-      <Text style={styles.schedulePreviewNote}>These dates are a guide only. Executives can still start a meeting on another day.</Text>
     </View>
 
 <Text style={styles.label}>
