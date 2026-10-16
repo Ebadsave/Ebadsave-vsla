@@ -3,8 +3,7 @@ import * as MailComposer from 'expo-mail-composer';
   import {
 createDatabaseBackup,
 restoreDatabaseBackup as restoreDatabaseBackupJson,
-} from '../database/database'
-  
+} from '../database/database';
 
 /**
  * Keep this list aligned with the tables included by createDatabaseBackup()
