@@ -22,6 +22,7 @@ import {
   getMembersByGroupId,
   getVSLASetupRules,
   refreshLoanApplicationDecision,
+  saveLoanGuarantorSignature,
   type LoanInterestMethod,
   type LoanPolicySettings,
   type VSLASetupRuleRecord,
@@ -112,6 +113,11 @@ export default function LoanDisbursementScreen() {
   const [rules, setRules] = useState<VSLASetupRuleRecord | null>(null);
   const [policy, setPolicy] = useState<LoanPolicySettings | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+  const [guarantorMembers, setGuarantorMembers] = useState<Member[]>([]);
+  const [selectedGuarantorIds, setSelectedGuarantorIds] = useState<number[]>([]);
+  const [signatureFlow, setSignatureFlow] = useState<{ applicationId: number; memberIds: number[]; index: number; requestedAmount: number; borrowerName: string } | null>(null);
+  const [guarantorPasscode, setGuarantorPasscode] = useState('');
+  const [signatureSaving, setSignatureSaving] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
   const [memberSavings, setMemberSavings] = useState(0);
   const [currentLoanBalance, setCurrentLoanBalance] = useState(0);
@@ -158,7 +164,6 @@ export default function LoanDisbursementScreen() {
   const estimatedInterestDateLabel = parseDate(estimatedInterestDate).toLocaleDateString(undefined, {
     day: 'numeric', month: 'long', year: 'numeric',
   });
-  const policyNeedsReview = Boolean(policy?.require_committee_approval) || Boolean(policy?.require_guarantor);
 
   const loadData = useCallback(async () => {
     if (!groupId) {
@@ -179,6 +184,7 @@ export default function LoanDisbursementScreen() {
       const activeMembers = (groupMembers as Member[]).filter(
         (member) => member.status?.toLowerCase() === 'active',
       );
+      setGuarantorMembers(activeMembers);
       const eligibility = await Promise.all(activeMembers.map(async (member) => {
         const balance = await getMemberLoanBalance(groupId, member.id);
         return { member, eligible: Number(balance?.balance ?? 0) <= 0 };
@@ -211,6 +217,7 @@ export default function LoanDisbursementScreen() {
   const handleMemberSelect = async (memberId: number) => {
     if (!groupId || saving) return;
     setSelectedMemberId(memberId);
+    setSelectedGuarantorIds((current) => current.filter((id) => id !== memberId));
     setAmount('');
     try {
       const [savings, loan] = await Promise.all([
@@ -253,6 +260,14 @@ export default function LoanDisbursementScreen() {
     }
     if (!selectedMemberId || !selectedMember) {
       Alert.alert('Select Member', 'Select the member applying for the loan.');
+      return;
+    }
+    if (selectedGuarantorIds.length < 1 || selectedGuarantorIds.length > 3) {
+      Alert.alert('Select Guarantors', 'Select 1–3 active members from this VSLA group.');
+      return;
+    }
+    if (selectedGuarantorIds.includes(selectedMemberId)) {
+      Alert.alert('Select Guarantors', 'The borrower cannot guarantee their own loan.');
       return;
     }
     if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
@@ -344,37 +359,74 @@ export default function LoanDisbursementScreen() {
           interestDayOffset: interestPeriod === 'per loan' ? null : interestDayOffset,
           reason: reason.trim(),
           requestedByMemberId: executiveMemberId,
+          guarantorMemberIds: selectedGuarantorIds,
         },
       );
 
-      if (policyNeedsReview) {
+      setSignatureFlow({
+        applicationId,
+        memberIds: [...selectedGuarantorIds],
+        index: 0,
+        requestedAmount,
+        borrowerName: selectedMember?.full_name ?? 'Member',
+      });
+      setGuarantorPasscode('');
+    } catch (error) {
+      Alert.alert('Loan Application Failed', error instanceof Error ? error.message : 'Unable to save or disburse this loan.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const confirmGuarantorSignature = async () => {
+    if (!signatureFlow || signatureSaving) return;
+    const guarantorId = signatureFlow.memberIds[signatureFlow.index];
+    if (!guarantorId || !guarantorPasscode.trim()) {
+      Alert.alert('Passcode Required', 'Enter this guarantor’s passcode.');
+      return;
+    }
+    setSignatureSaving(true);
+    try {
+      await saveLoanGuarantorSignature(
+        signatureFlow.applicationId,
+        guarantorId,
+        signatureFlow.requestedAmount,
+        guarantorPasscode.trim(),
+      );
+      setGuarantorPasscode('');
+      if (signatureFlow.index + 1 < signatureFlow.memberIds.length) {
+        setSignatureFlow({ ...signatureFlow, index: signatureFlow.index + 1 });
+        return;
+      }
+
+      setSignatureFlow(null);
+      const decision = await refreshLoanApplicationDecision(signatureFlow.applicationId);
+      if (decision === 'approved') {
+        const result = await disburseApprovedLoanApplication(signatureFlow.applicationId, executiveMemberId as number);
         Alert.alert(
-          'Loan Application Saved',
-          `Application #${applicationId} has been saved as pending. No money has been disbursed. ${[policy.require_committee_approval ? `Complete at least ${policy.minimum_committee_approvals} verified committee approval(s)` : '', policy.require_guarantor ? 'record a verified guarantor signature' : ''].filter(Boolean).join(' and ')} before disbursement.`,
+          'Loan Disbursed',
+          `Loan issued to ${signatureFlow.borrowerName}.\nPrincipal: ${money(signatureFlow.requestedAmount, currency)}\nInterest charged initially: ${money(result.totalInterest, currency)}\nCurrent balance after initial interest: ${money(result.totalDue, currency)}\nDue date: ${result.dueDate}`,
         );
+      } else if (decision === 'rejected') {
+        Alert.alert('Loan Rejected', `Loan application #${signatureFlow.applicationId} was rejected.`);
       } else {
-        const decision = await refreshLoanApplicationDecision(applicationId);
-        if (decision !== 'approved') {
-          Alert.alert('Application Pending', `Loan application #${applicationId} is saved, but it has not been approved or disbursed.`);
-        } else {
-          const result = await disburseApprovedLoanApplication(applicationId, executiveMemberId);
-          Alert.alert(
-            'Loan Disbursed',
-            `Loan issued to ${selectedMember?.full_name}.\nPrincipal: ${money(requestedAmount, currency)}\nInterest charged initially: ${money(result.totalInterest, currency)}\nCurrent balance after initial interest: ${money(result.totalDue, currency)}\nDue date: ${result.dueDate}`,
-          );
-        }
+        Alert.alert(
+          'Application Saved',
+          `Application #${signatureFlow.applicationId} is pending required committee approval.`,
+        );
       }
       setAmount('');
       setReason('Agriculture');
       setDueDate(formatDate(addMonths(new Date(), 1)));
       setSelectedMemberId(null);
+      setSelectedGuarantorIds([]);
       setMemberSavings(0);
       setCurrentLoanBalance(0);
       await loadData();
     } catch (error) {
-      Alert.alert('Loan Application Failed', error instanceof Error ? error.message : 'Unable to save or disburse this loan.');
+      Alert.alert('Guarantor Signature', error instanceof Error ? error.message : 'Unable to verify this guarantor.');
     } finally {
-      setSaving(false);
+      setSignatureSaving(false);
     }
   };
 
@@ -443,11 +495,6 @@ export default function LoanDisbursementScreen() {
                 ? 'Monthly interest is recalculated on the remaining balance owed.'
                 : 'The same fixed monthly interest charge is based on the original principal.'}
           </Text>
-          {policyNeedsReview && (
-            <Text style={styles.notice}>
-              Approval requirements are enabled. Submitting will save a pending application; it will not disburse money until the required committee approvals and/or guarantor signature are recorded.
-            </Text>
-          )}
         </View>
 
         <Text style={styles.sectionTitle}>Select Member</Text>
@@ -476,6 +523,27 @@ export default function LoanDisbursementScreen() {
             <Text style={styles.maximumLoan}>Maximum additional loan: {money(maximumMemberLoan, currency)}</Text>
           </View>
         )}
+
+        <Text style={styles.sectionTitle}>Loan Guarantors</Text>
+        <Text style={styles.smallNote}>Select 1–3 active members of this VSLA group.</Text>
+        {guarantorMembers.filter((member) => member.id !== selectedMemberId).map((member) => {
+          const selected = selectedGuarantorIds.includes(member.id);
+          const atLimit = selectedGuarantorIds.length >= 3;
+          return (
+            <TouchableOpacity
+              key={`guarantor-${member.id}`}
+              style={[styles.memberButton, selected && styles.selectedMember]}
+              disabled={saving || signatureFlow !== null || (!selected && atLimit)}
+              onPress={() => setSelectedGuarantorIds((current) => selected
+                ? current.filter((id) => id !== member.id)
+                : current.length < 3 ? [...current, member.id] : current)}
+            >
+              <Text style={styles.memberNumber}>{member.member_number}{selected ? '  ✓' : ''}</Text>
+              <Text style={styles.memberName}>{member.full_name}</Text>
+            </TouchableOpacity>
+          );
+        })}
+        <Text style={styles.smallNote}>Selected: {selectedGuarantorIds.length}/3</Text>
 
         <Text style={styles.sectionTitle}>Loan Amount ({currency})</Text>
         <TextInput
@@ -555,7 +623,7 @@ export default function LoanDisbursementScreen() {
           onPress={() => { void submitLoan(); }}
           disabled={saving || !selectedMemberId}
         >
-          {saving ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.buttonText}>{policyNeedsReview ? 'Submit Loan Application' : 'Confirm & Disburse Loan'}</Text>}
+          {saving ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.buttonText}>Continue</Text>}
         </TouchableOpacity>
         <Modal visible={interestDayVisible} transparent animationType="fade" onRequestClose={() => setInterestDayVisible(false)}>
           <View style={styles.modalBackdrop}>
@@ -652,6 +720,38 @@ export default function LoanDisbursementScreen() {
               </View>
               <Text style={styles.smallNote}>Choose a date from tomorrow through {maximumDueDate}.</Text>
               <TouchableOpacity style={styles.cancelButton} onPress={() => setCalendarVisible(false)}><Text style={styles.cancelButtonText}>Cancel</Text></TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal visible={signatureFlow !== null} transparent animationType="fade" onRequestClose={() => {}}>
+          <View style={styles.modalBackdrop}>
+            <View style={styles.reasonCard}>
+              <Text style={styles.cardTitle}>Guarantor Confirmation</Text>
+              <Text style={styles.infoText}>
+                {signatureFlow ? guarantorMembers.find((member) => member.id === signatureFlow.memberIds[signatureFlow.index])?.full_name ?? 'Selected guarantor' : ''}
+              </Text>
+              <Text style={styles.smallNote}>
+                {signatureFlow ? `${signatureFlow.index + 1} of ${signatureFlow.memberIds.length}` : ''}
+              </Text>
+              <TextInput
+                style={styles.input}
+                value={guarantorPasscode}
+                onChangeText={setGuarantorPasscode}
+                placeholder="Passcode"
+                placeholderTextColor="#6b7280"
+                secureTextEntry
+                keyboardType="number-pad"
+                editable={!signatureSaving}
+                autoCapitalize="none"
+              />
+              <TouchableOpacity
+                style={[styles.disburseButton, signatureSaving && styles.disabledButton]}
+                onPress={() => { void confirmGuarantorSignature(); }}
+                disabled={signatureSaving}
+              >
+                <Text style={styles.buttonText}>{signatureSaving ? 'Confirming…' : 'Confirm Guarantee'}</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </Modal>
