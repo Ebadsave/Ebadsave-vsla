@@ -12,13 +12,14 @@ import * as DocumentPicker from 'expo-document-picker';
 import { useFocusEffect } from '@react-navigation/native';
 
 import {
+import {
 exportDatabaseBackup,
 emailBackupFile,
 listBackupFiles,
 restoreDatabaseBackup,
 deleteBackupFile,
 formatFileSize,
-} from '../database/database'
+} from '../database/backup';
 
 interface BackupFile {
 name: string;
