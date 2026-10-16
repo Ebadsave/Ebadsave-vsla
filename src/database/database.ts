@@ -6976,6 +6976,63 @@ export async function recordLoanRepayment(
   }
 }
 
+/**
+ * Returns the final repayment due date for a member's current active/frozen
+ * loan contract. Legacy loans without a loan_records entry return null.
+ */
+export async function getMemberLoanDueDate(
+  groupId: number,
+  memberId: number,
+): Promise<string | null> {
+  const db = await getDatabase();
+  const contract = await db.getFirstAsync<{ due_date: string | null }>(
+    `SELECT due_date
+     FROM loan_records
+     WHERE group_id = ? AND member_id = ? AND status IN ('active', 'frozen')
+     ORDER BY issue_date DESC, id DESC
+     LIMIT 1`,
+    groupId,
+    memberId,
+  );
+  if (contract?.due_date) return contract.due_date;
+
+  // Older loans may have a due date saved in a member statement rather than
+  // a loan contract record. Use that only when the last statement still had
+  // an outstanding loan balance.
+  const statement = await db.getFirstAsync<{
+    individual_loan_due_date: string | null;
+    individual_loan_balance: number;
+  }>(
+    `SELECT individual_loan_due_date, individual_loan_balance
+     FROM member_statement_records
+     WHERE member_id = ?
+     ORDER BY id DESC
+     LIMIT 1`,
+    memberId,
+  );
+  if (Number(statement?.individual_loan_balance ?? 0) > 0 && statement?.individual_loan_due_date) {
+    return statement.individual_loan_due_date;
+  }
+
+  // Onboarded existing loans can store their due date with their opening balance.
+  const opening = await db.getFirstAsync<{
+    loan_due_date: string | null;
+    opening_loan_balance: number;
+  }>(
+    `SELECT loan_due_date, opening_loan_balance
+     FROM member_opening_balances
+     WHERE group_id = ? AND member_id = ?
+     LIMIT 1`,
+    groupId,
+    memberId,
+  );
+  if (Number(opening?.opening_loan_balance ?? 0) > 0 && opening?.loan_due_date) {
+    return opening.loan_due_date;
+  }
+
+  return null;
+}
+
 export async function getMemberLoanBalance(
   groupId: number,
   memberId: number,
