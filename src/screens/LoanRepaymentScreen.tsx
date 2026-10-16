@@ -14,6 +14,7 @@ import {
   getMembersByGroupId,
   recordLoanRepayment,
   getMemberLoanBalance,
+  getMemberLoanDueDate,
 } from '../database/database';
 
 type Props = {
@@ -38,6 +39,21 @@ const formatCurrency = (
   currency = 'UGX',
 ) => `${currency} ${Math.round(amount).toLocaleString()}`;
 
+const localDateString = (date = new Date()): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const displayDate = (value: string): string => {
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) return value;
+  return new Date(year, month - 1, day).toLocaleDateString(undefined, {
+    day: 'numeric', month: 'long', year: 'numeric',
+  });
+};
+
 export default function LoanRepaymentScreen({
   route,
 }: Props) {
@@ -56,6 +72,7 @@ export default function LoanRepaymentScreen({
     useState<number | null>(null);
 
   const [loanBalance, setLoanBalance] = useState(0);
+  const [loanDueDate, setLoanDueDate] = useState<string | null>(null);
   const [loadingBalance, setLoadingBalance] = useState(false);
 
   const [amount, setAmount] = useState('');
@@ -66,6 +83,7 @@ export default function LoanRepaymentScreen({
   const selectedMember = members.find(
     (member) => member.id === selectedMemberId,
   );
+  const isLoanOverdue = Boolean(loanDueDate && loanDueDate < localDateString());
 
   /*
    * Load all active members belonging to this group.
@@ -109,9 +127,13 @@ export default function LoanRepaymentScreen({
       throw new Error('Group was not found.');
     }
 
-    const result = await getMemberLoanBalance(groupId, memberId);
+    const [result, dueDate] = await Promise.all([
+      getMemberLoanBalance(groupId, memberId),
+      getMemberLoanDueDate(groupId, memberId),
+    ]);
     const balance = Math.max(0, Number(result?.balance ?? 0));
     setLoanBalance(balance);
+    setLoanDueDate(dueDate);
     return balance;
   };
 
@@ -131,12 +153,14 @@ export default function LoanRepaymentScreen({
     setSelectedMemberId(memberId);
     setAmount('');
     setLoanBalance(0);
+    setLoanDueDate(null);
     setLoadingBalance(true);
 
     try {
       await loadLoanBalance(memberId);
     } catch (error) {
       setLoanBalance(0);
+      setLoanDueDate(null);
       Alert.alert(
         'Loan Balance',
         error instanceof Error ? error.message : 'Unable to load this member’s loan balance.',
@@ -257,8 +281,12 @@ export default function LoanRepaymentScreen({
 
       // Refresh before writing so an outdated screen balance cannot authorize
       // a payment that exceeds the current amount due.
-      const currentBalance = await getMemberLoanBalance(groupId, memberId);
+      const [currentBalance, latestDueDate] = await Promise.all([
+        getMemberLoanBalance(groupId, memberId),
+        getMemberLoanDueDate(groupId, memberId),
+      ]);
       const latestDue = Math.max(0, Number(currentBalance?.balance ?? 0));
+      setLoanDueDate(latestDueDate);
 
       if (latestDue <= 0) {
         setLoanBalance(0);
@@ -408,6 +436,19 @@ export default function LoanRepaymentScreen({
             <Text style={styles.memberText}>
               {selectedMember.full_name}
             </Text>
+            {loanDueDate && (
+              <Text style={[styles.memberText, isLoanOverdue && styles.overdueText]}>
+                Final repayment due: {displayDate(loanDueDate)}
+              </Text>
+            )}
+            {isLoanOverdue && loanDueDate && (
+              <View style={styles.overdueNotice} accessibilityRole="alert">
+                <Text style={styles.overdueTitle}>OVERDUE</Text>
+                <Text style={styles.overdueBody}>
+                  The final repayment date was {displayDate(loanDueDate)}. Repayments are still accepted; this warning does not block payment.
+                </Text>
+              </View>
+            )}
           </View>
         )}
 
@@ -561,6 +602,33 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#374151',
     marginTop: 2,
+  },
+
+  overdueText: {
+    color: '#b91c1c',
+    fontWeight: '800',
+  },
+
+  overdueNotice: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 10,
+  },
+
+  overdueTitle: {
+    color: '#b91c1c',
+    fontSize: 13,
+    fontWeight: '800',
+    marginBottom: 3,
+  },
+
+  overdueBody: {
+    color: '#991b1b',
+    fontSize: 12,
+    lineHeight: 17,
   },
 
   emptyText: {
