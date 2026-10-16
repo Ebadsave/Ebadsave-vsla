@@ -1,13 +1,13 @@
 import * as FileSystem from 'expo-file-system';
 import * as MailComposer from 'expo-mail-composer';
-import {
-  createDatabaseBackup,
-  restoreDatabaseBackup as restoreDatabaseBackupJson,
-} from './database';
+  import {
+createDatabaseBackup,
+restoreDatabaseBackup as restoreDatabaseBackupJson,
+} from '../database/database';
 
 /**
- * Core backup tables needed for restoring previous app releases. Newer optional
- * tables are restored when present, while older valid backups stay compatible.
+ * Keep this list aligned with the tables included by createDatabaseBackup()
+ * in database.ts. A restore is rejected unless every required table is present.
  */
 const REQUIRED_BACKUP_TABLES = [
   'groups',

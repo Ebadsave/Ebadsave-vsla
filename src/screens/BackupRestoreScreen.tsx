@@ -18,7 +18,7 @@ listBackupFiles,
 restoreDatabaseBackup,
 deleteBackupFile,
 formatFileSize,
-} from '../database/backup';
+} from './backup';
 
 interface BackupFile {
 name: string;
