@@ -6096,7 +6096,7 @@ async function checkLoanApplicationGuarantors(
   const signedCount = rows.filter((row) => Number(row.passcode_verified) === 1).length;
   const externalCount = rows.filter((row) => Number(row.guarantor_group_id) !== groupId).length;
   const uniqueCount = new Set(rows.map((row) => Number(row.guarantor_member_id))).size;
-  const allMembersActive = rows.every((row) => row.member_status === 'active');
+  const allMembersActive = rows.every((row) => row.member_status?.toLowerCase() === 'active');
   const nobodyIsBorrower = rows.every((row) => Number(row.guarantor_member_id) !== borrowerMemberId);
   const groupRuleSatisfied = externalCount === 0;
   const valid = selectedCount >= 1 && selectedCount <= 3 &&
@@ -6156,7 +6156,7 @@ export async function disburseApprovedLoanApplication(
   );
   if (!guarantorCheck.valid) {
     throw new Error(
-      'Every selected guarantor must be an active member of the borrower’s same VSLA group and sign with their own passcode before disbursement. Select 1–3 guarantors from that group.',
+      'Every selected guarantor must be an active member of the borrower’s VSLA group and sign with their own passcode before disbursement.',
     );
   }
   if (await isLoanDisbursementFrozen(application.group_id, application.member_id)) throw new Error('Loan disbursement is frozen by the Chairperson.');
@@ -6516,8 +6516,8 @@ export type LoanApplicationInput = {
   interestDayOffset?: number | null;
   reason: string;
   requestedByMemberId?: number | null;
-  /** Active members of the borrower's VSLA group selected to guarantee this loan (1–3). */
-  guarantorMemberIds?: number[];
+  /** Active members selected to guarantee this loan (1–3 from the borrower's group). */
+  guarantorMemberIds: number[];
 };
 
 export async function createLoanApplication(
@@ -6583,15 +6583,13 @@ export async function createLoanApplication(
       'SELECT id, group_id, status FROM members WHERE id = ? LIMIT 1', guarantorId,
     ),
   ));
-  if (selectedGuarantors.some((guarantor) => !guarantor || guarantor.status !== 'active')) {
+  if (selectedGuarantors.some((guarantor) => !guarantor || guarantor.status?.toLowerCase() !== 'active')) {
     throw new Error('Every guarantor must be an active registered member.');
   }
-  const externalGuarantorCount = selectedGuarantors.filter(
-    (guarantor) => guarantor && Number(guarantor.group_id) !== groupId,
-  ).length;
-  if (externalGuarantorCount > 0) {
-    throw new Error('Every guarantor must be an active member of the borrower’s same VSLA group. Members of other groups cannot guarantee this loan.');
+  if (selectedGuarantors.some((guarantor) => !guarantor || Number(guarantor.group_id) !== groupId)) {
+    throw new Error('All guarantors must belong to the borrower’s VSLA group.');
   }
+  const externalGuarantorCount = 0;
   await requireMemberPresentForLoan(db, groupId, memberId, meetingId);
   const freeze = await isLoanDisbursementFrozen(groupId, memberId);
   if (freeze) throw new Error('Loan applications are currently frozen by the Chairperson.');
@@ -6715,7 +6713,7 @@ export async function saveLoanGuarantorSignature(
   const guarantor = await db.getFirstAsync<{ id: number; group_id: number; status: string }>(
     'SELECT id, group_id, status FROM members WHERE id = ? LIMIT 1', guarantorMemberId,
   );
-  if (!guarantor || guarantor.status !== 'active') throw new Error('Choose an active registered guarantor.');
+  if (!guarantor || guarantor.status?.toLowerCase() !== 'active') throw new Error('Choose an active registered guarantor.');
 
   // A signature may only be recorded for a guarantor selected when the
   // application was created. This keeps the required signing count fixed.
@@ -6732,9 +6730,10 @@ export async function saveLoanGuarantorSignature(
      WHERE g.application_id = ? AND g.status = 'active'`,
     applicationId,
   );
-  const externalCount = assignments.filter((item) => Number(item.guarantor_group_id) !== application.group_id).length;
   if (assignments.length < 1 || assignments.length > 3) throw new Error('The application must have between one and three selected guarantors.');
-  if (externalCount > 0) throw new Error('Every guarantor must belong to the borrower’s same VSLA group. Members of other groups cannot guarantee this loan.');
+  if (assignments.some((item) => Number(item.guarantor_group_id) !== Number(application.group_id))) {
+    throw new Error('All guarantors must belong to the borrower’s VSLA group.');
+  }
 
   const verification = await verifyMemberPasscode(guarantorMemberId, Number(guarantor.group_id), passcode);
   if (!verification.success) throw new Error('Guarantor passcode could not be verified. Ask the guarantor to unlock their account or check their passcode.');
