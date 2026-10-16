@@ -12,7 +12,6 @@ import * as DocumentPicker from 'expo-document-picker';
 import { useFocusEffect } from '@react-navigation/native';
 
 import {
-import {
 exportDatabaseBackup,
 emailBackupFile,
 listBackupFiles,
