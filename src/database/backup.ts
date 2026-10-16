@@ -1,9 +1,9 @@
 import * as FileSystem from 'expo-file-system';
 import * as MailComposer from 'expo-mail-composer';
-import {
-  createDatabaseBackup,
-  restoreDatabaseBackup as restoreDatabaseBackupJson,
-} from './database
+  import {
+createDatabaseBackup,
+restoreDatabaseBackup as restoreDatabaseBackupJson,
+} from './database';
   
 
 /**
