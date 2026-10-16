@@ -73,10 +73,10 @@ minimumSharesPerMeeting: 1,
 maximumSharesPerMeeting: 5,
 maximumLoanMultiple: 3,
 loanInterestPercentage: 5,
-loanInterestMethod: 'fixed',
+loanInterestMethod: 'declining',
 loanRepaymentAmountMode: 'flexible',
 loanRepaymentPeriodMode: 'flexible',
-loanInterestCalculator: 'common_vsla',
+loanInterestCalculator: 'standard',
 loanInterestPeriod: 'per month',
 maximumLoanRepaymentPeriod: 12,
 socialFundContribution: 0,
@@ -112,6 +112,8 @@ const [calendarMonth, setCalendarMonth] = useState<Date>(() => {
   return new Date(today.getFullYear(), today.getMonth(), 1);
 });
 
+const [expandedInterestExample, setExpandedInterestExample] = useState<'declining' | 'fixed' | null>(null);
+
 useEffect(() => {
 loadRules();
 }, [groupId]);
@@ -131,6 +133,20 @@ const current = await getVSLASetupRules(groupId);
   }
 
   const storedMeetingDate = current.meeting_start_date ?? toLocalDateString(getNextFirstMonday(new Date()));
+  const storedInterestCalculator = current.loan_interest_calculator === 'standard' ? 'standard' : 'common_vsla';
+  const storedInterestMethod = current.loan_interest_method ?? 'fixed';
+  const storedInterestPeriod = current.loan_interest_period ?? 'per month';
+  // Older records may have used the legacy fixed/common-VSLA calculator. Convert
+  // the effective saved behaviour to the new One-time / Monthly selector.
+  const selectedInterestPeriod = storedInterestPeriod === 'per loan' ||
+    (storedInterestCalculator === 'standard' && storedInterestMethod === 'fixed')
+    ? 'per loan'
+    : 'per month';
+  const selectedInterestMethod = selectedInterestPeriod === 'per loan'
+    ? 'flat'
+    : storedInterestCalculator === 'common_vsla'
+      ? 'declining'
+      : storedInterestMethod === 'declining' ? 'declining' : 'flat';
   const storedDateObject = new Date(`${storedMeetingDate}T00:00:00`);
   if (!Number.isNaN(storedDateObject.getTime())) {
     setCalendarMonth(new Date(storedDateObject.getFullYear(), storedDateObject.getMonth(), 1));
@@ -146,12 +162,12 @@ const current = await getVSLASetupRules(groupId);
       current.maximum_loan_multiple,  
     loanInterestPercentage:  
       current.loan_interest_percentage,  
-    loanInterestMethod: current.loan_interest_method === 'flat' || current.loan_interest_method === 'declining' ? current.loan_interest_method : 'fixed',
-    loanRepaymentAmountMode: current.loan_repayment_amount_mode === 'fixed' ? 'fixed' : 'flexible',
-    loanRepaymentPeriodMode: current.loan_repayment_period_mode === 'fixed' ? 'fixed' : 'flexible',
-    loanInterestCalculator: current.loan_interest_calculator === 'standard' ? 'standard' : 'common_vsla',
-    loanInterestPeriod:  
-      current.loan_interest_period,  
+    loanInterestMethod: selectedInterestMethod,
+    // These setup choices were removed; new loans use flexible repayments.
+    loanRepaymentAmountMode: 'flexible',
+    loanRepaymentPeriodMode: 'flexible',
+    loanInterestCalculator: 'standard',
+    loanInterestPeriod: selectedInterestPeriod,  
     maximumLoanRepaymentPeriod:  
       current.maximum_loan_repayment_period,  
     socialFundContribution:  
@@ -203,7 +219,6 @@ if (
 Number(rules.shareValue) <= 0 ||
 Number(rules.minimumSharesPerMeeting) <= 0 ||
 Number(rules.maximumSharesPerMeeting) <= 0 ||
-Number(rules.maximumLoanMultiple) <= 0 ||
 Number(rules.loanInterestPercentage) < 0 ||
 Number(rules.maximumLoanRepaymentPeriod) <= 0 ||
 Number(rules.cycleDurationMonths) <= 0 ||
@@ -235,20 +250,25 @@ if (/^(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday
 try {  
   setSaving(true);  
 
+  // Maximum loan multiple is no longer editable on this screen. Omit it from
+  // the update so a hidden legacy value cannot block saving or be overwritten.
+  const ruleUpdates: VSLASetupRuleUpdates = { ...rules };
+  delete ruleUpdates.maximumLoanMultiple;
+
   await updateVSLASetupRules(groupId, {  
-    ...rules,  
+    ...ruleUpdates,  
     shareValue: Number(rules.shareValue),  
     minimumSharesPerMeeting:  
       Number(rules.minimumSharesPerMeeting),  
     maximumSharesPerMeeting:  
       Number(rules.maximumSharesPerMeeting),  
-    maximumLoanMultiple:  
-      Number(rules.maximumLoanMultiple),  
     loanInterestPercentage:  
       Number(rules.loanInterestPercentage),  
-    loanRepaymentAmountMode: rules.loanRepaymentAmountMode === 'fixed' ? 'fixed' : 'flexible',
-    loanRepaymentPeriodMode: rules.loanRepaymentPeriodMode === 'fixed' ? 'fixed' : 'flexible',
-    loanInterestCalculator: rules.loanInterestCalculator === 'standard' ? 'standard' : 'common_vsla',
+    loanRepaymentAmountMode: 'flexible',
+    loanRepaymentPeriodMode: 'flexible',
+    loanInterestCalculator: 'standard',
+    loanInterestMethod: rules.loanInterestPeriod === 'per loan' ? 'flat' : (rules.loanInterestMethod === 'declining' ? 'declining' : 'flat'),
+    loanInterestPeriod: rules.loanInterestPeriod === 'per loan' ? 'per loan' : 'per month',
     maximumLoanRepaymentPeriod:  
       Number(rules.maximumLoanRepaymentPeriod),  
     socialFundContribution:  
@@ -391,143 +411,133 @@ Setup Rules
   <View style={styles.card}>  
     <Text style={styles.sectionTitle}>  
       Loan Rules  
-    </Text>  
-
-    <Text style={styles.label}>  
-      Maximum Loan Multiple  
-    </Text>  
-
-    <TextInput  
-      style={styles.input}  
-      value={String(  
-        rules.maximumLoanMultiple,  
-      )}  
-      onChangeText={(value) =>  
-        updateRule(  
-          'maximumLoanMultiple',  
-          Number(value) || 0,  
-        )  
-      }  
-      keyboardType="decimal-pad"  
-      placeholder="3"  
-    />  
-
-    <Text style={styles.label}>Repayment Amount</Text>
-    <Text style={styles.description}>
-      Choose whether members may pay any amount they can afford or must follow the calculated instalment.
     </Text>
-    <View style={styles.methodOptions}>
-      <TouchableOpacity
-        style={[styles.methodOption, rules.loanRepaymentAmountMode === 'flexible' && styles.methodOptionActive]}
-        onPress={() => updateRule('loanRepaymentAmountMode', 'flexible')}
-        disabled={saving}
-      >
-        <Text style={[styles.methodOptionTitle, rules.loanRepaymentAmountMode === 'flexible' && styles.methodOptionTitleActive]}>Flexible Amount</Text>
-        <Text style={[styles.methodOptionDescription, rules.loanRepaymentAmountMode === 'flexible' && styles.methodOptionTitleActive]}>Members choose how much to pay each time.</Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={[styles.methodOption, rules.loanRepaymentAmountMode === 'fixed' && styles.methodOptionActive]}
-        onPress={() => updateRule('loanRepaymentAmountMode', 'fixed')}
-        disabled={saving}
-      >
-        <Text style={[styles.methodOptionTitle, rules.loanRepaymentAmountMode === 'fixed' && styles.methodOptionTitleActive]}>Fixed Amount</Text>
-        <Text style={[styles.methodOptionDescription, rules.loanRepaymentAmountMode === 'fixed' && styles.methodOptionTitleActive]}>Use the instalment amount calculated by the system.</Text>
-      </TouchableOpacity>
-    </View>
-
-    <Text style={styles.label}>Repayment Period</Text>
-    <Text style={styles.description}>
-      Choose whether members can repay on a flexible schedule or must follow a fixed term.
-    </Text>
-    <View style={styles.methodOptions}>
-      <TouchableOpacity
-        style={[styles.methodOption, rules.loanRepaymentPeriodMode === 'flexible' && styles.methodOptionActive]}
-        onPress={() => updateRule('loanRepaymentPeriodMode', 'flexible')}
-        disabled={saving}
-      >
-        <Text style={[styles.methodOptionTitle, rules.loanRepaymentPeriodMode === 'flexible' && styles.methodOptionTitleActive]}>Flexible Period</Text>
-        <Text style={[styles.methodOptionDescription, rules.loanRepaymentPeriodMode === 'flexible' && styles.methodOptionTitleActive]}>Members repay according to their ability.</Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={[styles.methodOption, rules.loanRepaymentPeriodMode === 'fixed' && styles.methodOptionActive]}
-        onPress={() => updateRule('loanRepaymentPeriodMode', 'fixed')}
-        disabled={saving}
-      >
-        <Text style={[styles.methodOptionTitle, rules.loanRepaymentPeriodMode === 'fixed' && styles.methodOptionTitleActive]}>Fixed Period</Text>
-        <Text style={[styles.methodOptionDescription, rules.loanRepaymentPeriodMode === 'fixed' && styles.methodOptionTitleActive]}>Use the repayment term set for the loan.</Text>
-      </TouchableOpacity>
-    </View>
-
-    <Text style={styles.label}>Interest Calculator</Text>
-    <View style={styles.methodOptions}>
-      <TouchableOpacity
-        style={[styles.methodOption, rules.loanInterestCalculator === 'common_vsla' && styles.methodOptionActive]}
-        onPress={() => updateRule('loanInterestCalculator', 'common_vsla')}
-        disabled={saving}
-      >
-        <Text style={[styles.methodOptionTitle, rules.loanInterestCalculator === 'common_vsla' && styles.methodOptionTitleActive]}>Common VSLA Interest</Text>
-        <Text style={[styles.methodOptionDescription, rules.loanInterestCalculator === 'common_vsla' && styles.methodOptionTitleActive]}>Recalculate interest on the outstanding balance after repayments.</Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={[styles.methodOption, rules.loanInterestCalculator === 'standard' && styles.methodOptionActive]}
-        onPress={() => updateRule('loanInterestCalculator', 'standard')}
-        disabled={saving}
-      >
-        <Text style={[styles.methodOptionTitle, rules.loanInterestCalculator === 'standard' && styles.methodOptionTitleActive]}>Standard Interest</Text>
-        <Text style={[styles.methodOptionDescription, rules.loanInterestCalculator === 'standard' && styles.methodOptionTitleActive]}>Use the selected fixed, flat, or declining interest method.</Text>
-      </TouchableOpacity>
-    </View>
-
-    <Text style={styles.label}>Interest Method</Text>
-    <Text style={styles.description}>
-      Choose the method this group will use for new loans. Existing loans keep their saved terms.
-    </Text>
-
+    <Text style={styles.label}>Interest method · Step 1/2</Text>
+    <Text style={styles.description}>How frequently is interest applied?</Text>
     <View style={styles.interestMethodList}>
       <TouchableOpacity
         accessibilityRole="button"
-        accessibilityState={{ selected: rules.loanInterestMethod === 'fixed' }}
-        style={[styles.interestMethodCard, rules.loanInterestMethod === 'fixed' && styles.interestMethodCardSelected]}
-        onPress={() => updateRule('loanInterestMethod', 'fixed')}
+        accessibilityState={{ selected: rules.loanInterestPeriod === 'per loan' }}
+        style={[styles.interestMethodCard, rules.loanInterestPeriod === 'per loan' && styles.interestMethodCardSelected]}
+        onPress={() => {
+          updateRule('loanInterestPeriod', 'per loan');
+          updateRule('loanInterestCalculator', 'standard');
+          setExpandedInterestExample(null);
+        }}
+        disabled={saving}
       >
-        <Text style={[styles.interestMethodTitle, rules.loanInterestMethod === 'fixed' && styles.interestMethodTitleSelected]}>
-          Fixed Interest {rules.loanInterestMethod === 'fixed' ? '✓ SELECTED' : ''}
+        <Text style={[styles.interestMethodTitle, rules.loanInterestPeriod === 'per loan' && styles.interestMethodTitleSelected]}>
+          One-time interest {rules.loanInterestPeriod === 'per loan' ? '✓ SELECTED' : ''}
         </Text>
-        <Text style={[styles.interestMethodDescription, rules.loanInterestMethod === 'fixed' && styles.interestMethodTextSelected]}>
-          Charge interest once on the original loan principal for the whole loan.
+        <Text style={[styles.interestMethodDescription, rules.loanInterestPeriod === 'per loan' && styles.interestMethodTextSelected]}>
+          Interest is applied only one time for this loan.
         </Text>
       </TouchableOpacity>
 
       <TouchableOpacity
         accessibilityRole="button"
-        accessibilityState={{ selected: rules.loanInterestMethod === 'flat' }}
-        style={[styles.interestMethodCard, rules.loanInterestMethod === 'flat' && styles.interestMethodCardSelected]}
-        onPress={() => updateRule('loanInterestMethod', 'flat')}
+        accessibilityState={{ selected: rules.loanInterestPeriod !== 'per loan' }}
+        style={[styles.interestMethodCard, rules.loanInterestPeriod !== 'per loan' && styles.interestMethodCardSelected]}
+        onPress={() => {
+          updateRule('loanInterestPeriod', 'per month');
+          updateRule('loanInterestCalculator', 'standard');
+          setExpandedInterestExample(null);
+        }}
+        disabled={saving}
       >
-        <Text style={[styles.interestMethodTitle, rules.loanInterestMethod === 'flat' && styles.interestMethodTitleSelected]}>
-          Flat Interest {rules.loanInterestMethod === 'flat' ? '✓ SELECTED' : ''}
+        <Text style={[styles.interestMethodTitle, rules.loanInterestPeriod !== 'per loan' && styles.interestMethodTitleSelected]}>
+          Monthly interest {rules.loanInterestPeriod !== 'per loan' ? '✓ SELECTED' : ''}
         </Text>
-        <Text style={[styles.interestMethodDescription, rules.loanInterestMethod === 'flat' && styles.interestMethodTextSelected]}>
-          Charge interest on the original principal in every repayment period.
-        </Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        accessibilityRole="button"
-        accessibilityState={{ selected: rules.loanInterestMethod === 'declining' }}
-        style={[styles.interestMethodCard, rules.loanInterestMethod === 'declining' && styles.interestMethodCardSelected]}
-        onPress={() => updateRule('loanInterestMethod', 'declining')}
-      >
-        <Text style={[styles.interestMethodTitle, rules.loanInterestMethod === 'declining' && styles.interestMethodTitleSelected]}>
-          Declining Balance {rules.loanInterestMethod === 'declining' ? '✓ SELECTED' : ''}
-        </Text>
-        <Text style={[styles.interestMethodDescription, rules.loanInterestMethod === 'declining' && styles.interestMethodTextSelected]}>
-          Calculate each period's interest on the principal still outstanding, assuming equal principal repayments.
+        <Text style={[styles.interestMethodDescription, rules.loanInterestPeriod !== 'per loan' && styles.interestMethodTextSelected]}>
+          Interest is applied each month while the loan remains outstanding.
         </Text>
       </TouchableOpacity>
     </View>
 
-    <Text style={styles.label}>  
+    {rules.loanInterestPeriod !== 'per loan' && (
+      <>
+        <Text style={styles.label}>Step 2/2 · Choose the monthly interest method</Text>
+        <View style={styles.interestMethodList}>
+          <View style={[
+            styles.interestMethodCard,
+            rules.loanInterestMethod === 'declining' && styles.interestMethodCardSelected,
+          ]}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityState={{ selected: rules.loanInterestMethod === 'declining' }}
+              onPress={() => {
+                updateRule('loanInterestMethod', 'declining');
+                updateRule('loanInterestCalculator', 'standard');
+              }}
+              disabled={saving}
+            >
+              <Text style={[styles.interestMethodTitle, rules.loanInterestMethod === 'declining' && styles.interestMethodTitleSelected]}>
+                Monthly interest (declining) {rules.loanInterestMethod === 'declining' ? '✓ SELECTED' : ''}
+              </Text>
+              <Text style={[styles.interestMethodDescription, rules.loanInterestMethod === 'declining' && styles.interestMethodTextSelected]}>
+                Interest is calculated each month on the remaining balance owed.
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              accessibilityRole="button"
+              onPress={() => setExpandedInterestExample(expandedInterestExample === 'declining' ? null : 'declining')}
+              disabled={saving}
+            >
+              <Text style={styles.exampleFootnote}>
+                {expandedInterestExample === 'declining' ? 'Hide example ▲' : 'Tap to show example ▼'}
+              </Text>
+            </TouchableOpacity>
+            {expandedInterestExample === 'declining' && (
+              <Text style={styles.interestMethodExample}>
+                Day 1: UGX 10,000 + 3% = UGX 10,300.{'\n'}
+                Day 6: Flexible repayment of UGX 1,000 → balance UGX 9,300.{'\n'}
+                Day 30: Repay UGX 2,000 → balance UGX 7,300; add 3% interest (UGX 219) = UGX 7,519.
+              </Text>
+            )}
+          </View>
+
+          <View style={[
+            styles.interestMethodCard,
+            rules.loanInterestMethod !== 'declining' && styles.interestMethodCardSelected,
+          ]}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityState={{ selected: rules.loanInterestMethod !== 'declining' }}
+              onPress={() => {
+                updateRule('loanInterestMethod', 'flat');
+                updateRule('loanInterestCalculator', 'standard');
+              }}
+              disabled={saving}
+            >
+              <Text style={[styles.interestMethodTitle, rules.loanInterestMethod !== 'declining' && styles.interestMethodTitleSelected]}>
+                Monthly interest (fixed) {rules.loanInterestMethod !== 'declining' ? '✓ SELECTED' : ''}
+              </Text>
+              <Text style={[styles.interestMethodDescription, rules.loanInterestMethod !== 'declining' && styles.interestMethodTextSelected]}>
+                Interest is calculated each month on the original principal, so the charge remains the same each month.
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              accessibilityRole="button"
+              onPress={() => setExpandedInterestExample(expandedInterestExample === 'fixed' ? null : 'fixed')}
+              disabled={saving}
+            >
+              <Text style={styles.exampleFootnote}>
+                {expandedInterestExample === 'fixed' ? 'Hide example ▲' : 'Tap to show example ▼'}
+              </Text>
+            </TouchableOpacity>
+            {expandedInterestExample === 'fixed' && (
+              <Text style={styles.interestMethodExample}>
+                Day 1: UGX 10,000 + 3% = UGX 10,300.{'\n'}
+                Day 6: Repayment of UGX 1,000 → balance UGX 9,300.{'\n'}
+                Day 30: Repayment of UGX 2,000 → balance UGX 7,300; add the same fixed monthly interest of UGX 300 = UGX 7,600.
+              </Text>
+            )}
+          </View>
+        </View>
+      </>
+    )}
+
+<Text style={styles.label}>  
       Loan Interest Percentage  
     </Text>  
 
@@ -544,46 +554,7 @@ Setup Rules
       }  
       keyboardType="decimal-pad"  
       placeholder="5"  
-    />  
-
-    <Text style={styles.label}>  
-      Interest Period  
-    </Text>  
-
-    <View style={styles.optionRow}>  
-      {[  
-        'per month',  
-        'per cycle',  
-        'per loan',  
-      ].map((period) => (  
-        <TouchableOpacity  
-          key={period}  
-          style={[  
-            styles.optionButton,  
-            rules.loanInterestPeriod ===  
-              period &&  
-              styles.optionButtonActive,  
-          ]}  
-          onPress={() =>  
-            updateRule(  
-              'loanInterestPeriod',  
-              period,  
-            )  
-          }  
-        >  
-          <Text  
-            style={[  
-              styles.optionText,  
-              rules.loanInterestPeriod ===  
-                period &&  
-                styles.optionTextActive,  
-            ]}  
-          >  
-            {period}  
-          </Text>  
-        </TouchableOpacity>  
-      ))}  
-    </View>  
+    />
 
     <Text style={styles.label}>  
       Maximum Loan Repayment Period  
