@@ -1409,6 +1409,7 @@ status TEXT NOT NULL DEFAULT 'active',
       member_id INTEGER NOT NULL,
       meeting_id INTEGER NOT NULL,
       charge_date TEXT NOT NULL,
+      scheduled_interest_date TEXT,
       opening_balance REAL NOT NULL,
       interest_percentage REAL NOT NULL,
       interest_method TEXT NOT NULL CHECK (interest_method IN ('fixed', 'flat', 'declining')),
@@ -1466,6 +1467,7 @@ status TEXT NOT NULL DEFAULT 'active',
       repayment_period_unit TEXT NOT NULL DEFAULT 'months'
         CHECK (repayment_period_unit IN ('weeks', 'months')),
       requested_due_date TEXT,
+      requested_interest_day_offset INTEGER,
       reason TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'approved', 'rejected', 'disbursed', 'cancelled')),
@@ -1499,6 +1501,8 @@ status TEXT NOT NULL DEFAULT 'active',
         CHECK (repayment_period_unit IN ('weeks', 'months')),
       issue_date TEXT NOT NULL,
       due_date TEXT NOT NULL,
+      interest_anchor_date TEXT,
+      interest_day_offset INTEGER,
       total_interest REAL NOT NULL DEFAULT 0,
       total_due REAL NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'active'
@@ -1914,6 +1918,15 @@ status TEXT NOT NULL DEFAULT 'active',
   await addColumnIfMissing(db, 'loan_records', 'repayment_amount_mode', "TEXT NOT NULL DEFAULT 'flexible'");
   await addColumnIfMissing(db, 'loan_records', 'repayment_period_mode', "TEXT NOT NULL DEFAULT 'flexible'");
   await addColumnIfMissing(db, 'loan_records', 'monthly_recalculation_enabled', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumnIfMissing(db, 'loan_applications', 'requested_interest_day_offset', 'INTEGER');
+  await addColumnIfMissing(db, 'loan_records', 'interest_anchor_date', 'TEXT');
+  await addColumnIfMissing(db, 'loan_records', 'interest_day_offset', 'INTEGER');
+  await addColumnIfMissing(db, 'loan_contract_interest_charges', 'scheduled_interest_date', 'TEXT');
+  // Enforce one calculation per scheduled monthly period, even if the app opens
+  // more than one meeting after the same interest date.
+  await db.execAsync(`CREATE UNIQUE INDEX IF NOT EXISTS idx_contract_interest_schedule_once
+    ON loan_contract_interest_charges(loan_id, scheduled_interest_date)
+    WHERE scheduled_interest_date IS NOT NULL;`);
 
   await addColumnIfMissing(
     db,
@@ -3238,6 +3251,36 @@ function dateOnly(value: string | null | undefined): string | null {
   return match[1];
 }
 
+function formatLocalDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function addDaysToDateOnly(value: string, days: number): string {
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + days));
+  return date.toISOString().slice(0, 10);
+}
+
+/** Add months from the original anchor, clamping only when a month is shorter. */
+function addMonthsToDateOnly(anchorDate: string, months: number): string {
+  const [year, month, day] = anchorDate.split('-').map(Number);
+  const firstOfTarget = new Date(Date.UTC(year, month - 1 + months, 1));
+  const targetYear = firstOfTarget.getUTCFullYear();
+  const targetMonth = firstOfTarget.getUTCMonth();
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+  const targetDay = Math.min(day, lastDay);
+  return `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
+}
+
+function monthOffsetBetweenDates(anchorDate: string, laterDate: string): number {
+  const [ay, am] = anchorDate.split('-').map(Number);
+  const [ly, lm] = laterDate.split('-').map(Number);
+  return (ly - ay) * 12 + (lm - am);
+}
+
 function daysBetweenDates(fromDate: string, toDate: string): number {
   const [fy, fm, fd] = fromDate.split('-').map(Number);
   const [ty, tm, td] = toDate.split('-').map(Number);
@@ -3247,10 +3290,9 @@ function daysBetweenDates(fromDate: string, toDate: string): number {
 }
 
 /**
- * Applies interest to legacy/member-level loans at most once per meeting,
- * when 27-35 days have passed since the latest issue or prior interest charge.
- * Advanced loan contracts with a persisted repayment schedule are excluded:
- * their interest has already been calculated into that contract's schedule.
+ * Applies monthly interest at most once for each contract's scheduled interest
+ * date. New contracts use the date selected on Loan Disbursement; old contracts
+ * without that saved anchor retain their historical meeting-day cadence.
  */
 export async function applyMeetingDayLoanInterest(
   groupId: number,
@@ -3292,11 +3334,13 @@ export async function applyMeetingDayLoanInterest(
       interest_rate: number;
       interest_period: string;
       issue_date: string;
+      interest_anchor_date: string | null;
+      interest_day_offset: number | null;
       status: string;
       monthly_recalculation_enabled: number;
     }>(
       `SELECT id, principal_amount, interest_method, interest_rate, interest_period,
-              issue_date, status, monthly_recalculation_enabled
+              issue_date, interest_anchor_date, interest_day_offset, status, monthly_recalculation_enabled
        FROM loan_records
        WHERE group_id = ? AND member_id = ? AND status IN ('active', 'frozen')
        ORDER BY issue_date ASC, id ASC`,
@@ -3323,15 +3367,46 @@ export async function applyMeetingDayLoanInterest(
         );
         if (alreadyCharged) continue;
 
-        const priorCharge = await db.getFirstAsync<{ charge_date: string | null }>(
-          `SELECT MAX(charge_date) AS charge_date
-           FROM loan_contract_interest_charges WHERE loan_id = ?`,
-          loan.id,
-        );
-        const referenceDate = dateOnly(priorCharge?.charge_date) ?? dateOnly(loan.issue_date);
-        if (!referenceDate) continue;
-        const elapsedDays = daysBetweenDates(referenceDate, meetingDate);
-        if (elapsedDays < 27 || elapsedDays > 35) continue;
+        let scheduledInterestDate: string | null = null;
+        const interestAnchorDate = dateOnly(loan.interest_anchor_date);
+        if (interestAnchorDate) {
+          // The selected first interest date is stored on the contract. Every
+          // later due date is calculated from that original anchor, so a short
+          // month (for example February) does not permanently shift the day.
+          const latestScheduled = await db.getFirstAsync<{ scheduled_interest_date: string | null }>(
+            `SELECT MAX(scheduled_interest_date) AS scheduled_interest_date
+             FROM loan_contract_interest_charges
+             WHERE loan_id = ? AND scheduled_interest_date IS NOT NULL`,
+            loan.id,
+          );
+          const lastScheduledDate = dateOnly(latestScheduled?.scheduled_interest_date);
+          const monthsAfterAnchor = lastScheduledDate
+            ? Math.max(0, monthOffsetBetweenDates(interestAnchorDate, lastScheduledDate) + 1)
+            : 0;
+          scheduledInterestDate = addMonthsToDateOnly(interestAnchorDate, monthsAfterAnchor);
+          // Interest is assessed at the first open meeting on or after the
+          // scheduled date. Repeated checks in the same month cannot charge it
+          // again because the scheduled date is recorded uniquely below.
+          if (meetingDate < scheduledInterestDate) continue;
+          const alreadyForScheduledDate = await db.getFirstAsync<{ id: number }>(
+            `SELECT id FROM loan_contract_interest_charges
+             WHERE loan_id = ? AND scheduled_interest_date = ? LIMIT 1`,
+            loan.id, scheduledInterestDate,
+          );
+          if (alreadyForScheduledDate) continue;
+        } else {
+          // Legacy contracts created before the saved date selector keep their
+          // prior 27–35 day cadence; the selected-date rule applies to new loans.
+          const priorCharge = await db.getFirstAsync<{ charge_date: string | null }>(
+            `SELECT MAX(charge_date) AS charge_date
+             FROM loan_contract_interest_charges WHERE loan_id = ?`,
+            loan.id,
+          );
+          const referenceDate = dateOnly(priorCharge?.charge_date) ?? dateOnly(loan.issue_date);
+          if (!referenceDate) continue;
+          const elapsedDays = daysBetweenDates(referenceDate, meetingDate);
+          if (elapsedDays < 27 || elapsedDays > 35) continue;
+        }
 
         const outstanding = await db.getFirstAsync<{ balance: number }>(
           `SELECT COALESCE(SUM(
@@ -3365,11 +3440,11 @@ export async function applyMeetingDayLoanInterest(
         try {
           const inserted = await db.runAsync(
             `INSERT OR IGNORE INTO loan_contract_interest_charges (
-              group_id, loan_id, member_id, meeting_id, charge_date, opening_balance,
-              interest_percentage, interest_method, interest_amount, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            groupId, loan.id, member.id, meetingId, meetingDate, interestBasis,
-            rate, loan.interest_method, interestAmount, now(),
+              group_id, loan_id, member_id, meeting_id, charge_date, scheduled_interest_date,
+              opening_balance, interest_percentage, interest_method, interest_amount, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            groupId, loan.id, member.id, meetingId, meetingDate, scheduledInterestDate,
+            interestBasis, rate, loan.interest_method, interestAmount, now(),
           );
 
           if (Number(inserted.changes ?? 0) === 1) {
@@ -5878,6 +5953,8 @@ export type LoanContractInput = {
   repaymentPeriodCount: number;
   repaymentPeriodUnit: LoanRepaymentPeriodUnit;
   dueDate?: string | null;
+  /** Days after issue for the first monthly interest calculation (27–37). */
+  interestDayOffset?: number | null;
   createdByMemberId?: number | null;
   applicationId?: number | null;
 };
@@ -5897,6 +5974,8 @@ export type LoanContractRecord = {
   repayment_period_unit: LoanRepaymentPeriodUnit;
   issue_date: string;
   due_date: string;
+  interest_anchor_date?: string | null;
+  interest_day_offset?: number | null;
   total_interest: number;
   total_due: number;
   status: string;
@@ -6000,7 +6079,8 @@ export async function disburseApprovedLoanApplication(
     id: number; group_id: number; member_id: number; meeting_id: number | null;
     requested_amount: number; interest_method: LoanInterestMethod; interest_rate: number;
     repayment_period_count: number; repayment_period_unit: LoanRepaymentPeriodUnit;
-    requested_due_date: string | null; reason: string; status: string;
+    requested_due_date: string | null; requested_interest_day_offset?: number | null;
+    reason: string; status: string;
     disbursed_transaction_id: number | null;
     interest_calculator?: LoanInterestCalculator; interest_period?: string;
     repayment_amount_mode?: LoanRepaymentAmountMode; repayment_period_mode?: LoanRepaymentPeriodMode;
@@ -6015,7 +6095,8 @@ export async function disburseApprovedLoanApplication(
     id: number; group_id: number; member_id: number; meeting_id: number | null;
     requested_amount: number; interest_method: LoanInterestMethod; interest_rate: number;
     repayment_period_count: number; repayment_period_unit: LoanRepaymentPeriodUnit;
-    requested_due_date: string | null; reason: string; status: string;
+    requested_due_date: string | null; requested_interest_day_offset?: number | null;
+    reason: string; status: string;
     disbursed_transaction_id: number | null;
     interest_calculator?: LoanInterestCalculator; interest_period?: string;
     repayment_amount_mode?: LoanRepaymentAmountMode; repayment_period_mode?: LoanRepaymentPeriodMode;
@@ -6086,6 +6167,15 @@ export async function disburseApprovedLoanApplication(
   const totalInterest = schedule.reduce((sum, item) => sum + item.interestDue, 0);
   const dueDate = application.requested_due_date || loanDateForPeriod(issueDate, Number(application.repayment_period_count), application.repayment_period_unit);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(new Date(`${dueDate}T00:00:00`).getTime())) throw new Error('The loan due date is invalid.');
+  const interestDayOffset = contractInterestPeriod === 'per month'
+    ? Number(application.requested_interest_day_offset ?? 30)
+    : null;
+  if (interestDayOffset !== null && (!Number.isInteger(interestDayOffset) || interestDayOffset < 27 || interestDayOffset > 37)) {
+    throw new Error('The selected monthly interest date must be 27–37 days after the loan issue date. Reopen the loan application and choose a valid day.');
+  }
+  const interestAnchorDate = interestDayOffset === null
+    ? null
+    : addDaysToDateOnly(formatLocalDate(issueDate), interestDayOffset);
 
   await db.execAsync('BEGIN TRANSACTION;');
   try {
@@ -6106,14 +6196,17 @@ export async function disburseApprovedLoanApplication(
       `INSERT INTO loan_records (
         group_id, member_id, application_id, disbursement_transaction_id, meeting_id, principal_amount,
         interest_method, interest_rate, interest_period, repayment_period_count, repayment_period_unit,
-        issue_date, due_date, total_interest, total_due, status, reason, created_by_member_id,
-        interest_calculator, repayment_amount_mode, repayment_period_mode, monthly_recalculation_enabled, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        issue_date, due_date, interest_anchor_date, interest_day_offset,
+        total_interest, total_due, status, reason, created_by_member_id,
+        interest_calculator, repayment_amount_mode, repayment_period_mode,
+        monthly_recalculation_enabled, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)`,
       application.group_id, application.member_id, applicationId, transactionId, application.meeting_id,
       Number(application.requested_amount), contractInterestMethod, Number(application.interest_rate),
       contractInterestPeriod,
       Number(application.repayment_period_count), application.repayment_period_unit,
-      timestamp, dueDate, totalInterest, Number(application.requested_amount) + totalInterest,
+      timestamp, dueDate, interestAnchorDate, interestDayOffset,
+      totalInterest, Number(application.requested_amount) + totalInterest,
       normalizeText(application.reason), executiveMemberId,
       interestCalculator, contractAmountMode, contractPeriodMode,
       contractInterestPeriod === 'per month' ? 1 : 0, timestamp, timestamp,
@@ -6140,7 +6233,8 @@ export async function disburseApprovedLoanApplication(
       interestCalculator, interestMethod: contractInterestMethod, interestRate: Number(application.interest_rate),
       interestPeriod: contractInterestPeriod, repaymentAmountMode: contractAmountMode, repaymentPeriodMode: contractPeriodMode,
       repaymentPeriodCount: Number(application.repayment_period_count), repaymentPeriodUnit: application.repayment_period_unit,
-      dueDate, totalInterest, totalDue: Number(application.requested_amount) + totalInterest,
+      interestDayOffset, interestAnchorDate, dueDate, totalInterest,
+      totalDue: Number(application.requested_amount) + totalInterest,
     });
     await db.runAsync('UPDATE groups SET status = \'active\', last_activity_at = ? WHERE id = ?', timestamp, application.group_id);
     await db.execAsync('COMMIT;');
@@ -6197,6 +6291,7 @@ export async function createLoanContract(
     interest_rate?: number;
     repayment_period_count?: number;
     repayment_period_unit?: LoanRepaymentPeriodUnit;
+    requested_interest_day_offset?: number | null;
   } | null = null;
   if (terms.applicationId != null) {
     const application = await db.getFirstAsync<{
@@ -6205,8 +6300,9 @@ export async function createLoanContract(
       repayment_amount_mode?: LoanRepaymentAmountMode; repayment_period_mode?: LoanRepaymentPeriodMode;
       interest_method?: LoanInterestMethod; interest_rate?: number;
       repayment_period_count?: number; repayment_period_unit?: LoanRepaymentPeriodUnit;
+      requested_interest_day_offset?: number | null;
     }>(
-      'SELECT group_id, member_id, status, requested_amount, requested_due_date, interest_calculator, interest_period, repayment_amount_mode, repayment_period_mode, interest_method, interest_rate, repayment_period_count, repayment_period_unit FROM loan_applications WHERE id = ? LIMIT 1',
+      'SELECT group_id, member_id, status, requested_amount, requested_due_date, requested_interest_day_offset, interest_calculator, interest_period, repayment_amount_mode, repayment_period_mode, interest_method, interest_rate, repayment_period_count, repayment_period_unit FROM loan_applications WHERE id = ? LIMIT 1',
       terms.applicationId,
     );
     if (!application || Number(application.group_id) !== groupId || Number(application.member_id) !== memberId) throw new Error('Loan application does not match this borrower and group.');
@@ -6245,6 +6341,12 @@ export async function createLoanContract(
   const totalInterest = schedule.reduce((sum, item) => sum + item.interestDue, 0);
   const dueDate = terms.dueDate || applicationDueDate || loanDateForPeriod(issueDate, contractPeriods, contractUnit);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(new Date(`${dueDate}T00:00:00`).getTime())) throw new Error('Enter a valid due date in YYYY-MM-DD format.');
+  const rawInterestOffset = terms.interestDayOffset ?? applicationRules?.requested_interest_day_offset ?? 30;
+  const interestDayOffset = contractInterestPeriod === 'per month' ? Number(rawInterestOffset) : null;
+  if (interestDayOffset !== null && (!Number.isInteger(interestDayOffset) || interestDayOffset < 27 || interestDayOffset > 37)) {
+    throw new Error('The selected monthly interest date must be 27–37 days after the loan issue date.');
+  }
+  const interestAnchorDate = interestDayOffset === null ? null : addDaysToDateOnly(formatLocalDate(issueDate), interestDayOffset);
 
   await db.execAsync('BEGIN TRANSACTION;');
   try {
@@ -6252,13 +6354,14 @@ export async function createLoanContract(
       `INSERT INTO loan_records (
         group_id, member_id, application_id, disbursement_transaction_id, meeting_id, principal_amount,
         interest_method, interest_rate, interest_period, repayment_period_count,
-        repayment_period_unit, issue_date, due_date, total_interest, total_due, status,
-        reason, created_by_member_id, interest_calculator, repayment_amount_mode,
-        repayment_period_mode, monthly_recalculation_enabled, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        repayment_period_unit, issue_date, due_date, interest_anchor_date, interest_day_offset,
+        total_interest, total_due, status, reason, created_by_member_id,
+        interest_calculator, repayment_amount_mode, repayment_period_mode,
+        monthly_recalculation_enabled, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)`,
       groupId, memberId, terms.applicationId ?? null, disbursementTransactionId, meetingId, principalAmount,
       contractInterestMethod, contractInterestRate, contractInterestPeriod,
-      contractPeriods, contractUnit, timestamp, dueDate,
+      contractPeriods, contractUnit, timestamp, dueDate, interestAnchorDate, interestDayOffset,
       totalInterest, principalAmount + totalInterest, normalizeText(reason),
       terms.createdByMemberId ?? null, interestCalculator, contractAmountMode, contractPeriodMode,
       contractInterestPeriod === 'per month' ? 1 : 0, timestamp, timestamp,
@@ -6281,6 +6384,7 @@ export async function createLoanContract(
       interestPeriod: contractInterestPeriod, repaymentAmountMode: contractAmountMode,
       repaymentPeriodMode: contractPeriodMode, repaymentPeriodCount: contractPeriods,
       repaymentPeriodUnit: contractUnit, dueDate, totalInterest,
+      interestDayOffset, interestAnchorDate,
     });
     if (terms.applicationId != null) {
       await db.runAsync(
@@ -6366,6 +6470,8 @@ export type LoanApplicationInput = {
   repaymentPeriodCount: number;
   repaymentPeriodUnit: LoanRepaymentPeriodUnit;
   requestedDueDate?: string | null;
+  /** Number of days after the actual issue date for the first monthly interest calculation (27–37). */
+  interestDayOffset?: number | null;
   reason: string;
   requestedByMemberId?: number | null;
 };
@@ -6397,6 +6503,9 @@ export async function createLoanApplication(
       : storedInterestMethod === 'declining' ? 'declining' : 'flat';
   const interestRate = Number(setup.loan_interest_percentage ?? input.interestRate);
   const interestPeriod = oneTimeInterest ? 'per loan' : 'per month';
+  const requestedInterestDayOffset = interestPeriod === 'per month'
+    ? Number(input.interestDayOffset ?? 30)
+    : null;
   const repaymentAmountMode: LoanRepaymentAmountMode = 'flexible';
   const repaymentPeriodMode: LoanRepaymentPeriodMode = 'flexible';
   const maximumPeriod = Math.max(1, Number(setup.maximum_loan_repayment_period ?? 12));
@@ -6409,6 +6518,9 @@ export async function createLoanApplication(
   if (!Number.isInteger(repaymentPeriodCount) || repaymentPeriodCount < 1 || repaymentPeriodCount > maximumPeriod) throw new Error(`Repayment period must be between 1 and ${maximumPeriod} months, as allowed by Setup Rules.`);
   if (!['weeks', 'months'].includes(repaymentPeriodUnit)) throw new Error('Choose weeks or months.');
   if (!['per month', 'per cycle', 'per loan'].includes(interestPeriod)) throw new Error('Choose a supported interest period in Setup Rules.');
+  if (requestedInterestDayOffset !== null && (!Number.isInteger(requestedInterestDayOffset) || requestedInterestDayOffset < 27 || requestedInterestDayOffset > 37)) {
+    throw new Error('Choose a monthly interest date between 27 and 37 days after the loan issue date.');
+  }
   if (input.requestedDueDate && (!/^\d{4}-\d{2}-\d{2}$/.test(input.requestedDueDate) || Number.isNaN(new Date(`${input.requestedDueDate}T00:00:00`).getTime()))) throw new Error('Enter a valid due date in YYYY-MM-DD format.');
   await requireMemberPresentForLoan(db, groupId, memberId, meetingId);
   const freeze = await isLoanDisbursementFrozen(groupId, memberId);
@@ -6434,18 +6546,20 @@ export async function createLoanApplication(
   const result = await db.runAsync(
     `INSERT INTO loan_applications (
       group_id, member_id, meeting_id, requested_amount, interest_method, interest_rate,
-      repayment_period_count, repayment_period_unit, requested_due_date, reason, status,
-      requested_by_member_id, interest_calculator, interest_period,
+      repayment_period_count, repayment_period_unit, requested_due_date, requested_interest_day_offset,
+      reason, status, requested_by_member_id, interest_calculator, interest_period,
       repayment_amount_mode, repayment_period_mode, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
     groupId, memberId, meetingId, input.requestedAmount, interestMethod, interestRate,
     repaymentPeriodCount, repaymentPeriodUnit, input.requestedDueDate ?? null,
+    requestedInterestDayOffset,
     normalizeText(input.reason), input.requestedByMemberId ?? null,
     interestCalculator, interestPeriod, repaymentAmountMode, repaymentPeriodMode, timestamp, timestamp,
   );
   await addLoanAudit(db, groupId, null, input.requestedByMemberId ?? null, 'loan_application_created', {
     applicationId: result.lastInsertRowId, memberId, requestedAmount: input.requestedAmount,
     interestMethod, interestRate: input.interestRate,
+    interestDayOffset: requestedInterestDayOffset,
     repaymentPeriodCount: input.repaymentPeriodCount, repaymentPeriodUnit: input.repaymentPeriodUnit,
     committeeApprovalRequired: Boolean(policy.require_committee_approval),
     guarantorRequired: Boolean(policy.require_guarantor),
