@@ -26,7 +26,7 @@ import {
   getMeetingCashReconciliation,
   applyMeetingDayLoanInterest,
 } from '../database/database';
-import { exportDatabaseBackup } from '../database/backup';
+import { exportDatabaseBackup } from './backup';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'NewMeeting'>;
 
