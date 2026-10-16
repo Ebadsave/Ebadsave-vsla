@@ -15,6 +15,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../../App';
 import {
+  applyMeetingDayLoanInterest,
   closeMeeting,
   getGroupById,
   getMeetingCashReconciliation,
@@ -84,11 +85,18 @@ export default function CloseMeetingScreen({ route, navigation }: Props) {
     }
     try {
       setCheckingCash(true);
+      // Check/apply eligible monthly interest after members have made this
+      // meeting's repayments and before the verified closing backup is created.
+      // Database uniqueness makes repeat cash checks safe for the same meeting.
+      const interestResult = await applyMeetingDayLoanInterest(groupId, meetingId);
       const result = await getMeetingCashReconciliation(meetingId, amount);
       setCashCheck({ expectedCash: result.expectedCash, difference: result.difference, balanced: result.balanced });
       setBackupReceipt(null);
       if (result.balanced) {
-        Alert.alert('Cash Verified', 'Cash matches the expected amount. Continue to create the meeting backup.');
+        const interestMessage = interestResult.chargedMembers > 0
+          ? ` Monthly interest was recorded for ${interestResult.chargedMembers} member(s), total ${money(interestResult.totalInterest)}.`
+          : '';
+        Alert.alert('Cash Verified', `Cash matches the expected amount. Continue to create the meeting backup.${interestMessage}`);
       } else {
         Alert.alert('Cash Does Not Balance', `Expected ${money(result.expectedCash)} but counted ${money(amount)}. Correct the difference before continuing.`);
       }
