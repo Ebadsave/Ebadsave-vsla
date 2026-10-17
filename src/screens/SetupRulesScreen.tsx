@@ -134,6 +134,7 @@ lateFine: 0,
 nonSavingFine: 0,
 nonLoanRepaymentFine: 0,
 nonInsuranceContribution: 0,
+insuranceContributionAmount: 0,
 allowSocialFundForLoans: false,
 allowExternalFundForLoans: false,
 allowFinesForLoans: true,
@@ -242,6 +243,7 @@ const current = await getVSLASetupRules(groupId);
       current.non_saving_fine,  
     nonLoanRepaymentFine: current.non_loan_repayment_fine,
     nonInsuranceContribution: current.non_insurance_contribution,
+    insuranceContributionAmount: current.insurance_contribution_amount,
     allowSocialFundForLoans: Boolean(current.allow_social_fund_for_loans),
     allowExternalFundForLoans: Boolean(current.allow_external_fund_for_loans),
     allowFinesForLoans: Number(current.allow_fines_for_loans ?? 1) === 1,
@@ -356,6 +358,7 @@ try {
       Number(rules.nonSavingFine),  
     nonLoanRepaymentFine: Number(rules.nonLoanRepaymentFine),
     nonInsuranceContribution: Number(rules.nonInsuranceContribution),
+    insuranceContributionAmount: Number(rules.insuranceContributionAmount),
     allowSocialFundForLoans: Boolean(rules.allowSocialFundForLoans),
     allowExternalFundForLoans: Boolean(rules.allowExternalFundForLoans),
     allowFinesForLoans: Boolean(rules.allowFinesForLoans),
@@ -796,6 +799,18 @@ Setup Rules
       onChangeText={(value) => updateRule('nonLoanRepaymentFine', Number(value) || 0)}
       keyboardType="decimal-pad"
       placeholder="0"
+    />
+
+    <Text style={styles.label}>Insurance Contribution per Member per Meeting</Text>
+    <Text style={styles.description}>
+      The agreed fixed insurance amount each active member must pay at every meeting. A member who has not paid this meeting’s amount cannot receive an insurance benefit. Set an amount greater than zero before collecting insurance.
+    </Text>
+    <TextInput
+      style={styles.input}
+      value={String(rules.insuranceContributionAmount ?? 0)}
+      onChangeText={(value) => updateRule('insuranceContributionAmount', Number(value) || 0)}
+      keyboardType="decimal-pad"
+      placeholder="Enter agreed insurance amount"
     />
 
     <Text style={styles.label}>Non-Insurance Contribution Fine</Text>
