@@ -18,10 +18,6 @@ import {
   getGroupById,
   getMembersByGroupId,
   registerMember,
-  updateMember,
-  updateMemberRoles,
-  getOccupiedExecutivePosts,
-  setMemberPasscode,
   type GroupRecord,
   type MemberRecord,
 } from '../database/database';
@@ -31,46 +27,6 @@ type Props = {
   route: { params?: { groupId?: number } };
 };
 
-const EXECUTIVE_ROLES = [
-  'Member',
-  'Chairperson',
-  'Vice Chair',
-  'Secretary',
-  'Treasurer',
-  'Money Counter',
-  'Key Keeper',
-];
-
-function getMemberPost(member: MemberRecord): string {
-  const assigned = (member.assigned_roles || '')
-    .split(',')
-    .map((item) => item.trim())
-    .find((item) => EXECUTIVE_ROLES.some(
-      (option) => option !== 'Member' && option.toLowerCase() === item.toLowerCase(),
-    ));
-
-  if (assigned) return assigned;
-
-  const savedRole = (member.role || '').trim();
-  const matchingRole = EXECUTIVE_ROLES.find(
-    (item) => item.toLowerCase() === savedRole.toLowerCase(),
-  );
-
-  return matchingRole || 'Member';
-}
-
-function normalizeInternationalPhone(phoneValue: string): string {
-  // Uganda international/E.164 format only: +256 followed by 9 digits.
-  // Formatting spaces, hyphens and parentheses are removed before saving.
-  return phoneValue.trim().replace(/[\s()-]/g, '');
-}
-
-function isValidInternationalPhone(phoneValue: string): boolean {
-  const compact = normalizeInternationalPhone(phoneValue);
-  if (!compact) return true; // Phone is optional.
-  return /^\+256[0-9]{9}$/.test(compact);
-}
-
 export default function AddMembersScreen({ navigation, route }: Props) {
   const groupId = Number(route?.params?.groupId || 0);
 
@@ -79,30 +35,27 @@ export default function AddMembersScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const [editingMemberId, setEditingMemberId] = useState<number | null>(null);
-
   const [fullName, setFullName] = useState('');
   const [gender, setGender] = useState('');
   const [age, setAge] = useState('');
   const [phone, setPhone] = useState('');
   const [cell, setCell] = useState('');
   const [district, setDistrict] = useState('');
-  const [role, setRole] = useState('Member');
-  const [passcode, setPasscode] = useState('');
-  const [confirmPasscode, setConfirmPasscode] = useState('');
-  const [isSuperUser, setIsSuperUser] = useState(false);
+
+  const [kin1Name, setKin1Name] = useState('');
+  const [kin1Phone, setKin1Phone] = useState('');
+  const [kin2Name, setKin2Name] = useState('');
+  const [kin2Phone, setKin2Phone] = useState('');
 
   const load = useCallback(async () => {
     if (!groupId) return;
 
     try {
       setLoading(true);
-
       const [loadedGroup, loadedMembers] = await Promise.all([
         getGroupById(groupId),
         getMembersByGroupId(groupId),
       ]);
-
       setGroup(loadedGroup);
       setMembers(loadedMembers);
     } catch (error) {
@@ -120,35 +73,19 @@ export default function AddMembersScreen({ navigation, route }: Props) {
   );
 
   const clearForm = () => {
-    setEditingMemberId(null);
     setFullName('');
     setGender('');
     setAge('');
     setPhone('');
     setCell('');
     setDistrict('');
-    setRole('Member');
-    setPasscode('');
-    setConfirmPasscode('');
-    setIsSuperUser(false);
+    setKin1Name('');
+    setKin1Phone('');
+    setKin2Name('');
+    setKin2Phone('');
   };
 
-  const editMember = (member: MemberRecord) => {
-    setEditingMemberId(member.id);
-    setFullName(member.full_name || '');
-    setGender(member.gender || '');
-    setAge(String(member.age || ''));
-    setPhone(member.phone || '');
-    setCell(member.cell || '');
-    setDistrict(member.district || '');
-
-    setRole(getMemberPost(member));
-    setPasscode('');
-    setConfirmPasscode('');
-    setIsSuperUser(Number(member.is_super_user || 0) === 1);
-  };
-
-  const saveMember = async () => {
+  const addMember = async () => {
     if (!groupId) {
       Alert.alert('No Group', 'Please select an active group first.');
       return;
@@ -159,165 +96,66 @@ export default function AddMembersScreen({ navigation, route }: Props) {
     const cleanAge = Number(age.trim());
     const cleanCell = cell.trim();
     const cleanDistrict = district.trim();
+    const cleanKin1Name = kin1Name.trim();
+    const cleanKin1Phone = kin1Phone.trim();
+    const cleanKin2Name = kin2Name.trim();
+    const cleanKin2Phone = kin2Phone.trim();
 
     if (!cleanName) {
       Alert.alert('Required', 'Member name is required.');
       return;
     }
-
     if (!cleanGender) {
       Alert.alert('Required', 'Gender is required.');
       return;
     }
-
     if (!Number.isFinite(cleanAge) || cleanAge <= 0) {
       Alert.alert('Required', 'Enter a valid age.');
       return;
     }
-
     if (!cleanCell) {
       Alert.alert('Required', 'Cell is required.');
       return;
     }
-
     if (!cleanDistrict) {
       Alert.alert('Required', 'District is required.');
       return;
     }
-
-    if (!isValidInternationalPhone(phone)) {
-      Alert.alert(
-        'Invalid Phone Number',
-        'Enter the international format +256 followed by 9 digits, for example +256772123456. Local formats such as 0772123456 are not accepted. You may leave the phone blank.',
-      );
+    if (!cleanKin1Name || !cleanKin1Phone || !cleanKin2Name || !cleanKin2Phone) {
+      Alert.alert('Next of Kin Required', 'Every member must have two next-of-kin contacts. Enter the full name and phone number for both Slot 1 and Slot 2.');
       return;
-    }
-
-    const cleanPasscode = passcode.trim();
-    const cleanConfirmPasscode = confirmPasscode.trim();
-    const passcodePattern = /^[A-Za-z1-9./$-]{4}$/;
-
-    const normalizedPhone = normalizeInternationalPhone(phone);
-
-    const existingMember = editingMemberId === null
-      ? undefined
-      : members.find((item) => Number(item.id) === Number(editingMemberId));
-    const phoneIsNewForMember = Boolean(normalizedPhone) && !existingMember?.phone;
-
-    if (normalizedPhone && !cleanPasscode && (editingMemberId === null || phoneIsNewForMember)) {
-      Alert.alert(
-        'Passcode Required',
-        'A member with a phone number must have a four-character personal passcode. Members without phone numbers do not need one.',
-      );
-      return;
-    }
-
-    if (!normalizedPhone && (cleanPasscode || cleanConfirmPasscode)) {
-      Alert.alert(
-        'Passcode Not Needed',
-        'Leave the passcode fields blank for a member without a phone number. Add an international phone number first if this member needs app authorization.',
-      );
-      return;
-    }
-
-    if (cleanPasscode || cleanConfirmPasscode) {
-      if (!passcodePattern.test(cleanPasscode)) {
-        Alert.alert(
-          'Invalid Passcode',
-          'Passcode must contain exactly four characters. Allowed characters are letters, digits 1–9, dot, slash, dollar sign, and hyphen.',
-        );
-        return;
-      }
-      if (cleanPasscode !== cleanConfirmPasscode) {
-        Alert.alert('Passcodes Do Not Match', 'Enter the same passcode in both fields.');
-        return;
-      }
     }
 
     try {
       setSaving(true);
+      const memberId = await registerMember(
+        groupId,
+        cleanName,
+        cleanGender,
+        cleanAge,
+        phone.trim(),
+        cleanCell,
+        cleanDistrict,
+        [
+          { slot: 1, name: cleanKin1Name, phone: cleanKin1Phone },
+          { slot: 2, name: cleanKin2Name, phone: cleanKin2Phone },
+        ],
+      );
 
-      // Enforce one post per executive and prevent two members holding the same post.
-      const selectedPost = isSuperUser && role === 'Member' ? 'Chairperson' : role;
-      if (selectedPost !== 'Member') {
-        const occupiedPosts = await getOccupiedExecutivePosts(
-          groupId,
-          editingMemberId ?? undefined,
-        );
-        if (occupiedPosts[selectedPost] !== undefined) {
-          throw new Error(`${selectedPost} is already assigned to another active member in this group.`);
-        }
-      }
+      await load();
+      clearForm();
 
-      if (editingMemberId !== null) {
-        await updateMember(editingMemberId, {
-          fullName: cleanName,
-          gender: cleanGender,
-          age: cleanAge,
-          phone: normalizedPhone,
-          cell: cleanCell,
-          district: cleanDistrict,
-        });
-
-        await updateMemberRoles(
-          editingMemberId,
-          isSuperUser,
-          role === 'Member' ? [] : [role],
-        );
-
-        if (normalizedPhone && cleanPasscode) {
-          await setMemberPasscode(editingMemberId, cleanPasscode);
-        }
-
-        await load();
-        clearForm();
-
-        Alert.alert(
-          'Member Updated',
-          `${cleanName}'s details and role have been updated successfully.`,
-        );
-      } else {
-        const memberId = await registerMember(
-          groupId,
-          cleanName,
-          cleanGender,
-          cleanAge,
-          normalizedPhone,
-          cleanCell,
-          cleanDistrict,
-        );
-
-        // Keep the existing automatic member-number generation.
-        // A member can be ordinary, or hold exactly one executive post.
-        await updateMemberRoles(
-          memberId,
-          false,
-          role === 'Member' ? [] : [role],
-        );
-
-        // Passcodes are required only for members who have a phone number.
-        // The database stores only a salted hash. No-phone members remain valid
-        // group members but cannot authorize app access.
-        if (normalizedPhone && cleanPasscode) {
-          await setMemberPasscode(memberId, cleanPasscode);
-        }
-
-        await load();
-        clearForm();
-
-        Alert.alert(
-          'Member Added',
-          `${cleanName} has been registered successfully.\n\nThe database assigned the member number automatically.`,
-        );
-      }
-    } catch (error) {
-      console.error('Failed to save member:', error);
-
+      const created = members.find((member) => member.id === memberId);
       Alert.alert(
-        editingMemberId !== null ? 'Update Failed' : 'Registration Failed',
-        error instanceof Error
-          ? error.message
-          : 'Unable to save member.',
+        'Member Added',
+        `${cleanName} has been registered successfully.\n\nThe database assigned the member number automatically.`,
+      );
+      void created;
+    } catch (error) {
+      console.error('Failed to register member:', error);
+      Alert.alert(
+        'Registration Failed',
+        error instanceof Error ? error.message : 'Unable to register member.',
       );
     } finally {
       setSaving(false);
@@ -335,22 +173,12 @@ export default function AddMembersScreen({ navigation, route }: Props) {
           style: 'destructive',
           onPress: async () => {
             try {
-              await deleteMember(
-                member.id,
-                'Member removed by group administrator.',
-              );
-
-              if (editingMemberId === member.id) {
-                clearForm();
-              }
-
+              await deleteMember(member.id, 'Member removed by group administrator.');
               await load();
             } catch (error) {
               Alert.alert(
                 'Delete Failed',
-                error instanceof Error
-                  ? error.message
-                  : 'Unable to delete member.',
+                error instanceof Error ? error.message : 'Unable to delete member.',
               );
             }
           },
@@ -371,15 +199,10 @@ export default function AddMembersScreen({ navigation, route }: Props) {
           contentContainerStyle={styles.content}
         >
           <View style={styles.header}>
-            <TouchableOpacity
-              onPress={() => navigation.goBack()}
-              style={styles.backButton}
-            >
+            <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
               <Text style={styles.backText}>‹ Back</Text>
             </TouchableOpacity>
-
             <Text style={styles.title}>Add Members</Text>
-
             <Text style={styles.subtitle}>
               {group
                 ? `KYA ${group.group_number} • ${group.group_name}`
@@ -388,198 +211,57 @@ export default function AddMembersScreen({ navigation, route }: Props) {
           </View>
 
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>
-              {editingMemberId !== null
-                ? 'Edit Member'
-                : 'Register Member'}
-            </Text>
+            <Text style={styles.sectionTitle}>Register Member</Text>
 
-            <Field
-              label="Full name"
-              value={fullName}
-              onChangeText={setFullName}
-              placeholder="Enter member name"
-            />
+            <Field label="Full name" value={fullName} onChangeText={setFullName} placeholder="Enter member name" />
+            <Field label="Gender" value={gender} onChangeText={setGender} placeholder="Male or Female" />
+            <Field label="Age" value={age} onChangeText={setAge} placeholder="Enter age" keyboardType="number-pad" />
+            <Field label="Phone (optional)" value={phone} onChangeText={setPhone} placeholder="Enter phone number" keyboardType="phone-pad" />
+            <Field label="Cell" value={cell} onChangeText={setCell} placeholder="Enter cell" />
+            <Field label="District" value={district} onChangeText={setDistrict} placeholder="Enter district" />
 
-            <Field
-              label="Gender"
-              value={gender}
-              onChangeText={setGender}
-              placeholder="Male or Female"
-            />
-
-            <Field
-              label="Age"
-              value={age}
-              onChangeText={setAge}
-              placeholder="Enter age"
-              keyboardType="number-pad"
-            />
-
-            <Field
-              label="Phone (optional)"
-              value={phone}
-              onChangeText={setPhone}
-              placeholder="+256772123456"
-              keyboardType="phone-pad"
-            />
-
-            <Field
-              label="Cell"
-              value={cell}
-              onChangeText={setCell}
-              placeholder="Enter cell"
-            />
-
-            <Field
-              label="District"
-              value={district}
-              onChangeText={setDistrict}
-              placeholder="Enter district"
-            />
-
-            <Field
-              label={editingMemberId === null ? 'Personal Passcode (required)' : 'Personal Passcode (enter if missing or to change)'}
-              value={passcode}
-              onChangeText={(value) => setPasscode(value.slice(0, 4))}
-              placeholder="Exactly 4 characters"
-              keyboardType="default"
-              secureTextEntry
-              autoCapitalize="none"
-            />
-
-            <Field
-              label="Confirm Passcode"
-              value={confirmPasscode}
-              onChangeText={(value) => setConfirmPasscode(value.slice(0, 4))}
-              placeholder="Re-enter the same passcode"
-              keyboardType="default"
-              secureTextEntry
-              autoCapitalize="none"
-            />
-
-            <Text style={styles.helperText}>
-              Members with phone numbers must have a four-character personal passcode. Members without phone numbers do not need one and cannot authorize app access. Phone numbers must use international format, for example +256772123456. For an existing member, leave both passcode fields blank to retain an existing passcode; enter a new one when assigning or changing it. Never share passcodes.
-            </Text>
-
-            <Text style={styles.label}>Member Role / Executive Post (choose one)</Text>
-
-            <View style={styles.roleContainer}>
-              {EXECUTIVE_ROLES.map((item) => {
-                const selected = role === item;
-
-                return (
-                  <TouchableOpacity
-                    key={item}
-                    style={[
-                      styles.roleButton,
-                      selected && styles.roleButtonSelected,
-                    ]}
-                    onPress={() => setRole(item)}
-                  >
-                    <Text
-                      style={[
-                        styles.roleButtonText,
-                        selected && styles.roleButtonTextSelected,
-                      ]}
-                    >
-                      {item}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+            <Text style={styles.kinSectionTitle}>Insurance Next of Kin (Required)</Text>
+            <Text style={styles.helperText}>Every member must register two named next-of-kin contacts with phone numbers. If a Slot 1 or Slot 2 beneficiary receives an insurance benefit, that slot locks until the contact is replaced.</Text>
+            <Field label="Slot 1 — Next-of-kin full name" value={kin1Name} onChangeText={setKin1Name} placeholder="Enter first beneficiary name" />
+            <Field label="Slot 1 — Phone number" value={kin1Phone} onChangeText={setKin1Phone} placeholder="Enter first beneficiary phone" keyboardType="phone-pad" />
+            <Field label="Slot 2 — Next-of-kin full name" value={kin2Name} onChangeText={setKin2Name} placeholder="Enter second beneficiary name" />
+            <Field label="Slot 2 — Phone number" value={kin2Phone} onChangeText={setKin2Phone} placeholder="Enter second beneficiary phone" keyboardType="phone-pad" />
 
             <TouchableOpacity
-              style={[
-                styles.primaryButton,
-                saving && styles.disabledButton,
-              ]}
-              onPress={saveMember}
+              style={[styles.primaryButton, saving && styles.disabledButton]}
+              onPress={addMember}
               disabled={saving}
             >
-              <Text style={styles.primaryButtonText}>
-                {saving
-                  ? 'Saving…'
-                  : editingMemberId !== null
-                    ? 'Save Changes'
-                    : 'Register Member'}
-              </Text>
+              <Text style={styles.primaryButtonText}>{saving ? 'Saving…' : 'Register Member'}</Text>
             </TouchableOpacity>
-
-            {editingMemberId !== null && (
-              <TouchableOpacity
-                style={styles.cancelButton}
-                onPress={clearForm}
-                disabled={saving}
-              >
-                <Text style={styles.cancelButtonText}>
-                  Cancel Edit
-                </Text>
-              </TouchableOpacity>
-            )}
           </View>
 
           <View style={styles.card}>
-            <Text style={styles.helperText}>
-              To assign a passcode to an existing member, tap Edit and enter a four-character passcode. Each executive can hold only one post, and each post can belong to only one active member.
-            </Text>
             <View style={styles.listHeader}>
               <Text style={styles.sectionTitle}>Active Members</Text>
-
-              <Text style={styles.count}>
-                {members.length}
-              </Text>
+              <Text style={styles.count}>{members.length}</Text>
             </View>
 
             {loading ? (
-              <Text style={styles.emptyText}>
-                Loading members…
-              </Text>
+              <Text style={styles.emptyText}>Loading members…</Text>
             ) : members.length === 0 ? (
-              <Text style={styles.emptyText}>
-                No members registered yet.
-              </Text>
+              <Text style={styles.emptyText}>No members registered yet.</Text>
             ) : (
               members.map((member) => (
                 <View key={member.id} style={styles.memberRow}>
                   <View style={styles.memberInfo}>
-                    <Text style={styles.memberNumber}>
-                      {member.member_number}
-                    </Text>
-
-                    <Text style={styles.memberName}>
-                      {member.full_name}
-                    </Text>
-
+                    <Text style={styles.memberNumber}>{member.member_number}</Text>
+                    <Text style={styles.memberName}>{member.full_name}</Text>
                     <Text style={styles.memberDetails}>
                       {member.gender} • {member.age} years • {member.cell}
                     </Text>
-
-                    <Text style={styles.roleText}>
-                      Role: {getMemberPost(member)}
-                    </Text>
                   </View>
-
-                  <View style={styles.memberActions}>
-                    <TouchableOpacity
-                      style={styles.editButton}
-                      onPress={() => editMember(member)}
-                    >
-                      <Text style={styles.editText}>
-                        Edit
-                      </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={styles.deleteButton}
-                      onPress={() => confirmDelete(member)}
-                    >
-                      <Text style={styles.deleteText}>
-                        Delete
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
+                  <TouchableOpacity
+                    style={styles.deleteButton}
+                    onPress={() => confirmDelete(member)}
+                  >
+                    <Text style={styles.deleteText}>Delete</Text>
+                  </TouchableOpacity>
                 </View>
               ))
             )}
@@ -596,21 +278,16 @@ function Field({
   onChangeText,
   placeholder,
   keyboardType,
-  secureTextEntry,
-  autoCapitalize,
 }: {
   label: string;
   value: string;
   onChangeText: (value: string) => void;
   placeholder: string;
   keyboardType?: 'default' | 'number-pad' | 'phone-pad';
-  secureTextEntry?: boolean;
-  autoCapitalize?: 'none' | 'words';
 }) {
   return (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
-
       <TextInput
         style={styles.input}
         value={value}
@@ -618,54 +295,20 @@ function Field({
         placeholder={placeholder}
         placeholderTextColor="#9ca3af"
         keyboardType={keyboardType || 'default'}
-        autoCapitalize={autoCapitalize || 'words'}
-        secureTextEntry={secureTextEntry}
-        maxLength={secureTextEntry ? 4 : undefined}
+        autoCapitalize="words"
       />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f8fafc',
-  },
-
-  content: {
-    padding: 16,
-    paddingBottom: 36,
-  },
-
-  header: {
-    marginBottom: 14,
-  },
-
-  backButton: {
-    alignSelf: 'flex-start',
-    paddingVertical: 4,
-    marginBottom: 8,
-  },
-
-  backText: {
-    color: '#16a34a',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-
-  title: {
-    fontSize: 25,
-    fontWeight: '800',
-    color: '#111827',
-  },
-
-  subtitle: {
-    marginTop: 4,
-    color: '#166534',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-
+  container: { flex: 1, backgroundColor: '#f8fafc' },
+  content: { padding: 16, paddingBottom: 36 },
+  header: { marginBottom: 14 },
+  backButton: { alignSelf: 'flex-start', paddingVertical: 4, marginBottom: 8 },
+  backText: { color: '#16a34a', fontSize: 16, fontWeight: '700' },
+  title: { fontSize: 25, fontWeight: '800', color: '#111827' },
+  subtitle: { marginTop: 4, color: '#166534', fontSize: 14, fontWeight: '600' },
   card: {
     backgroundColor: '#fff',
     borderRadius: 14,
@@ -674,25 +317,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e5e7eb',
   },
-
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#111827',
-  },
-
-  field: {
-    marginTop: 12,
-  },
-
-  label: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#374151',
-    marginTop: 12,
-    marginBottom: 6,
-  },
-
+  sectionTitle: { fontSize: 18, fontWeight: '800', color: '#111827' },
+  kinSectionTitle: { marginTop: 20, fontSize: 16, fontWeight: '800', color: '#166534' },
+  helperText: { marginTop: 6, fontSize: 13, lineHeight: 19, color: '#4b5563' },
+  field: { marginTop: 12 },
+  label: { fontSize: 13, fontWeight: '700', color: '#374151', marginBottom: 6 },
   input: {
     borderWidth: 1,
     borderColor: '#d1d5db',
@@ -703,46 +332,6 @@ const styles = StyleSheet.create({
     color: '#111827',
     backgroundColor: '#fff',
   },
-
-  helperText: {
-    marginTop: 8,
-    color: '#6b7280',
-    fontSize: 12,
-    lineHeight: 17,
-  },
-
-  roleContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginTop: 2,
-  },
-
-  roleButton: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 9,
-    paddingHorizontal: 11,
-    paddingVertical: 9,
-    marginRight: 7,
-    marginBottom: 7,
-    backgroundColor: '#fff',
-  },
-
-  roleButtonSelected: {
-    backgroundColor: '#16a34a',
-    borderColor: '#16a34a',
-  },
-
-  roleButtonText: {
-    color: '#374151',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-
-  roleButtonTextSelected: {
-    color: '#fff',
-  },
-
   primaryButton: {
     marginTop: 16,
     backgroundColor: '#16a34a',
@@ -750,125 +339,16 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     alignItems: 'center',
   },
-
-  disabledButton: {
-    opacity: 0.6,
-  },
-
-  primaryButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-
-  cancelButton: {
-    marginTop: 9,
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-
-  cancelButtonText: {
-    color: '#374151',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-
-  listHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-
-  count: {
-    minWidth: 30,
-    textAlign: 'center',
-    paddingVertical: 5,
-    paddingHorizontal: 8,
-    borderRadius: 15,
-    backgroundColor: '#dcfce7',
-    color: '#166534',
-    fontWeight: '800',
-  },
-
-  emptyText: {
-    color: '#6b7280',
-    textAlign: 'center',
-    paddingVertical: 18,
-  },
-
-  memberRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#f3f4f6',
-  },
-
-  memberInfo: {
-    flex: 1,
-    paddingRight: 8,
-  },
-
-  memberNumber: {
-    color: '#16a34a',
-    fontSize: 13,
-    fontWeight: '800',
-  },
-
-  memberName: {
-    marginTop: 2,
-    color: '#111827',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-
-  memberDetails: {
-    marginTop: 3,
-    color: '#6b7280',
-    fontSize: 12,
-  },
-
-  roleText: {
-    marginTop: 4,
-    color: '#166534',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-
-  memberActions: {
-    alignItems: 'flex-end',
-    gap: 7,
-  },
-
-  editButton: {
-    borderWidth: 1,
-    borderColor: '#16a34a',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-
-  editText: {
-    color: '#16a34a',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-
-  deleteButton: {
-    borderWidth: 1,
-    borderColor: '#fecaca',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-
-  deleteText: {
-    color: '#dc2626',
-    fontSize: 12,
-    fontWeight: '800',
-  },
+  disabledButton: { opacity: 0.6 },
+  primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: '800' },
+  listHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  count: { minWidth: 30, textAlign: 'center', paddingVertical: 5, paddingHorizontal: 8, borderRadius: 15, backgroundColor: '#dcfce7', color: '#166534', fontWeight: '800' },
+  emptyText: { color: '#6b7280', textAlign: 'center', paddingVertical: 18 },
+  memberRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderTopWidth: 1, borderTopColor: '#f3f4f6' },
+  memberInfo: { flex: 1, paddingRight: 8 },
+  memberNumber: { color: '#16a34a', fontSize: 13, fontWeight: '800' },
+  memberName: { marginTop: 2, color: '#111827', fontSize: 16, fontWeight: '700' },
+  memberDetails: { marginTop: 3, color: '#6b7280', fontSize: 12 },
+  deleteButton: { borderWidth: 1, borderColor: '#fecaca', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
+  deleteText: { color: '#dc2626', fontSize: 12, fontWeight: '800' },
 });
