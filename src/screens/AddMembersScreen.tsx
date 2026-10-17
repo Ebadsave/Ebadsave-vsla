@@ -120,6 +120,7 @@ export default function AddMembersScreen({ navigation, route }: Props) {
         phone.trim(),
         cleanCell,
         cleanDistrict,
+        [],
       );
 
       await load();
