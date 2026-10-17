@@ -359,7 +359,6 @@ export default function LoanDisbursementScreen() {
           interestDayOffset: interestPeriod === 'per loan' ? null : interestDayOffset,
           reason: reason.trim(),
           requestedByMemberId: executiveMemberId,
-          guarantorMemberIds: selectedGuarantorIds,
         },
       );
 
