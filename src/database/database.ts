@@ -1519,6 +1519,21 @@ status TEXT NOT NULL DEFAULT 'active',
       FOREIGN KEY (created_by_member_id) REFERENCES members(id)
     );
 
+    CREATE TABLE IF NOT EXISTS loan_interest_schedule_dates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      application_id INTEGER,
+      loan_id INTEGER,
+      period_number INTEGER NOT NULL CHECK (period_number >= 1),
+      scheduled_date TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(application_id, period_number),
+      UNIQUE(loan_id, period_number),
+      FOREIGN KEY (application_id) REFERENCES loan_applications(id) ON DELETE CASCADE,
+      FOREIGN KEY (loan_id) REFERENCES loan_records(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_loan_interest_schedule_date
+      ON loan_interest_schedule_dates(loan_id, scheduled_date);
+
     CREATE TABLE IF NOT EXISTS loan_repayment_schedule (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       loan_id INTEGER NOT NULL,
@@ -3334,13 +3349,14 @@ export async function applyMeetingDayLoanInterest(
       interest_rate: number;
       interest_period: string;
       issue_date: string;
+      due_date: string;
       interest_anchor_date: string | null;
       interest_day_offset: number | null;
       status: string;
       monthly_recalculation_enabled: number;
     }>(
       `SELECT id, principal_amount, interest_method, interest_rate, interest_period,
-              issue_date, interest_anchor_date, interest_day_offset, status, monthly_recalculation_enabled
+              issue_date, due_date, interest_anchor_date, interest_day_offset, status, monthly_recalculation_enabled
        FROM loan_records
        WHERE group_id = ? AND member_id = ? AND status IN ('active', 'frozen')
        ORDER BY issue_date ASC, id ASC`,
@@ -3368,33 +3384,50 @@ export async function applyMeetingDayLoanInterest(
         if (alreadyCharged) continue;
 
         let scheduledInterestDate: string | null = null;
-        const interestAnchorDate = dateOnly(loan.interest_anchor_date);
-        if (interestAnchorDate) {
-          // The selected first interest date is stored on the contract. Every
-          // later due date is calculated from that original anchor, so a short
-          // month (for example February) does not permanently shift the day.
-          const latestScheduled = await db.getFirstAsync<{ scheduled_interest_date: string | null }>(
-            `SELECT MAX(scheduled_interest_date) AS scheduled_interest_date
-             FROM loan_contract_interest_charges
-             WHERE loan_id = ? AND scheduled_interest_date IS NOT NULL`,
-            loan.id,
+        const explicitDateCount = await db.getFirstAsync<{ count: number }>(
+          `SELECT COUNT(*) AS count FROM loan_interest_schedule_dates WHERE loan_id = ?`, loan.id,
+        );
+        if (Number(explicitDateCount?.count ?? 0) > 0) {
+          // Period 1 interest is included in the Day-1 disbursement amount.
+          // Later saved dates are charged once, at the first open meeting on/after each date.
+          const nextSavedDate = await db.getFirstAsync<{ scheduled_date: string }>(
+            `SELECT d.scheduled_date
+             FROM loan_interest_schedule_dates d
+             WHERE d.loan_id = ? AND d.period_number > 1
+               AND d.scheduled_date <= ?
+               AND NOT EXISTS (
+                 SELECT 1 FROM loan_contract_interest_charges c
+                 WHERE c.loan_id = d.loan_id AND c.scheduled_interest_date = d.scheduled_date
+               )
+             ORDER BY d.period_number ASC LIMIT 1`,
+            loan.id, dateOnly(loan.due_date) ?? loan.due_date,
           );
-          const lastScheduledDate = dateOnly(latestScheduled?.scheduled_interest_date);
-          const monthsAfterAnchor = lastScheduledDate
-            ? Math.max(0, monthOffsetBetweenDates(interestAnchorDate, lastScheduledDate) + 1)
-            : 0;
-          scheduledInterestDate = addMonthsToDateOnly(interestAnchorDate, monthsAfterAnchor);
-          // Interest is assessed at the first open meeting on or after the
-          // scheduled date. Repeated checks in the same month cannot charge it
-          // again because the scheduled date is recorded uniquely below.
-          if (meetingDate < scheduledInterestDate) continue;
-          const alreadyForScheduledDate = await db.getFirstAsync<{ id: number }>(
-            `SELECT id FROM loan_contract_interest_charges
-             WHERE loan_id = ? AND scheduled_interest_date = ? LIMIT 1`,
-            loan.id, scheduledInterestDate,
-          );
-          if (alreadyForScheduledDate) continue;
+          if (!nextSavedDate) continue;
+          scheduledInterestDate = dateOnly(nextSavedDate.scheduled_date);
+          if (!scheduledInterestDate || meetingDate < scheduledInterestDate) continue;
         } else {
+          const interestAnchorDate = dateOnly(loan.interest_anchor_date);
+          if (interestAnchorDate) {
+            // Legacy loans without saved per-period dates retain their original anchor-based cadence.
+            const latestScheduled = await db.getFirstAsync<{ scheduled_interest_date: string | null }>(
+              `SELECT MAX(scheduled_interest_date) AS scheduled_interest_date
+               FROM loan_contract_interest_charges
+               WHERE loan_id = ? AND scheduled_interest_date IS NOT NULL`,
+              loan.id,
+            );
+            const lastScheduledDate = dateOnly(latestScheduled?.scheduled_interest_date);
+            const monthsAfterAnchor = lastScheduledDate
+              ? Math.max(0, monthOffsetBetweenDates(interestAnchorDate, lastScheduledDate) + 1)
+              : 0;
+            scheduledInterestDate = addMonthsToDateOnly(interestAnchorDate, monthsAfterAnchor);
+            if (meetingDate < scheduledInterestDate) continue;
+            const alreadyForScheduledDate = await db.getFirstAsync<{ id: number }>(
+              `SELECT id FROM loan_contract_interest_charges
+               WHERE loan_id = ? AND scheduled_interest_date = ? LIMIT 1`,
+              loan.id, scheduledInterestDate,
+            );
+            if (alreadyForScheduledDate) continue;
+          } else {
           // Legacy contracts created before the saved date selector keep their
           // prior 27–35 day cadence; the selected-date rule applies to new loans.
           const priorCharge = await db.getFirstAsync<{ charge_date: string | null }>(
@@ -3406,6 +3439,7 @@ export async function applyMeetingDayLoanInterest(
           if (!referenceDate) continue;
           const elapsedDays = daysBetweenDates(referenceDate, meetingDate);
           if (elapsedDays < 27 || elapsedDays > 35) continue;
+          }
         }
 
         const outstanding = await db.getFirstAsync<{ balance: number }>(
@@ -3977,12 +4011,24 @@ export async function updateVSLASetupRules(
     );
   }
 
-  const isMonthlyWeekdayRule = /^(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/.test(meetingFrequency);
-  if (!['weekly', 'biweekly', 'monthly'].includes(meetingFrequency) && !isMonthlyWeekdayRule) {
-    throw new Error('Choose a valid meeting frequency or monthly weekday rule.');
+  const isLegacyMonthlyWeekdayRule = /^(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/.test(meetingFrequency);
+  const isWeeklyRule = /^weekly_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/.test(meetingFrequency);
+  const isTwiceDatesRule = /^twice_dates_(\d{1,2})_(\d{1,2})$/.test(meetingFrequency);
+  const isTwiceWeekdayRule = /^twice_rules_(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)_(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/.test(meetingFrequency);
+  const isMonthlyDateRule = /^monthly_date_(\d{1,2})$/.test(meetingFrequency);
+  const isMonthlyWeekdayRule = /^monthly_rule_(first|second|third|fourth|last)_(sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/.test(meetingFrequency);
+  if (!['weekly', 'biweekly', 'monthly'].includes(meetingFrequency) && !isLegacyMonthlyWeekdayRule && !isWeeklyRule && !isTwiceDatesRule && !isTwiceWeekdayRule && !isMonthlyDateRule && !isMonthlyWeekdayRule) {
+    throw new Error('Choose a valid weekly, twice-a-month, or monthly meeting schedule.');
+  }
+  if (isTwiceDatesRule || isMonthlyDateRule) {
+    const numbers = meetingFrequency.match(/\d+/g)?.map(Number) ?? [];
+    const days = isTwiceDatesRule ? numbers.slice(-2) : numbers.slice(-1);
+    if (days.some((day) => !Number.isInteger(day) || day < 1 || day > 31) || (isTwiceDatesRule && days[0] === days[1])) {
+      throw new Error('Meeting dates must be between 1 and 31, and twice-monthly dates must differ.');
+    }
   }
 
-  if (isMonthlyWeekdayRule) {
+  if (isLegacyMonthlyWeekdayRule) {
     if (!meetingStartDate || !/^\d{4}-\d{2}-\d{2}$/.test(meetingStartDate)) {
       throw new Error('Choose a date for the selected monthly weekday rule.');
     }
@@ -6065,46 +6111,6 @@ async function addLoanAudit(
   );
 }
 
-type LoanApplicationGuarantorCheck = {
-  selectedCount: number;
-  signedCount: number;
-  externalCount: number;
-  valid: boolean;
-};
-
-async function checkLoanApplicationGuarantors(
-  db: SQLite.SQLiteDatabase,
-  applicationId: number,
-  groupId: number,
-  borrowerMemberId: number,
-): Promise<LoanApplicationGuarantorCheck> {
-  const rows = await db.getAllAsync<{
-    guarantor_member_id: number;
-    guarantor_group_id: number;
-    member_status: string;
-    passcode_verified: number;
-  }>(
-    `SELECT g.guarantor_member_id, g.passcode_verified,
-            m.group_id AS guarantor_group_id, m.status AS member_status
-     FROM loan_guarantors g
-     JOIN members m ON m.id = g.guarantor_member_id
-     WHERE g.application_id = ? AND g.status = 'active'
-     ORDER BY g.created_at, g.id`,
-    applicationId,
-  );
-  const selectedCount = rows.length;
-  const signedCount = rows.filter((row) => Number(row.passcode_verified) === 1).length;
-  const externalCount = rows.filter((row) => Number(row.guarantor_group_id) !== groupId).length;
-  const uniqueCount = new Set(rows.map((row) => Number(row.guarantor_member_id))).size;
-  const allMembersActive = rows.every((row) => row.member_status?.toLowerCase() === 'active');
-  const nobodyIsBorrower = rows.every((row) => Number(row.guarantor_member_id) !== borrowerMemberId);
-  const groupRuleSatisfied = externalCount === 0;
-  const valid = selectedCount >= 1 && selectedCount <= 3 &&
-    uniqueCount === selectedCount && allMembersActive && nobodyIsBorrower &&
-    groupRuleSatisfied && signedCount === selectedCount;
-  return { selectedCount, signedCount, externalCount, valid };
-}
-
 /**
  * Atomically disburses an approved application, records the loan contract and
  * installment schedule, updates the Loan Fund and member passbook, and marks
@@ -6151,13 +6157,11 @@ export async function disburseApprovedLoanApplication(
     );
     if (Number(approvals?.count ?? 0) < Number(policy.minimum_committee_approvals)) throw new Error('The required number of loan committee approvals has not been reached.');
   }
-  const guarantorCheck = await checkLoanApplicationGuarantors(
-    db, applicationId, application.group_id, application.member_id,
-  );
-  if (!guarantorCheck.valid) {
-    throw new Error(
-      'Every selected guarantor must be an active member of the borrower’s VSLA group and sign with their own passcode before disbursement.',
+  if (Number(policy.require_guarantor)) {
+    const guarantors = await db.getFirstAsync<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM loan_guarantors WHERE application_id = ? AND status = 'active' AND passcode_verified = 1`, applicationId,
     );
+    if (Number(guarantors?.count ?? 0) < 1) throw new Error('A verified guarantor signature is required before disbursement.');
   }
   if (await isLoanDisbursementFrozen(application.group_id, application.member_id)) throw new Error('Loan disbursement is frozen by the Chairperson.');
 
@@ -6254,6 +6258,10 @@ export async function disburseApprovedLoanApplication(
       contractInterestPeriod === 'per month' ? 1 : 0, timestamp, timestamp,
     );
     const loanId = contract.lastInsertRowId;
+    await db.runAsync(
+      `UPDATE loan_interest_schedule_dates SET loan_id = ? WHERE application_id = ? AND loan_id IS NULL`,
+      loanId, applicationId,
+    );
     for (let index = 0; index < schedule.length; index += 1) {
       const item = schedule[index];
       await db.runAsync(
@@ -6514,10 +6522,10 @@ export type LoanApplicationInput = {
   requestedDueDate?: string | null;
   /** Number of days after the actual issue date for the first monthly interest calculation (27–37). */
   interestDayOffset?: number | null;
+  /** Explicit meeting-aligned interest dates shown on the New Loan screen. */
+  interestDates?: Array<{ label?: string; date: string }>;
   reason: string;
   requestedByMemberId?: number | null;
-  /** Active members selected to guarantee this loan (1–3 from the borrower's group). */
-  guarantorMemberIds: number[];
 };
 
 export async function createLoanApplication(
@@ -6566,30 +6574,6 @@ export async function createLoanApplication(
     throw new Error('Choose a monthly interest date between 27 and 37 days after the loan issue date.');
   }
   if (input.requestedDueDate && (!/^\d{4}-\d{2}-\d{2}$/.test(input.requestedDueDate) || Number.isNaN(new Date(`${input.requestedDueDate}T00:00:00`).getTime()))) throw new Error('Enter a valid due date in YYYY-MM-DD format.');
-
-  // Guarantors are required for every loan application. Keep their selection in
-  // the database before any signature can be accepted, so approval cannot be
-  // satisfied by a single signature when two or three guarantors were selected.
-  const guarantorMemberIds = input.guarantorMemberIds;
-  if (!Array.isArray(guarantorMemberIds) || guarantorMemberIds.length < 1 || guarantorMemberIds.length > 3) {
-    throw new Error('Select at least one and no more than three loan guarantors.');
-  }
-  if (guarantorMemberIds.some((id) => !Number.isInteger(id) || id <= 0) || new Set(guarantorMemberIds).size !== guarantorMemberIds.length) {
-    throw new Error('Guarantors must be valid members with no duplicates.');
-  }
-  if (guarantorMemberIds.includes(memberId)) throw new Error('The borrower cannot guarantee their own loan.');
-  const selectedGuarantors = await Promise.all(guarantorMemberIds.map(async (guarantorId) =>
-    db.getFirstAsync<{ id: number; group_id: number; status: string }>(
-      'SELECT id, group_id, status FROM members WHERE id = ? LIMIT 1', guarantorId,
-    ),
-  ));
-  if (selectedGuarantors.some((guarantor) => !guarantor || guarantor.status?.toLowerCase() !== 'active')) {
-    throw new Error('Every guarantor must be an active registered member.');
-  }
-  if (selectedGuarantors.some((guarantor) => !guarantor || Number(guarantor.group_id) !== groupId)) {
-    throw new Error('All guarantors must belong to the borrower’s VSLA group.');
-  }
-  const externalGuarantorCount = 0;
   await requireMemberPresentForLoan(db, groupId, memberId, meetingId);
   const freeze = await isLoanDisbursementFrozen(groupId, memberId);
   if (freeze) throw new Error('Loan applications are currently frozen by the Chairperson.');
@@ -6610,6 +6594,21 @@ export async function createLoanApplication(
       if (!Number(requester.is_super_user) && !roles.some((role) => role && EXECUTIVE_POSTS.includes(role as (typeof EXECUTIVE_POSTS)[number]))) throw new Error('Only the borrower or an active group executive can submit this loan application.');
     }
   }
+  const submittedInterestDates = Array.isArray(input.interestDates) ? input.interestDates : [];
+  if (submittedInterestDates.length > 0) {
+    if (submittedInterestDates.length !== repaymentPeriodCount) {
+      throw new Error('The saved interest-date count must match the selected loan term.');
+    }
+    let previousDate = '';
+    for (const item of submittedInterestDates) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(item.date) || Number.isNaN(new Date(`${item.date}T12:00:00`).getTime())) {
+        throw new Error('One of the scheduled interest dates is invalid.');
+      }
+      if (previousDate && item.date <= previousDate) throw new Error('Interest dates must be in ascending order.');
+      previousDate = item.date;
+    }
+  }
+
   const timestamp = now();
   const result = await db.runAsync(
     `INSERT INTO loan_applications (
@@ -6624,26 +6623,22 @@ export async function createLoanApplication(
     normalizeText(input.reason), input.requestedByMemberId ?? null,
     interestCalculator, interestPeriod, repaymentAmountMode, repaymentPeriodMode, timestamp, timestamp,
   );
-  const applicationId = Number(result.lastInsertRowId);
-  for (const guarantorId of guarantorMemberIds) {
-    await db.runAsync(
-      `INSERT INTO loan_guarantors (
-        application_id, group_id, guarantor_member_id, guarantee_amount,
-        signature_method, passcode_verified, signed_at, status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'member_passcode', 0, NULL, 'active', ?, ?)`,
-      applicationId, groupId, guarantorId, input.requestedAmount, timestamp, timestamp,
-    );
-  }
   await addLoanAudit(db, groupId, null, input.requestedByMemberId ?? null, 'loan_application_created', {
-    applicationId, memberId, requestedAmount: input.requestedAmount,
+    applicationId: result.lastInsertRowId, memberId, requestedAmount: input.requestedAmount,
     interestMethod, interestRate: input.interestRate,
     interestDayOffset: requestedInterestDayOffset,
     repaymentPeriodCount: input.repaymentPeriodCount, repaymentPeriodUnit: input.repaymentPeriodUnit,
+    interestDates: submittedInterestDates.map((item) => item.date),
     committeeApprovalRequired: Boolean(policy.require_committee_approval),
-    guarantorRequired: true,
-    selectedGuarantorCount: guarantorMemberIds.length,
-    externalGuarantorCount,
+    guarantorRequired: Boolean(policy.require_guarantor),
   });
+  for (let index = 0; index < submittedInterestDates.length; index += 1) {
+    await db.runAsync(
+      `INSERT INTO loan_interest_schedule_dates (application_id, loan_id, period_number, scheduled_date, created_at)
+       VALUES (?, NULL, ?, ?, ?)`,
+      result.lastInsertRowId, index + 1, submittedInterestDates[index].date, timestamp,
+    );
+  }
   return result.lastInsertRowId;
 }
 
@@ -6670,17 +6665,14 @@ export async function refreshLoanApplicationDecision(applicationId: number): Pro
   const policy = await getLoanPolicySettings(application.group_id);
   const approvals = await db.getFirstAsync<{ count: number }>(`SELECT COUNT(*) AS count FROM loan_committee_approvals WHERE application_id = ? AND decision = 'approved' AND passcode_verified = 1`, applicationId);
   const rejected = await db.getFirstAsync<{ count: number }>(`SELECT COUNT(*) AS count FROM loan_committee_approvals WHERE application_id = ? AND decision = 'rejected' AND passcode_verified = 1`, applicationId);
-  const guarantorCheck = await checkLoanApplicationGuarantors(
-    db, applicationId, application.group_id, application.member_id,
-  );
+  const guarantors = await db.getFirstAsync<{ count: number }>(`SELECT COUNT(*) AS count FROM loan_guarantors WHERE application_id = ? AND status = 'active' AND passcode_verified = 1`, applicationId);
   let status: 'pending' | 'approved' | 'rejected' = 'pending';
   if (Number(rejected?.count ?? 0) > 0) status = 'rejected';
-  else if (guarantorCheck.valid &&
-    (!Number(policy.require_committee_approval) || Number(approvals?.count ?? 0) >= Number(policy.minimum_committee_approvals))) status = 'approved';
+  else if ((!Number(policy.require_committee_approval) || Number(approvals?.count ?? 0) >= Number(policy.minimum_committee_approvals)) && (!Number(policy.require_guarantor) || Number(guarantors?.count ?? 0) >= 1)) status = 'approved';
   if (status !== 'pending') {
     const timestamp = now();
     await db.runAsync('UPDATE loan_applications SET status = ?, reviewed_at = ?, updated_at = ? WHERE id = ? AND status = \'pending\'', status, timestamp, timestamp, applicationId);
-    await addLoanAudit(db, application.group_id, null, null, 'loan_application_decided', { applicationId, status, approvals: Number(approvals?.count ?? 0), signedGuarantors: guarantorCheck.signedCount, selectedGuarantors: guarantorCheck.selectedCount, externalGuarantors: guarantorCheck.externalCount });
+    await addLoanAudit(db, application.group_id, null, null, 'loan_application_decided', { applicationId, status, approvals: Number(approvals?.count ?? 0), guarantors: Number(guarantors?.count ?? 0) });
   }
   return status;
 }
@@ -6702,57 +6694,41 @@ export async function saveLoanGuarantorSignature(
   passcode: string,
 ): Promise<number> {
   const db = await getDatabase();
-  const application = await db.getFirstAsync<{ id: number; group_id: number; member_id: number; requested_amount: number; status: string }>(
-    'SELECT id, group_id, member_id, requested_amount, status FROM loan_applications WHERE id = ? LIMIT 1', applicationId,
+  const application = await db.getFirstAsync<{ id: number; group_id: number; member_id: number; status: string }>(
+    'SELECT id, group_id, member_id, status FROM loan_applications WHERE id = ? LIMIT 1', applicationId,
   );
   if (!application) throw new Error('Loan application not found.');
   if (application.status !== 'pending') throw new Error('Guarantors can only sign while the loan application is pending.');
   if (guarantorMemberId === application.member_id) throw new Error('The borrower cannot guarantee their own loan.');
   if (!Number.isFinite(guaranteeAmount) || guaranteeAmount <= 0) throw new Error('Guarantee amount must be greater than zero.');
-
   const guarantor = await db.getFirstAsync<{ id: number; group_id: number; status: string }>(
     'SELECT id, group_id, status FROM members WHERE id = ? LIMIT 1', guarantorMemberId,
   );
-  if (!guarantor || guarantor.status?.toLowerCase() !== 'active') throw new Error('Choose an active registered guarantor.');
-
-  // A signature may only be recorded for a guarantor selected when the
-  // application was created. This keeps the required signing count fixed.
-  const existing = await db.getFirstAsync<{ id: number; guarantee_amount: number }>(
-    `SELECT id, guarantee_amount FROM loan_guarantors
-     WHERE application_id = ? AND guarantor_member_id = ? AND status = 'active' LIMIT 1`,
-    applicationId, guarantorMemberId,
-  );
-  if (!existing) throw new Error('This person was not selected as a guarantor for this loan application.');
-
-  const assignments = await db.getAllAsync<{ guarantor_member_id: number; guarantor_group_id: number }>(
-    `SELECT g.guarantor_member_id, m.group_id AS guarantor_group_id
-     FROM loan_guarantors g JOIN members m ON m.id = g.guarantor_member_id
-     WHERE g.application_id = ? AND g.status = 'active'`,
-    applicationId,
-  );
-  if (assignments.length < 1 || assignments.length > 3) throw new Error('The application must have between one and three selected guarantors.');
-  if (assignments.some((item) => Number(item.guarantor_group_id) !== Number(application.group_id))) {
-    throw new Error('All guarantors must belong to the borrower’s VSLA group.');
-  }
-
-  const verification = await verifyMemberPasscode(guarantorMemberId, Number(guarantor.group_id), passcode);
+  if (!guarantor || Number(guarantor.group_id) !== application.group_id || guarantor.status !== 'active') throw new Error('Choose an active guarantor from the same group.');
+  const verification = await verifyMemberPasscode(guarantorMemberId, application.group_id, passcode);
   if (!verification.success) throw new Error('Guarantor passcode could not be verified. Ask the guarantor to unlock their account or check their passcode.');
 
   const timestamp = now();
-  await db.runAsync(
-    `UPDATE loan_guarantors
-     SET guarantee_amount = ?, passcode_verified = 1, signed_at = ?, updated_at = ?
-     WHERE id = ? AND application_id = ?`,
-    Math.max(Number(existing.guarantee_amount ?? application.requested_amount), guaranteeAmount),
-    timestamp, timestamp, existing.id, applicationId,
+  const existing = await db.getFirstAsync<{ id: number }>(
+    'SELECT id FROM loan_guarantors WHERE application_id = ? AND guarantor_member_id = ? LIMIT 1', applicationId, guarantorMemberId,
   );
-  await addLoanAudit(db, application.group_id, null, guarantorMemberId, 'guarantor_signed', {
-    applicationId, guarantorMemberId, guaranteeAmount, guarantorGroupId: Number(guarantor.group_id),
-    externalToBorrowerGroup: Number(guarantor.group_id) !== application.group_id,
-    signatureMethod: 'member_passcode',
-  });
+  if (existing) {
+    await db.runAsync(
+      `UPDATE loan_guarantors SET guarantee_amount = ?, passcode_verified = 1, signed_at = ?, status = 'active', updated_at = ? WHERE id = ?`,
+      guaranteeAmount, timestamp, timestamp, existing.id,
+    );
+    await addLoanAudit(db, application.group_id, null, guarantorMemberId, 'guarantor_signature_updated', { applicationId, guarantorMemberId, guaranteeAmount });
+    await refreshLoanApplicationDecision(applicationId);
+    return existing.id;
+  }
+  const result = await db.runAsync(
+    `INSERT INTO loan_guarantors (application_id, group_id, guarantor_member_id, guarantee_amount, signature_method, passcode_verified, signed_at, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'member_passcode', 1, ?, 'active', ?, ?)`,
+    applicationId, application.group_id, guarantorMemberId, guaranteeAmount, timestamp, timestamp, timestamp,
+  );
+  await addLoanAudit(db, application.group_id, null, guarantorMemberId, 'guarantor_signed', { applicationId, guarantorMemberId, guaranteeAmount, signatureMethod: 'member_passcode' });
   await refreshLoanApplicationDecision(applicationId);
-  return existing.id;
+  return result.lastInsertRowId;
 }
 
 export async function assignLoanCommitteeMember(
@@ -8321,19 +8297,16 @@ async function getCycleNumberForMeeting(
   const rules =
     await getVSLASetupRules(groupId);
 
-  const meetingsPerCycle =
-    Math.max(
-      1,
-      rules?.meeting_frequency
-        ?.toLowerCase()
-        .includes('monthly')
-        ? 12
-        : rules?.meeting_frequency
-            ?.toLowerCase()
-            .includes('weekly')
-          ? 52
-          : 1,
-    );
+  const frequency = String(rules?.meeting_frequency ?? '').toLowerCase();
+  const meetingsPerCycle = frequency.startsWith('twice_')
+    ? 24
+    : frequency.includes('monthly')
+      ? 12
+      : frequency.includes('weekly')
+        ? 52
+        : frequency === 'biweekly'
+          ? 26
+          : 1;
 
   return (
     Math.floor(
