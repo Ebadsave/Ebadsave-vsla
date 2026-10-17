@@ -80,6 +80,7 @@ export type VSLASetupRuleRecord = {
   loan_interest_period: string;
   maximum_loan_repayment_period: number;
   social_fund_contribution: number;
+  insurance_contribution_amount: number;
   absence_fine: number;
   late_fine: number;
   non_saving_fine: number;
@@ -265,6 +266,7 @@ export type VSLASetupRuleUpdates = {
   loanInterestPeriod?: string;
   maximumLoanRepaymentPeriod?: number;
   socialFundContribution?: number;
+  insuranceContributionAmount?: number;
   absenceFine?: number;
   lateFine?: number;
   nonSavingFine?: number;
@@ -736,6 +738,7 @@ async function createDefaultVSLASetupRules(
       loan_interest_period,
       maximum_loan_repayment_period,
       social_fund_contribution,
+      insurance_contribution_amount,
       absence_fine,
       late_fine,
       non_saving_fine,
@@ -749,7 +752,7 @@ async function createDefaultVSLASetupRules(
       created_at,
       updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     groupId,
     1000,
     1,
@@ -762,6 +765,7 @@ async function createDefaultVSLASetupRules(
     'common_vsla',
     'per month',
     12,
+    0,
     0,
     0,
     0,
@@ -832,6 +836,26 @@ async function applyDueNextOfKinChanges(
     );
 
   for (const change of pending) {
+    // Once Slot 1 or Slot 2 has paid out a benefit, its contact is permanent.
+    // Discard any older scheduled edit that would otherwise change a locked slot.
+    if (change.slot === 1 || change.slot === 2) {
+      const currentKin = await db.getFirstAsync<{ locked: number; benefit_received: number }>(
+        `SELECT locked, benefit_received
+         FROM member_next_of_kin
+         WHERE member_id = ? AND slot = ?
+         LIMIT 1`,
+        change.member_id,
+        change.slot,
+      );
+      if (Number(currentKin?.locked ?? 0) === 1 || Number(currentKin?.benefit_received ?? 0) === 1) {
+        await db.runAsync(
+          `UPDATE next_of_kin_change_history SET applied = 1 WHERE id = ?`,
+          change.id,
+        );
+        continue;
+      }
+    }
+
     if (change.action === 'delete') {
       await db.runAsync(
         `UPDATE member_next_of_kin
@@ -1079,6 +1103,7 @@ status TEXT NOT NULL DEFAULT 'active',
       loan_interest_period TEXT NOT NULL DEFAULT 'per month',
       maximum_loan_repayment_period INTEGER NOT NULL DEFAULT 12,
       social_fund_contribution REAL NOT NULL DEFAULT 0,
+      insurance_contribution_amount REAL NOT NULL DEFAULT 0,
       absence_fine REAL NOT NULL DEFAULT 0,
       late_fine REAL NOT NULL DEFAULT 0,
       non_saving_fine REAL NOT NULL DEFAULT 0,
@@ -1868,6 +1893,13 @@ status TEXT NOT NULL DEFAULT 'active',
   await addColumnIfMissing(
     db,
     'vsla_setup_rules',
+    'insurance_contribution_amount',
+    'REAL NOT NULL DEFAULT 0',
+  );
+
+  await addColumnIfMissing(
+    db,
+    'vsla_setup_rules',
     'allow_social_fund_for_loans',
     'INTEGER NOT NULL DEFAULT 0',
   );
@@ -2050,6 +2082,23 @@ status TEXT NOT NULL DEFAULT 'active',
       number += 1;
     }
   }
+
+  // Migration guard: restore permanent one-time locks from benefit history,
+  // even if an older app version left the current slot flags out of sync.
+  await db.runAsync(
+    `UPDATE member_next_of_kin
+     SET benefit_received = 1, locked = 1, updated_at = ?
+     WHERE slot IN (1, 2)
+       AND (COALESCE(benefit_received, 0) <> 1 OR COALESCE(locked, 0) <> 1)
+       AND EXISTS (
+         SELECT 1
+         FROM next_of_kin_benefits b
+         WHERE b.member_id = member_next_of_kin.member_id
+           AND b.slot = member_next_of_kin.slot
+           AND b.status = 'received'
+       )`,
+    now(),
+  );
 
   return db;
 }
@@ -3816,6 +3865,11 @@ export async function updateVSLASetupRules(
     data.socialFundContribution ??
     current.social_fund_contribution;
 
+  const insuranceContributionAmount =
+    data.insuranceContributionAmount !== undefined
+      ? Number(data.insuranceContributionAmount)
+      : Number(current.insurance_contribution_amount ?? 0);
+
   const absenceFine =
     data.absenceFine ??
     current.absence_fine;
@@ -3967,6 +4021,15 @@ export async function updateVSLASetupRules(
   }
 
   if (
+    !Number.isFinite(insuranceContributionAmount) ||
+    insuranceContributionAmount < 0
+  ) {
+    throw new Error(
+      'Insurance contribution per meeting cannot be negative.',
+    );
+  }
+
+  if (
     !Number.isFinite(absenceFine) ||
     absenceFine < 0
   ) {
@@ -4083,6 +4146,7 @@ export async function updateVSLASetupRules(
        loan_interest_period = ?,
        maximum_loan_repayment_period = ?,
        social_fund_contribution = ?,
+       insurance_contribution_amount = ?,
        absence_fine = ?,
        late_fine = ?,
        non_insurance_contribution = ?,
@@ -4111,6 +4175,7 @@ export async function updateVSLASetupRules(
     loanInterestPeriod,
     maximumLoanRepaymentPeriod,
     socialFundContribution,
+    insuranceContributionAmount,
     absenceFine,
     lateFine,
     nonInsuranceContribution,
@@ -4251,6 +4316,13 @@ function createMemberNumber(
   return `KYA${String(groupNumber).padStart(4, '0')}${String(sequence).padStart(3, '0')}`;
 }
 
+export type RequiredMemberNextOfKin = {
+  slot: 1 | 2;
+  name: string;
+  phone: string;
+  gender?: string | null;
+};
+
 export async function registerMember(
   groupId: number,
   fullName: string,
@@ -4259,6 +4331,7 @@ export async function registerMember(
   phone = '',
   cell = '',
   district = '',
+  nextOfKin: RequiredMemberNextOfKin[],
   photoUri: string | null = null,
 ): Promise<number> {
   const db = await getDatabase();
@@ -4305,6 +4378,12 @@ export async function registerMember(
 
   if (!normalizeText(district)) {
     throw new Error('District is required.');
+  }
+
+  const kin1 = Array.isArray(nextOfKin) ? nextOfKin.find((item) => item.slot === 1) : undefined;
+  const kin2 = Array.isArray(nextOfKin) ? nextOfKin.find((item) => item.slot === 2) : undefined;
+  if (!kin1 || !normalizeText(kin1.name) || !normalizeText(kin1.phone) || !kin2 || !normalizeText(kin2.name) || !normalizeText(kin2.phone)) {
+    throw new Error('Every member must have two named next-of-kin contacts with phone numbers.');
   }
 
   const group =
@@ -4375,13 +4454,19 @@ export async function registerMember(
       updated_at
     )
     VALUES
-      (?, 1, NULL, NULL, NULL, 0, 0, ?, ?),
-      (?, 2, NULL, NULL, NULL, 0, 0, ?, ?),
+      (?, 1, ?, ?, ?, 0, 0, ?, ?),
+      (?, 2, ?, ?, ?, 0, 0, ?, ?),
       (?, 3, NULL, NULL, NULL, 0, 0, ?, ?)`,
     memberId,
+    normalizeText(kin1.name),
+    normalizeText(kin1.phone),
+    normalizeText(kin1.gender ?? '') || null,
     timestamp,
     timestamp,
     memberId,
+    normalizeText(kin2.name),
+    normalizeText(kin2.phone),
+    normalizeText(kin2.gender ?? '') || null,
     timestamp,
     timestamp,
     memberId,
@@ -4710,6 +4795,10 @@ export async function requestNextOfKinChange(
     );
   }
 
+  if (!normalizeText(name) || !normalizeText(phone)) {
+    throw new Error('Enter the replacement next-of-kin name and phone number.');
+  }
+
   await applyDueNextOfKinChanges(db);
   await applyDueNextOfKinBenefits(db);
 
@@ -4723,14 +4812,14 @@ export async function requestNextOfKinChange(
   }
 
   if (
-    kin.locked === 1 ||
-    kin.benefit_received === 1
+    (slot === 1 || slot === 2) &&
+    (Number(kin.locked) === 1 || Number(kin.benefit_received) === 1)
   ) {
-    throw new Error(
-      'This next-of-kin slot is locked because benefits have been received.',
-    );
+    throw new Error(`Slot ${slot} is permanently locked because a benefit has already been paid through it. It cannot be edited, replaced, or reused.`);
   }
 
+  // Slots 1 and 2 may be edited only before their first payout. Once paid,
+  // neither the UI nor any direct database call can reopen or replace them.
   await assertNoPendingKinChange(
     db,
     memberId,
@@ -4794,6 +4883,10 @@ export async function requestNextOfKinDeletion(
   const db = await getDatabase();
 
   validateKinSlot(slot);
+
+  if (slot === 1 || slot === 2) {
+    throw new Error('Next-of-kin Slots 1 and 2 are required. Replace a contact instead of deleting it.');
+  }
 
   if (!normalizeText(reason)) {
     throw new Error(
@@ -4880,93 +4973,33 @@ export async function recordNextOfKinBenefit(
   reason: string,
   effectiveDays = 30,
 ): Promise<number> {
-  const db = await getDatabase();
-
+  // Compatibility wrapper for older callers. Insurance payouts are immediate,
+  // fund-backed transactions and always require a contribution in the open meeting.
+  void effectiveDays;
   validateKinSlot(slot);
 
-  if (
-    !Number.isFinite(amount) ||
-    amount < 0
-  ) {
-    throw new Error(
-      'Benefit amount is invalid.',
-    );
-  }
-
-  if (!normalizeText(reason)) {
-    throw new Error(
-      'A reason is required for a benefit.',
-    );
-  }
-
-  await applyDueNextOfKinChanges(db);
-  await applyDueNextOfKinBenefits(db);
-
-  const member = await db.getFirstAsync<{ status: string }>(
-    `SELECT status FROM members WHERE id = ? LIMIT 1`,
+  const db = await getDatabase();
+  const member = await db.getFirstAsync<{ group_id: number; status: string }>(
+    `SELECT group_id, status FROM members WHERE id = ? LIMIT 1`,
     memberId,
   );
-
   if (!member || String(member.status).toLowerCase() !== 'active') {
-    throw new Error(
-      'Insurance benefits are available only to active members.',
-    );
+    throw new Error('Insurance benefits are available only to active members.');
   }
 
-  const kin =
-    await getKin(db, memberId, slot);
-
-  if (!kin) {
-    throw new Error(
-      'Next-of-kin slot not found.',
-    );
+  const meeting = await getOpenMeeting(Number(member.group_id));
+  if (!meeting) {
+    throw new Error('Open a group meeting before recording an insurance benefit.');
   }
 
-  // Slot 3 stays open. Slots 1 and 2 retain lock-after-benefit behavior.
-  if (
-    slot !== 3 &&
-    (kin.locked === 1 || kin.benefit_received === 1)
-  ) {
-    throw new Error(
-      'This next-of-kin slot has already received benefits and is locked.',
-    );
-  }
-
-  await assertNoPendingKinBenefit(
-    db,
+  return recordInsuranceKinBenefit(
+    Number(member.group_id),
     memberId,
-    slot,
+    slot as 1 | 2 | 3,
+    amount,
+    reason,
+    meeting.id,
   );
-
-  const effectiveDate =
-    new Date();
-
-  effectiveDate.setDate(
-    effectiveDate.getDate() +
-      Math.max(0, effectiveDays),
-  );
-
-  const result =
-    await db.runAsync(
-      `INSERT INTO next_of_kin_benefits (
-        member_id,
-        slot,
-        benefit_amount,
-        reason,
-        benefit_date,
-        effective_at,
-        status
-      )
-      VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
-      memberId,
-      slot,
-      amount,
-      normalizeText(reason),
-      now(),
-      effectiveDate.toISOString(),
-    );
-
-  return result.lastInsertRowId;
 }
 
 export type HomeDashboardSummary = FinancialSummary & {
@@ -5449,6 +5482,19 @@ export async function createFinancialCollection(
         `Fine payment cannot exceed the member's outstanding fine balance of ${outstandingFineTotal.toLocaleString()}.`,
       );
     }
+  }
+
+  const insurancePayments = payments.filter((payment) => payment.accountType === 'insurance_fund');
+  if (insurancePayments.length > 0) {
+    if (insurancePayments.length > 1) {
+      throw new Error('Record only one insurance contribution per member per meeting.');
+    }
+    if (memberId === null) {
+      throw new Error('An insurance contribution must belong to a member.');
+    }
+    await assertInsuranceContributionAllowed(
+      db, groupId, memberId, insurancePayments[0].amount, meetingId, true,
+    );
   }
 
   const totalAmount =
@@ -7497,108 +7543,423 @@ export async function recordExpenditure(
   );
 }
 
+async function requireOpenInsuranceMeeting(
+  db: SQLite.SQLiteDatabase,
+  groupId: number,
+  meetingId: number | null,
+): Promise<void> {
+  if (!Number.isInteger(meetingId) || Number(meetingId) <= 0) {
+    throw new Error('Open a group meeting before recording an insurance contribution or benefit.');
+  }
+  const meeting = await db.getFirstAsync<{ group_id: number; status: string }>(
+    `SELECT group_id, status FROM group_meetings WHERE id = ? LIMIT 1`,
+    meetingId,
+  );
+  if (!meeting || Number(meeting.group_id) !== groupId || String(meeting.status).toLowerCase() !== 'open') {
+    throw new Error('Insurance contributions and benefits can only be recorded against this group’s open meeting.');
+  }
+}
+
+async function getAgreedInsuranceContribution(
+  db: SQLite.SQLiteDatabase,
+  groupId: number,
+): Promise<number> {
+  const rules = await db.getFirstAsync<{ insurance_contribution_amount: number }>(
+    `SELECT insurance_contribution_amount FROM vsla_setup_rules WHERE group_id = ? LIMIT 1`,
+    groupId,
+  );
+  const amount = Number(rules?.insurance_contribution_amount ?? 0);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error('Set the agreed Insurance Contribution per Member per Meeting in Setup Rules before collecting insurance.');
+  }
+  return amount;
+}
+
+async function assertInsuranceContributionAllowed(
+  db: SQLite.SQLiteDatabase,
+  groupId: number,
+  memberId: number,
+  amount: number,
+  meetingId: number | null,
+  checkDuplicate: boolean,
+): Promise<void> {
+  await requireOpenInsuranceMeeting(db, groupId, meetingId);
+  const member = await db.getFirstAsync<{ group_id: number; status: string }>(
+    `SELECT group_id, status FROM members WHERE id = ? LIMIT 1`,
+    memberId,
+  );
+  if (!member || Number(member.group_id) !== groupId || String(member.status).toLowerCase() !== 'active') {
+    throw new Error('Only active members of this group can pay insurance contributions.');
+  }
+  const agreedAmount = await getAgreedInsuranceContribution(db, groupId);
+  if (!Number.isFinite(amount) || Math.abs(amount - agreedAmount) > 0.0001) {
+    throw new Error(`The agreed insurance contribution per member is ${agreedAmount.toLocaleString()}. Record that exact amount.`);
+  }
+  if (checkDuplicate) {
+    // Contributions belong to an insurance collection cycle, not to each meeting.
+    // A new cycle starts only after an insurance benefit has actually been disbursed.
+    const lastPayout = await db.getFirstAsync<{ id: number }>(
+      `SELECT id FROM financial_transactions
+       WHERE group_id = ? AND account_type = 'insurance_fund'
+         AND transaction_type = 'insurance_benefit' AND reversed = 0
+       ORDER BY id DESC LIMIT 1`,
+      groupId,
+    );
+    const existing = await db.getFirstAsync<{ id: number }>(
+      `SELECT id FROM financial_transactions
+       WHERE group_id = ? AND member_id = ?
+         AND account_type = 'insurance_fund'
+         AND transaction_type = 'insurance_contribution'
+         AND reversed = 0 AND id > ? LIMIT 1`,
+      groupId, memberId, Number(lastPayout?.id ?? 0),
+    );
+    if (existing) {
+      throw new Error('This member has already contributed to the current insurance collection cycle. Another contribution becomes due only after an insurance benefit has been disbursed.');
+    }
+  }
+}
+
+async function assertMemberInsuranceEligible(
+  db: SQLite.SQLiteDatabase,
+  groupId: number,
+  memberId: number,
+  meetingId: number | null,
+): Promise<void> {
+  await requireOpenInsuranceMeeting(db, groupId, meetingId);
+  const member = await db.getFirstAsync<{ group_id: number; status: string }>(
+    `SELECT group_id, status FROM members WHERE id = ? LIMIT 1`,
+    memberId,
+  );
+  if (!member || Number(member.group_id) !== groupId || String(member.status).toLowerCase() !== 'active') {
+    throw new Error('Insurance benefits are available only to active members of this group.');
+  }
+  const requiredKin = await db.getFirstAsync<{ completed: number }>(
+    `SELECT COUNT(*) AS completed
+     FROM member_next_of_kin
+     WHERE member_id = ? AND slot IN (1, 2)
+       AND TRIM(COALESCE(name, '')) <> ''
+       AND TRIM(COALESCE(phone, '')) <> ''`,
+    memberId,
+  );
+  if (Number(requiredKin?.completed ?? 0) !== 2) {
+    throw new Error('This member must have both required next-of-kin contacts (Slots 1 and 2, each with a name and phone number) completed before any insurance benefit can be disbursed.');
+  }
+
+  const requiredAmount = await getAgreedInsuranceContribution(db, groupId);
+  const lastPayout = await db.getFirstAsync<{ id: number }>(
+    `SELECT id FROM financial_transactions
+     WHERE group_id = ? AND account_type = 'insurance_fund'
+       AND transaction_type = 'insurance_benefit' AND reversed = 0
+     ORDER BY id DESC LIMIT 1`,
+    groupId,
+  );
+  const contribution = await db.getFirstAsync<{ total: number }>(
+    `SELECT COALESCE(SUM(amount), 0) AS total
+     FROM financial_transactions
+     WHERE group_id = ? AND member_id = ? AND id > ?
+       AND account_type = 'insurance_fund'
+       AND transaction_type = 'insurance_contribution'
+       AND reversed = 0`,
+    groupId, memberId, Number(lastPayout?.id ?? 0),
+  );
+  if (Number(contribution?.total ?? 0) + 0.0001 < requiredAmount) {
+    throw new Error('This member has not contributed the agreed amount to the current insurance collection cycle and is not eligible for an insurance benefit. A new contribution cycle starts after a benefit is disbursed.');
+  }
+}
+
+export type InsuranceContributionStatus = {
+  member_id: number;
+  contribution_amount: number;
+  contributed: boolean;
+};
+
+export async function getInsuranceContributionStatus(
+  groupId: number,
+  meetingId: number,
+): Promise<InsuranceContributionStatus[]> {
+  const db = await getDatabase();
+  const requiredAmount = await getAgreedInsuranceContribution(db, groupId);
+  const lastPayout = await db.getFirstAsync<{ id: number }>(
+    `SELECT id FROM financial_transactions
+     WHERE group_id = ? AND account_type = 'insurance_fund'
+       AND transaction_type = 'insurance_benefit' AND reversed = 0
+     ORDER BY id DESC LIMIT 1`,
+    groupId,
+  );
+  const rows = await db.getAllAsync<{ member_id: number; contribution_amount: number }>(
+    `SELECT m.id AS member_id,
+            COALESCE(SUM(CASE WHEN ft.reversed = 0 THEN ft.amount ELSE 0 END), 0) AS contribution_amount
+     FROM members m
+     LEFT JOIN financial_transactions ft
+       ON ft.group_id = m.group_id
+       AND ft.member_id = m.id
+       AND ft.id > ?
+       AND ft.account_type = 'insurance_fund'
+       AND ft.transaction_type = 'insurance_contribution'
+     WHERE m.group_id = ? AND LOWER(m.status) = 'active'
+     GROUP BY m.id
+     ORDER BY m.id ASC`,
+    Number(lastPayout?.id ?? 0),
+    groupId,
+  );
+  return rows.map((row) => ({
+    member_id: Number(row.member_id),
+    contribution_amount: Number(row.contribution_amount ?? 0),
+    contributed: Number(row.contribution_amount ?? 0) + 0.0001 >= requiredAmount,
+  }));
+}
+
 export async function recordInsuranceContribution(
   groupId: number,
   memberId: number,
   amount: number,
   meetingId: number | null = null,
 ): Promise<number> {
-  return recordFinancialIncome(
-    groupId,
-    'insurance_fund',
-    amount,
-    'Insurance contribution',
-    memberId,
-    meetingId,
-    'insurance_contribution',
-  );
+  const db = await getDatabase();
+  await assertInsuranceContributionAllowed(db, groupId, memberId, amount, meetingId, true);
+
+  await db.execAsync('BEGIN TRANSACTION;');
+  try {
+    const transactionId = await recordFinancialIncome(
+      groupId,
+      'insurance_fund',
+      amount,
+      'Insurance contribution',
+      memberId,
+      meetingId,
+      'insurance_contribution',
+    );
+    await db.execAsync('COMMIT;');
+    return transactionId;
+  } catch (error) {
+    await db.execAsync('ROLLBACK;').catch(() => undefined);
+    throw error;
+  }
 }
 
+async function recordInsurancePayout(
+  groupId: number,
+  memberId: number,
+  amount: number,
+  reason: string,
+  meetingId: number | null,
+  beneficiaryLabel: string,
+  kinSlot?: 1 | 2 | 3,
+): Promise<number> {
+  const db = await getDatabase();
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error('Insurance benefit amount must be greater than zero.');
+  }
+  const cleanReason = normalizeText(reason);
+  if (!cleanReason) throw new Error('A reason is required for every insurance benefit.');
+
+  await assertMemberInsuranceEligible(db, groupId, memberId, meetingId);
+  const account = await getFinancialAccount(groupId, 'insurance_fund');
+  if (!account) throw new Error('Insurance Fund account was not found.');
+  if (Number(account.balance) + 0.0001 < amount) {
+    throw new Error('Insufficient Insurance Fund balance.');
+  }
+  const member = await db.getFirstAsync<{ full_name: string }>(
+    `SELECT full_name FROM members WHERE id = ? LIMIT 1`,
+    memberId,
+  );
+  const group = await db.getFirstAsync<{ group_name: string; currency: string }>(
+    `SELECT group_name, currency FROM groups WHERE id = ? LIMIT 1`,
+    groupId,
+  );
+  const timestamp = now();
+
+  await db.execAsync('BEGIN TRANSACTION;');
+  try {
+    const transactionId = await recordFinancialExpense(
+      groupId,
+      'insurance_fund',
+      amount,
+      cleanReason,
+      memberId,
+      meetingId,
+      'insurance_benefit',
+    );
+
+    if (kinSlot !== undefined) {
+      await db.runAsync(
+        `INSERT INTO next_of_kin_benefits (
+          member_id, slot, benefit_amount, reason, benefit_date, effective_at, status
+        ) VALUES (?, ?, ?, ?, ?, ?, 'received')`,
+        memberId, kinSlot, amount, cleanReason, timestamp, timestamp,
+      );
+      if (kinSlot === 3) {
+        await db.runAsync(
+          `UPDATE member_next_of_kin SET benefit_received = 0, locked = 0, updated_at = ? WHERE member_id = ? AND slot = 3`,
+          timestamp, memberId,
+        );
+      } else {
+        await db.runAsync(
+          `UPDATE member_next_of_kin SET benefit_received = 1, locked = 1, updated_at = ? WHERE member_id = ? AND slot = ?`,
+          timestamp, memberId, kinSlot,
+        );
+      }
+    }
+
+    const currency = normalizeText(group?.currency ?? '') || 'UGX';
+    const message = `Executive insurance disbursement for ${member?.full_name ?? 'a group member'}; beneficiary: ${beneficiaryLabel}; amount: ${currency} ${amount.toLocaleString()}; reason: ${cleanReason}. A new insurance contribution is due from each member at the next meeting.`;
+    // member_id = NULL marks this as a group-wide notification in the existing queue.
+    await queueNotification(
+      groupId,
+      null,
+      'insurance_benefit_disbursed',
+      'Insurance Benefit Disbursed',
+      message,
+      'high',
+    );
+
+    await db.execAsync('COMMIT;');
+    return transactionId;
+  } catch (error) {
+    await db.execAsync('ROLLBACK;').catch(() => undefined);
+    throw error;
+  }
+}
+
+/**
+ * Legacy slot-4 member benefit calls are intentionally blocked.
+ * Slot 4 now represents an executive-authorized lump-sum transfer to another
+ * group, never a direct payout to an individual member.
+ */
 export async function recordInsuranceBenefit(
   groupId: number,
   memberId: number,
   amount: number,
   reason: string,
   meetingId: number | null = null,
+  beneficiaryLabel = 'Slot 4 — Group-to-group benefit',
+): Promise<number> {
+  void groupId;
+  void memberId;
+  void amount;
+  void reason;
+  void meetingId;
+  void beneficiaryLabel;
+  throw new Error('Slot 4 is reserved for executive-authorized whole-sum disbursements to another group. Use recordInsuranceGroupBenefit. Individual member benefits must use next-of-kin Slots 1, 2, or 3.');
+}
+
+export async function recordInsuranceGroupBenefit(
+  groupId: number,
+  recipientGroupName: string,
+  amount: number,
+  reason: string,
+  meetingId: number | null,
+  executiveMemberId: number,
 ): Promise<number> {
   const db = await getDatabase();
+  const targetGroup = normalizeText(recipientGroupName);
+  const cleanReason = normalizeText(reason);
 
-  if (
-    !Number.isFinite(amount) ||
-    amount <= 0
-  ) {
-    throw new Error(
-      'Insurance benefit amount must be greater than zero.',
-    );
-  }
+  if (!targetGroup) throw new Error('Enter the name of the other group receiving the Slot 4 insurance benefit.');
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('Insurance group disbursement amount must be greater than zero.');
+  if (!cleanReason) throw new Error('A reason is required for every insurance group disbursement.');
 
-  if (!normalizeText(reason)) {
-    throw new Error(
-      'A reason is required for every insurance benefit.',
-    );
-  }
+  await requireOpenInsuranceMeeting(db, groupId, meetingId);
+  await getAgreedInsuranceContribution(db, groupId);
 
-  const member = await db.getFirstAsync<{ status: string }>(
-    `SELECT status FROM members WHERE id = ? LIMIT 1`,
-    memberId,
+  const group = await db.getFirstAsync<{ group_name: string; currency: string }>(
+    `SELECT group_name, currency FROM groups WHERE id = ? LIMIT 1`,
+    groupId,
   );
-
-  if (!member || String(member.status).toLowerCase() !== 'active') {
-    throw new Error(
-      'Insurance benefits are available only to active members.',
-    );
+  if (!group) throw new Error('Group not found.');
+  if (targetGroup.toLowerCase() === normalizeText(group.group_name).toLowerCase()) {
+    throw new Error('Slot 4 is for disbursing a whole-sum benefit to another group, not the current group itself.');
   }
 
-  const contribution =
-    await db.getFirstAsync<{
-      total: number;
-    }>(
-      `SELECT COALESCE(SUM(amount), 0) AS total
-       FROM financial_transactions
-       WHERE group_id = ?
-       AND account_type = 'insurance_fund'
-       AND member_id = ?
-       AND transaction_type = 'insurance_contribution'
-       AND reversed = 0`,
-      groupId,
-      memberId,
-    );
-
-  if (
-    !contribution ||
-    contribution.total <= 0
-  ) {
-    throw new Error(
-      'This member is not insured and cannot receive an insurance benefit.',
-    );
+  const executive = await db.getFirstAsync<{
+    id: number; group_id: number; status: string; role: string | null;
+    assigned_roles: string | null; is_super_user: number | null; full_name: string;
+  }>(
+    `SELECT id, group_id, status, role, assigned_roles, is_super_user, full_name
+     FROM members WHERE id = ? LIMIT 1`,
+    executiveMemberId,
+  );
+  const executiveRoles = (executive?.assigned_roles || '')
+    .split(',')
+    .map((role: string) => canonicalExecutivePost(role));
+  const authorizedExecutive = Boolean(
+    executive &&
+    Number(executive.group_id) === groupId &&
+    String(executive.status).toLowerCase() === 'active' &&
+    (
+      String(executive.role || '').trim().toLowerCase() === 'executive' ||
+      Number(executive.is_super_user) === 1 ||
+      executiveRoles.some((role) => role && EXECUTIVE_POSTS.includes(role as (typeof EXECUTIVE_POSTS)[number]))
+    )
+  );
+  if (!authorizedExecutive || !executive) {
+    throw new Error('Only an active executive of this group can authorize a Slot 4 group-to-group disbursement.');
   }
 
-  const insuranceAccount =
-    await getFinancialAccount(
+  const currency = normalizeText(group.currency || '') || 'UGX';
+  const transactionReason = `Slot 4 group-to-group insurance benefit to ${targetGroup}. Reason: ${cleanReason}. Authorized by ${executive.full_name}.`;
+  await db.execAsync('BEGIN TRANSACTION;');
+  try {
+    // Re-check the available balance inside the transaction so simultaneous
+    // payouts cannot each spend the same available balance.
+    const account = await getFinancialAccount(groupId, 'insurance_fund');
+    if (!account) throw new Error('Insurance Fund account was not found.');
+    if (Number(account.balance) + 0.0001 < amount) throw new Error('Insufficient Insurance Fund balance.');
+
+    const transactionId = await recordFinancialExpense(
       groupId,
       'insurance_fund',
+      amount,
+      transactionReason,
+      null,
+      meetingId,
+      'insurance_benefit',
     );
 
-  if (!insuranceAccount) {
-    throw new Error(
-      'Insurance Fund account was not found.',
+    const message = `Executive Slot 4 insurance disbursement from ${group.group_name} to ${targetGroup}; amount: ${currency} ${amount.toLocaleString()}; reason: ${cleanReason}; authorized by: ${executive.full_name}. This is a whole-sum group-to-group benefit and is not an individual member payout. Every member must contribute the agreed insurance amount again at the next meeting. Individual members who have not contributed for the current meeting remain ineligible for individual insurance benefits.`;
+    await queueNotification(
+      groupId,
+      null,
+      'insurance_group_benefit_disbursed',
+      'Slot 4 Insurance Fund Disbursement',
+      message,
+      'high',
     );
+
+    await db.execAsync('COMMIT;');
+    return transactionId;
+  } catch (error) {
+    await db.execAsync('ROLLBACK;').catch(() => undefined);
+    throw error;
   }
+}
 
-  if (insuranceAccount.balance < amount) {
-    throw new Error(
-      'Insufficient Insurance Fund balance.',
-    );
+export async function recordInsuranceKinBenefit(
+  groupId: number,
+  memberId: number,
+  slot: 1 | 2 | 3,
+  amount: number,
+  reason: string,
+  meetingId: number | null = null,
+): Promise<number> {
+  const db = await getDatabase();
+  if (![1, 2, 3].includes(slot)) throw new Error('Choose next-of-kin slot 1, 2, or 3.');
+  const kin = await getKin(db, memberId, slot);
+  if (!kin || !normalizeText(kin.name)) {
+    throw new Error(`Add a named next-of-kin beneficiary to slot ${slot} before disbursing the benefit.`);
   }
-
-  return recordFinancialExpense(
+  if (slot !== 3 && (Number(kin.locked) === 1 || Number(kin.benefit_received) === 1)) {
+    throw new Error(`Slot ${slot} is permanently locked because a benefit has already been paid through it. It cannot be edited, replaced, or reused.`);
+  }
+  await assertNoPendingKinBenefit(db, memberId, slot);
+  return recordInsurancePayout(
     groupId,
-    'insurance_fund',
+    memberId,
     amount,
     reason,
-    memberId,
     meetingId,
-    'insurance_benefit',
+    `Slot ${slot} next of kin — ${kin.name}`,
+    slot,
   );
 }
 
@@ -8777,7 +9138,11 @@ async function applyAutomaticMeetingActivityFines(
       groupId, member.id, meetingId,
     );
 
-    if (Number(setup.non_insurance_contribution) > 0 && Number(insurance?.total ?? 0) <= 0) {
+    if (
+      Number(setup.insurance_contribution_amount ?? 0) > 0 &&
+      Number(setup.non_insurance_contribution) > 0 &&
+      Number(insurance?.total ?? 0) < Number(setup.insurance_contribution_amount)
+    ) {
       await addAutomaticFineIfNeeded(groupId, member.id, meetingId, Number(setup.non_insurance_contribution), 'Non-insurance-contribution fine');
     }
   }
@@ -9798,8 +10163,9 @@ export async function isPreAppAuthorized(
 
 
 /**
- * Insurance benefit availability for the Insurance screen.
- * Slot 3 and the member-level benefit are open for active members.
+ * Insurance benefit availability for individual member/next-of-kin benefits.
+ * Slots 1 and 2 permanently lock after payout; Slot 3 remains reusable.
+ * Slot 4 is a group-to-group disbursement and is not a member benefit slot.
  */
 export async function getInsuranceBenefitAvailability(
   memberId: number,
@@ -9848,7 +10214,7 @@ export async function getInsuranceBenefitAvailability(
 
   return {
     memberActive,
-    memberBenefitOpen: memberActive,
+    memberBenefitOpen: false,
     slots,
   };
 }
