@@ -2083,23 +2083,6 @@ status TEXT NOT NULL DEFAULT 'active',
     }
   }
 
-  // Migration guard: restore permanent one-time locks from benefit history,
-  // even if an older app version left the current slot flags out of sync.
-  await db.runAsync(
-    `UPDATE member_next_of_kin
-     SET benefit_received = 1, locked = 1, updated_at = ?
-     WHERE slot IN (1, 2)
-       AND (COALESCE(benefit_received, 0) <> 1 OR COALESCE(locked, 0) <> 1)
-       AND EXISTS (
-         SELECT 1
-         FROM next_of_kin_benefits b
-         WHERE b.member_id = member_next_of_kin.member_id
-           AND b.slot = member_next_of_kin.slot
-           AND b.status = 'received'
-       )`,
-    now(),
-  );
-
   return db;
 }
 
@@ -4331,7 +4314,7 @@ export async function registerMember(
   phone = '',
   cell = '',
   district = '',
-  nextOfKin: RequiredMemberNextOfKin[],
+  nextOfKin: RequiredMemberNextOfKin[] = [],
   photoUri: string | null = null,
 ): Promise<number> {
   const db = await getDatabase();
@@ -4382,8 +4365,14 @@ export async function registerMember(
 
   const kin1 = Array.isArray(nextOfKin) ? nextOfKin.find((item) => item.slot === 1) : undefined;
   const kin2 = Array.isArray(nextOfKin) ? nextOfKin.find((item) => item.slot === 2) : undefined;
-  if (!kin1 || !normalizeText(kin1.name) || !normalizeText(kin1.phone) || !kin2 || !normalizeText(kin2.name) || !normalizeText(kin2.phone)) {
-    throw new Error('Every member must have two named next-of-kin contacts with phone numbers.');
+  // Next-of-kin contacts are managed separately from member registration.
+  // If contacts are supplied by an older caller, validate both; otherwise
+  // register the member with empty Slots 1 and 2 for later completion.
+  if (Array.isArray(nextOfKin) && nextOfKin.length > 0 && (
+    !kin1 || !normalizeText(kin1.name) || !normalizeText(kin1.phone) ||
+    !kin2 || !normalizeText(kin2.name) || !normalizeText(kin2.phone)
+  )) {
+    throw new Error('Provide both next-of-kin contacts with names and phone numbers, or leave both empty.');
   }
 
   const group =
@@ -4458,15 +4447,15 @@ export async function registerMember(
       (?, 2, ?, ?, ?, 0, 0, ?, ?),
       (?, 3, NULL, NULL, NULL, 0, 0, ?, ?)`,
     memberId,
-    normalizeText(kin1.name),
-    normalizeText(kin1.phone),
-    normalizeText(kin1.gender ?? '') || null,
+    normalizeText(kin1?.name ?? '') || null,
+    normalizeText(kin1?.phone ?? '') || null,
+    normalizeText(kin1?.gender ?? '') || null,
     timestamp,
     timestamp,
     memberId,
-    normalizeText(kin2.name),
-    normalizeText(kin2.phone),
-    normalizeText(kin2.gender ?? '') || null,
+    normalizeText(kin2?.name ?? '') || null,
+    normalizeText(kin2?.phone ?? '') || null,
+    normalizeText(kin2?.gender ?? '') || null,
     timestamp,
     timestamp,
     memberId,
@@ -7593,28 +7582,19 @@ async function assertInsuranceContributionAllowed(
   }
   const agreedAmount = await getAgreedInsuranceContribution(db, groupId);
   if (!Number.isFinite(amount) || Math.abs(amount - agreedAmount) > 0.0001) {
-    throw new Error(`The agreed insurance contribution per member is ${agreedAmount.toLocaleString()}. Record that exact amount.`);
+    throw new Error(`The agreed insurance contribution for this meeting is ${agreedAmount.toLocaleString()}. Record that exact amount.`);
   }
   if (checkDuplicate) {
-    // Contributions belong to an insurance collection cycle, not to each meeting.
-    // A new cycle starts only after an insurance benefit has actually been disbursed.
-    const lastPayout = await db.getFirstAsync<{ id: number }>(
-      `SELECT id FROM financial_transactions
-       WHERE group_id = ? AND account_type = 'insurance_fund'
-         AND transaction_type = 'insurance_benefit' AND reversed = 0
-       ORDER BY id DESC LIMIT 1`,
-      groupId,
-    );
     const existing = await db.getFirstAsync<{ id: number }>(
       `SELECT id FROM financial_transactions
-       WHERE group_id = ? AND member_id = ?
+       WHERE group_id = ? AND member_id = ? AND meeting_id = ?
          AND account_type = 'insurance_fund'
          AND transaction_type = 'insurance_contribution'
-         AND reversed = 0 AND id > ? LIMIT 1`,
-      groupId, memberId, Number(lastPayout?.id ?? 0),
+         AND reversed = 0 LIMIT 1`,
+      groupId, memberId, meetingId,
     );
     if (existing) {
-      throw new Error('This member has already contributed to the current insurance collection cycle. Another contribution becomes due only after an insurance benefit has been disbursed.');
+      throw new Error('This member has already paid the insurance contribution for this meeting. The next contribution is due at the next meeting.');
     }
   }
 }
@@ -7646,24 +7626,17 @@ async function assertMemberInsuranceEligible(
   }
 
   const requiredAmount = await getAgreedInsuranceContribution(db, groupId);
-  const lastPayout = await db.getFirstAsync<{ id: number }>(
-    `SELECT id FROM financial_transactions
-     WHERE group_id = ? AND account_type = 'insurance_fund'
-       AND transaction_type = 'insurance_benefit' AND reversed = 0
-     ORDER BY id DESC LIMIT 1`,
-    groupId,
-  );
   const contribution = await db.getFirstAsync<{ total: number }>(
     `SELECT COALESCE(SUM(amount), 0) AS total
      FROM financial_transactions
-     WHERE group_id = ? AND member_id = ? AND id > ?
+     WHERE group_id = ? AND member_id = ? AND meeting_id = ?
        AND account_type = 'insurance_fund'
        AND transaction_type = 'insurance_contribution'
        AND reversed = 0`,
-    groupId, memberId, Number(lastPayout?.id ?? 0),
+    groupId, memberId, meetingId,
   );
   if (Number(contribution?.total ?? 0) + 0.0001 < requiredAmount) {
-    throw new Error('This member has not contributed the agreed amount to the current insurance collection cycle and is not eligible for an insurance benefit. A new contribution cycle starts after a benefit is disbursed.');
+    throw new Error('This member has not paid the agreed insurance contribution for the current meeting and is not eligible to receive an insurance benefit.');
   }
 }
 
@@ -7679,13 +7652,6 @@ export async function getInsuranceContributionStatus(
 ): Promise<InsuranceContributionStatus[]> {
   const db = await getDatabase();
   const requiredAmount = await getAgreedInsuranceContribution(db, groupId);
-  const lastPayout = await db.getFirstAsync<{ id: number }>(
-    `SELECT id FROM financial_transactions
-     WHERE group_id = ? AND account_type = 'insurance_fund'
-       AND transaction_type = 'insurance_benefit' AND reversed = 0
-     ORDER BY id DESC LIMIT 1`,
-    groupId,
-  );
   const rows = await db.getAllAsync<{ member_id: number; contribution_amount: number }>(
     `SELECT m.id AS member_id,
             COALESCE(SUM(CASE WHEN ft.reversed = 0 THEN ft.amount ELSE 0 END), 0) AS contribution_amount
@@ -7693,13 +7659,13 @@ export async function getInsuranceContributionStatus(
      LEFT JOIN financial_transactions ft
        ON ft.group_id = m.group_id
        AND ft.member_id = m.id
-       AND ft.id > ?
+       AND ft.meeting_id = ?
        AND ft.account_type = 'insurance_fund'
        AND ft.transaction_type = 'insurance_contribution'
      WHERE m.group_id = ? AND LOWER(m.status) = 'active'
      GROUP BY m.id
      ORDER BY m.id ASC`,
-    Number(lastPayout?.id ?? 0),
+    meetingId,
     groupId,
   );
   return rows.map((row) => ({
