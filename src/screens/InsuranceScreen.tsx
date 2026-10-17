@@ -500,7 +500,7 @@ This whole-sum transfer will debit this group's Insurance Fund and be announced 
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <Text style={styles.title}>Insurance Fund</Text>
-          <Text style={styles.subtitle}>One contribution per member per insurance collection cycle. Contributions reopen only after a benefit is disbursed. Slots 1–2 lock after payout, Slot 3 is reusable, and Slot 4 is executive-only for group-to-group disbursements.</Text>
+          <Text style={styles.subtitle}>One contribution per member per insurance collection cycle. Contributions reopen only after a benefit is disbursed. Executive group-to-group disbursements are managed below.</Text>
         </View>
 
         <View style={styles.balanceCard}>
@@ -572,26 +572,6 @@ This whole-sum transfer will debit this group's Insurance Fund and be announced 
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Executive Insurance Disbursement</Text>
-          {selectedMember ? (
-            <Text style={styles.helpText}>Selected member: {selectedMember.full_name}. {selectedMember.contributedThisMeeting ? 'The agreed insurance contribution is paid for the current cycle; individual benefits still require complete next-of-kin details.' : 'Not eligible for an individual benefit until their contribution for the current insurance collection cycle is recorded.'}</Text>
-          ) : (
-            <Text style={styles.helpText}>Select a member from the list above to see their beneficiary slots and to record an insurance benefit.</Text>
-          )}
-          <Text style={styles.fieldLabel}>Benefit amount</Text>
-          <TextInput style={styles.input} value={benefitAmount} onChangeText={setBenefitAmount} keyboardType="decimal-pad" placeholder="Enter disbursement amount" placeholderTextColor="#94a3b8" />
-          <Text style={styles.fieldLabel}>Reason for disbursement (required)</Text>
-          <TextInput style={[styles.input, styles.reasonInput]} value={benefitReason} onChangeText={setBenefitReason} placeholder="Explain why the insurance benefit is being paid" placeholderTextColor="#94a3b8" multiline />
-          <Text style={styles.helpText}>Every payout debits the Insurance Fund and records its amount and reason. A group-wide notification is queued for all members. After a benefit is disbursed, a new insurance contribution cycle begins.</Text>
-
-          {selectedMember ? (
-            <>
-              {renderKinSlot(selectedMember, 1)}
-              {renderKinSlot(selectedMember, 2)}
-              {renderKinSlot(selectedMember, 3)}
-            </>
-          ) : null}
-
           <View style={styles.slotCard}>
             <View style={styles.slotHeadingRow}>
               <Text style={styles.slotTitle}>Slot 4 — Whole-Sum Benefit to Another Group</Text>
@@ -627,7 +607,7 @@ This whole-sum transfer will debit this group's Insurance Fund and be announced 
               multiline
               editable={!savingGroupPayout}
             />
-            <Text style={styles.helpText}>Slot 4 is not tied to an individual member's contribution status. However, any member applying for an individual benefit through Slots 1–3 must have contributed the agreed amount during the current insurance collection cycle. A new contribution cycle starts after a benefit has been disbursed.</Text>
+            <Text style={styles.helpText}>Group-to-group disbursements are not tied to an individual member's contribution status. A new insurance contribution cycle starts after a benefit has been disbursed.</Text>
             <TouchableOpacity
               style={[styles.actionButton, (!meeting || agreedContribution <= 0 || savingGroupPayout || Number(groupBenefitAmount) > insuranceBalance) && styles.disabledButton]}
               onPress={confirmGroupPayout}

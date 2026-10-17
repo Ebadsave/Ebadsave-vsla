@@ -42,10 +42,6 @@ export default function AddMembersScreen({ navigation, route }: Props) {
   const [cell, setCell] = useState('');
   const [district, setDistrict] = useState('');
 
-  const [kin1Name, setKin1Name] = useState('');
-  const [kin1Phone, setKin1Phone] = useState('');
-  const [kin2Name, setKin2Name] = useState('');
-  const [kin2Phone, setKin2Phone] = useState('');
 
   const load = useCallback(async () => {
     if (!groupId) return;
@@ -79,10 +75,6 @@ export default function AddMembersScreen({ navigation, route }: Props) {
     setPhone('');
     setCell('');
     setDistrict('');
-    setKin1Name('');
-    setKin1Phone('');
-    setKin2Name('');
-    setKin2Phone('');
   };
 
   const addMember = async () => {
@@ -96,10 +88,6 @@ export default function AddMembersScreen({ navigation, route }: Props) {
     const cleanAge = Number(age.trim());
     const cleanCell = cell.trim();
     const cleanDistrict = district.trim();
-    const cleanKin1Name = kin1Name.trim();
-    const cleanKin1Phone = kin1Phone.trim();
-    const cleanKin2Name = kin2Name.trim();
-    const cleanKin2Phone = kin2Phone.trim();
 
     if (!cleanName) {
       Alert.alert('Required', 'Member name is required.');
@@ -121,10 +109,6 @@ export default function AddMembersScreen({ navigation, route }: Props) {
       Alert.alert('Required', 'District is required.');
       return;
     }
-    if (!cleanKin1Name || !cleanKin1Phone || !cleanKin2Name || !cleanKin2Phone) {
-      Alert.alert('Next of Kin Required', 'Every member must have two next-of-kin contacts. Enter the full name and phone number for both Slot 1 and Slot 2.');
-      return;
-    }
 
     try {
       setSaving(true);
@@ -136,10 +120,6 @@ export default function AddMembersScreen({ navigation, route }: Props) {
         phone.trim(),
         cleanCell,
         cleanDistrict,
-        [
-          { slot: 1, name: cleanKin1Name, phone: cleanKin1Phone },
-          { slot: 2, name: cleanKin2Name, phone: cleanKin2Phone },
-        ],
       );
 
       await load();
@@ -220,12 +200,6 @@ export default function AddMembersScreen({ navigation, route }: Props) {
             <Field label="Cell" value={cell} onChangeText={setCell} placeholder="Enter cell" />
             <Field label="District" value={district} onChangeText={setDistrict} placeholder="Enter district" />
 
-            <Text style={styles.kinSectionTitle}>Insurance Next of Kin (Required)</Text>
-            <Text style={styles.helperText}>Every member must register two named next-of-kin contacts with phone numbers. If a Slot 1 or Slot 2 beneficiary receives an insurance benefit, that slot locks until the contact is replaced.</Text>
-            <Field label="Slot 1 — Next-of-kin full name" value={kin1Name} onChangeText={setKin1Name} placeholder="Enter first beneficiary name" />
-            <Field label="Slot 1 — Phone number" value={kin1Phone} onChangeText={setKin1Phone} placeholder="Enter first beneficiary phone" keyboardType="phone-pad" />
-            <Field label="Slot 2 — Next-of-kin full name" value={kin2Name} onChangeText={setKin2Name} placeholder="Enter second beneficiary name" />
-            <Field label="Slot 2 — Phone number" value={kin2Phone} onChangeText={setKin2Phone} placeholder="Enter second beneficiary phone" keyboardType="phone-pad" />
 
             <TouchableOpacity
               style={[styles.primaryButton, saving && styles.disabledButton]}
@@ -318,8 +292,6 @@ const styles = StyleSheet.create({
     borderColor: '#e5e7eb',
   },
   sectionTitle: { fontSize: 18, fontWeight: '800', color: '#111827' },
-  kinSectionTitle: { marginTop: 20, fontSize: 16, fontWeight: '800', color: '#166534' },
-  helperText: { marginTop: 6, fontSize: 13, lineHeight: 19, color: '#4b5563' },
   field: { marginTop: 12 },
   label: { fontSize: 13, fontWeight: '700', color: '#374151', marginBottom: 6 },
   input: {
