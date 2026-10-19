@@ -55,8 +55,8 @@ jobs:
       - name: Install JavaScript dependencies
         run: |
           npm install
-          npm install firebase @react-native-async-storage/async-storage crypto-js@4.2.0
-          npm install --save-dev @types/crypto-js@4.2.2
+          npm install --no-save crypto-js @types/crypto-js
+          npx expo install expo-crypto expo-secure-store
 
       - name: Install Expo packages
         run: npx expo install expo-crypto expo-image-picker expo-secure-store
