@@ -310,6 +310,46 @@ async function parseApiRequest<T>(
   return payload as T;
 }
 
+/** Keep only the two newest Ebadsave JSON backup files on this device. */
+async function pruneLocalBackupFiles(keep = MAX_LOCAL_BACKUP_FILES): Promise<void> {
+  const directory = getDocumentsDirectory();
+  const names = await FileSystem.readDirectoryAsync(directory);
+  const candidates = names.filter(
+    (name) => name.startsWith('ebadsave_backup_') && name.endsWith('.json'),
+  );
+  const details = await Promise.all(candidates.map(async (name) => {
+    const path = `${directory}${name}`;
+    let createdAt = 0;
+    try {
+      const contents = await FileSystem.readAsStringAsync(path, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+      const parsed = JSON.parse(contents) as { created_at?: string };
+      createdAt = parsed.created_at ? new Date(parsed.created_at).getTime() : 0;
+    } catch {
+      // Invalid/legacy files are sorted behind valid backups and pruned if over the limit.
+    }
+    if (!Number.isFinite(createdAt)) createdAt = 0;
+    return { name, path, createdAt };
+  }));
+  details.sort((a, b) => b.createdAt - a.createdAt || b.name.localeCompare(a.name));
+  for (const oldBackup of details.slice(Math.max(0, keep))) {
+    await FileSystem.deleteAsync(oldBackup.path, { idempotent: true });
+  }
+}
+
+/**
+ * Ask Back4App Cloud Code to keep only the two newest records and their files
+ * for this backup vault. Deletion must run server-side; the app must never hold
+ * a Master Key. The matching Cloud Code function is supplied separately.
+ */
+async function pruneCloudBackupsForVault(vaultId: string): Promise<void> {
+  await parseApiRequest<{ result?: { deleted?: number } }>('/functions/pruneEbadsaveBackups', {
+    method: 'POST',
+    body: JSON.stringify({ vaultId, keep: MAX_CLOUD_BACKUP_FILES }),
+  });
+}
+
 /** Create a local JSON backup, verify it, and leave the file stored on the device. */
 export async function exportDatabaseBackup(): Promise<{
   success: boolean;
@@ -340,9 +380,13 @@ export async function exportDatabaseBackup(): Promise<{
     });
     parseAndValidateBackup(savedContents);
 
+    // Keep the two newest local backup files, as requested. The newly created
+    // backup is verified before any older file is removed.
+    await pruneLocalBackupFiles(MAX_LOCAL_BACKUP_FILES);
+
     return {
       success: true,
-      message: `Verified local database backup created at ${now.toLocaleString()}.`,
+      message: `Verified local database backup created at ${now.toLocaleString()}. Only the two newest local backup files are retained.`,
       filePath,
       fileName,
     };
@@ -399,9 +443,19 @@ export async function uploadDatabaseBackupToCloud(
       }),
     });
 
+    let retentionMessage = '';
+    try {
+      await pruneCloudBackupsForVault(vaultIdForPassphrase(passphrase));
+    } catch (retentionError) {
+      // Do not misreport a successful upload as failed. Cloud retention will
+      // work after the matching Back4App Cloud Code function is deployed.
+      const retentionDetails = retentionError instanceof Error ? retentionError.message : 'unknown error';
+      retentionMessage = ` Cloud cleanup is pending Cloud Code setup (${retentionDetails}).`;
+    }
+
     return {
       success: true,
-      message: 'Encrypted backup uploaded to Back4App. Your original local backup file is still on this device.',
+      message: `Encrypted backup uploaded to Back4App. The local backup file is retained.${retentionMessage}`,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown cloud backup error.';
@@ -481,6 +535,9 @@ export async function restoreCloudDatabaseBackup(
     if (!restoreResult.success) {
       throw new Error(restoreResult.error || restoreResult.message);
     }
+    // The restored file is verified and successfully applied before older local
+    // backup files are pruned. The newest two remain available for recovery.
+    await pruneLocalBackupFiles(MAX_LOCAL_BACKUP_FILES);
 
     return {
       success: true,
@@ -599,6 +656,8 @@ export function formatFileSize(bytes: number): string {
 const AUTO_BACKUP_SECRET_KEY = 'ebadsave.back4app.autoBackupSecret.v1';
 const AUTO_BACKUP_LAST_SUCCESS_KEY = 'ebadsave.back4app.autoBackupLastSuccess.v1';
 const AUTO_BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const MAX_LOCAL_BACKUP_FILES = 2;
+const MAX_CLOUD_BACKUP_FILES = 2;
 let automaticBackupInProgress = false;
 
 async function getAutomaticBackupPassphrase(): Promise<string> {
