@@ -25,9 +25,18 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install required Android NDK
+        run: sdkmanager --install "ndk;27.1.12297006"
+
       - name: Install dependencies
         run: |
           npm install
+          # Required by src/screens/backup.ts for encrypted cloud backups.
+          npm install --save-exact crypto-js@4.2.0
+          npm install --save-dev --save-exact @types/crypto-js@4.2.2
           npm install firebase
           npm install @react-native-async-storage/async-storage
 
