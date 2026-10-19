@@ -29,37 +29,54 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # Avoid android-actions/setup-android because the failed run is trying
-      # to install the obsolete SDK package named "tools".
       - name: Install Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
+
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
           if [ ! -x "$SDKMANAGER" ]; then
-            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort | tail -n 1)"
+            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" \
+              -type f -name sdkmanager | sort | tail -n 1)"
           fi
+
           if [ -z "${SDKMANAGER:-}" ] || [ ! -x "$SDKMANAGER" ]; then
-            echo "ERROR: Android sdkmanager was not found in $ANDROID_HOME/cmdline-tools."
+            echo "ERROR: Android sdkmanager was not found."
             exit 1
           fi
+
           yes | "$SDKMANAGER" --licenses >/dev/null || true
+
           "$SDKMANAGER" --install \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0" \
             "ndk;27.1.12297006"
+
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
 
       - name: Install JavaScript dependencies
+        shell: bash
         run: |
-          npm install
-          npm install --no-save crypto-js @types/crypto-js
-          npx expo install expo-crypto expo-secure-store
+          set -euo pipefail
 
-      - name: Install Expo packages
-        run: npx expo install expo-crypto expo-image-picker expo-secure-store
+          if [ ! -f package.json ]; then
+            echo "ERROR: package.json was not found in the repository root."
+            exit 1
+          fi
+
+          npm install
+
+          npm install --save crypto-js@4.2.0
+          npm install --save-dev @types/crypto-js@4.2.2
+
+          npx expo install expo-crypto expo-secure-store expo-image-picker
+
+      - name: Verify Crypto-JS installation
+        run: |
+          node -e "console.log('crypto-js:', require.resolve('crypto-js'))"
+          npm ls crypto-js @types/crypto-js
 
       - name: TypeScript check
         run: npx tsc --noEmit
@@ -83,16 +100,23 @@ jobs:
           ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Verify APK and check size
+        shell: bash
         run: |
+          set -euo pipefail
+
           APK="android/app/build/outputs/apk/release/app-release.apk"
+
           if [ ! -f "$APK" ]; then
             echo "ERROR: Release APK was not created."
             find android/app/build/outputs -type f -name "*.apk" || true
             exit 1
           fi
+
           ls -lh "$APK"
+
           SIZE=$(stat -c%s "$APK")
           LIMIT=$((30 * 1024 * 1024))
+
           if [ "$SIZE" -ge "$LIMIT" ]; then
             echo "WARNING: APK is 30 MiB or larger."
           else
