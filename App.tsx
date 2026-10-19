@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  AppState,
   ActivityIndicator,
   Alert,
   Pressable,
@@ -38,6 +39,7 @@ import LoansScreen from './src/screens/LoansScreen';
 import MiscellaneousExpenseScreen from './src/screens/MiscellaneousExpenseScreen';
 import ExpenditureScreen from './src/screens/ExpenditureScreen';
 import BackupRestoreScreen from './src/screens/BackupRestoreScreen';
+import { runAutomaticCloudBackup } from './src/screens/backup';
 import OnboardingScreen from './src/screens/OnboardingScreen';
 import ExistingGroupOnboardingScreen from './src/screens/ExistingGroupOnboardingScreen';
 
@@ -320,6 +322,51 @@ export default function App() {
 
     return () => {
       isMounted = false;
+    };
+  }, []);
+
+  // Automatic Back4App backup: try after startup, whenever the app returns to
+  // the foreground, and periodically while open. The backup service itself
+  // checks internet availability and limits successful uploads to one per 6 hours.
+  useEffect(() => {
+    let disposed = false;
+    let startupTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const attemptAutomaticBackup = async () => {
+      if (disposed) return;
+      try {
+        const result = await runAutomaticCloudBackup();
+        if (!result.success && !result.skipped) {
+          // Do not interrupt members with popups; the periodic/foreground retry
+          // will try again when the app is active and internet is available.
+          console.warn('Ebadsave automatic cloud backup:', result.error || result.message);
+        }
+      } catch (error) {
+        console.warn('Ebadsave automatic cloud backup failed:', error);
+      }
+    };
+
+    // Allow the app and local database initialization to settle first.
+    startupTimer = setTimeout(() => void attemptAutomaticBackup(), 45_000);
+
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void attemptAutomaticBackup();
+      }
+    });
+
+    // Expo apps are not guaranteed to run while fully closed/backgrounded.
+    const retryTimer = setInterval(() => {
+      if (AppState.currentState === 'active') {
+        void attemptAutomaticBackup();
+      }
+    }, 30 * 60 * 1000);
+
+    return () => {
+      disposed = true;
+      if (startupTimer) clearTimeout(startupTimer);
+      clearInterval(retryTimer);
+      appStateSubscription.remove();
     };
   }, []);
 
