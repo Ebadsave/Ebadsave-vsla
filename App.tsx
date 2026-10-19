@@ -24,12 +24,14 @@ import MiscellaneousExpenseScreen from './src/screens/MiscellaneousExpenseScreen
 import ExpenditureScreen from './src/screens/ExpenditureScreen';
 import BackupRestoreScreen from './src/screens/BackupRestoreScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
+import ExistingGroupOnboardingScreen from './src/screens/ExistingGroupOnboardingScreen';
 import './src/services/backupBackground';
 import { initializeAutomaticBackupTask } from './src/services/backupBackground';
 
 export type RootStackParamList = {
   Onboarding: undefined;
   Welcome: undefined;
+  ExistingGroupOnboarding: { groupId: number };
   PreAppAuthorization: undefined;
   Home: undefined;
   Constitution: undefined;
@@ -174,7 +176,7 @@ const welcomeStyles = StyleSheet.create({
 
 export default function App() {
   useEffect(() => {
-    void initializeAutomaticBackupTask().catch((error) => console.warn('Could not initialize automatic backups:', error));
+    void initializeAutomaticBackupTask().catch((error: unknown) => console.warn('Could not initialize automatic backups:', error));
   }, []);
 
   return (
@@ -187,6 +189,7 @@ export default function App() {
       >
         <Stack.Screen name="Onboarding" component={OnboardingScreen} />
         <Stack.Screen name="Welcome" component={WelcomeScreen} />
+        <Stack.Screen name="ExistingGroupOnboarding" component={ExistingGroupOnboardingScreen} />
 
         <Stack.Screen
           name="PreAppAuthorization"
