@@ -1,9 +1,17 @@
 import * as FileSystem from 'expo-file-system';
 import * as MailComposer from 'expo-mail-composer';
-  import {
-createDatabaseBackup,
-restoreDatabaseBackup as restoreDatabaseBackupJson,
+import * as Crypto from 'expo-crypto';
+import * as CryptoJS from 'crypto-js';
+import {
+  createDatabaseBackup,
+  restoreDatabaseBackup as restoreDatabaseBackupJson,
 } from '../database/database';
+import {
+  BACK4APP_APPLICATION_ID,
+  BACK4APP_BACKUP_CLASS,
+  BACK4APP_JAVASCRIPT_KEY,
+  BACK4APP_SERVER_URL,
+} from '../config/back4app';
 
 /**
  * Keep this list aligned with the tables included by createDatabaseBackup()
@@ -42,11 +50,24 @@ const REQUIRED_BACKUP_TABLES = [
   'loan_interest_charges',
 ] as const;
 
+const CLOUD_BACKUP_VERSION = 1;
+const PBKDF2_ITERATIONS = 120_000;
+const VAULT_LOOKUP_SALT = 'Ebadsave-VSLA-Back4App-Vault-Lookup-v1';
+
 export interface BackupFileInfo {
   name: string;
   path: string;
   size: number;
   timestamp: string;
+}
+
+export interface CloudBackupFileInfo {
+  objectId: string;
+  name: string;
+  createdAt: string;
+  backupCreatedAt: string;
+  fileUrl: string;
+  vaultId: string;
 }
 
 interface BackupEnvelope {
@@ -55,12 +76,26 @@ interface BackupEnvelope {
   tables: Record<string, unknown[]>;
 }
 
+interface EncryptedCloudEnvelope {
+  format: 'EBADSAVE_ENCRYPTED_CLOUD_BACKUP';
+  version: 1;
+  created_at: string;
+  salt: string;
+  iv: string;
+  ciphertext: string;
+  mac: string;
+}
+
 function getDocumentsDirectory(): string {
   const directory = FileSystem.documentDirectory || FileSystem.cacheDirectory;
   if (!directory) {
     throw new Error('Device storage is unavailable. The backup was not saved.');
   }
   return directory;
+}
+
+function makeTimestamp(): string {
+  return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 }
 
 function parseAndValidateBackup(contents: string): BackupEnvelope {
@@ -75,7 +110,12 @@ function parseAndValidateBackup(contents: string): BackupEnvelope {
     throw new Error('Invalid backup structure. No data was changed.');
   }
   const backup = parsed as Partial<BackupEnvelope>;
-  if (backup.version !== 1 || typeof backup.created_at !== 'string' || !backup.tables || typeof backup.tables !== 'object') {
+  if (
+    backup.version !== 1 ||
+    typeof backup.created_at !== 'string' ||
+    !backup.tables ||
+    typeof backup.tables !== 'object'
+  ) {
     throw new Error('This is not a supported Ebadsave VSLA backup. No data was changed.');
   }
 
@@ -89,7 +129,186 @@ function parseAndValidateBackup(contents: string): BackupEnvelope {
   return backup as BackupEnvelope;
 }
 
-/** Create a JSON backup using the app's shared SQLite database connection, then read it back and verify it. */
+function requirePassphrase(passphrase: string): string {
+  const normalized = passphrase.trim();
+  if (normalized.length < 12) {
+    throw new Error('Use a cloud backup passphrase with at least 12 characters.');
+  }
+  return normalized;
+}
+
+function randomBytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function deriveEncryptionKey(passphrase: string, saltHex: string): CryptoJS.lib.WordArray {
+  return CryptoJS.PBKDF2(passphrase, CryptoJS.enc.Hex.parse(saltHex), {
+    keySize: 256 / 32,
+    iterations: PBKDF2_ITERATIONS,
+    hasher: CryptoJS.algo.SHA256,
+  });
+}
+
+function deriveAuthenticationKey(passphrase: string, saltHex: string): CryptoJS.lib.WordArray {
+  // A separate salt/domain keeps the AES key and the HMAC key independent.
+  return CryptoJS.PBKDF2(passphrase, CryptoJS.enc.Utf8.parse(`Ebadsave-HMAC:${saltHex}`), {
+    keySize: 256 / 32,
+    iterations: PBKDF2_ITERATIONS,
+    hasher: CryptoJS.algo.SHA256,
+  });
+}
+
+function authenticatedPayload(envelope: Omit<EncryptedCloudEnvelope, 'mac'>): string {
+  return [envelope.format, envelope.version, envelope.created_at, envelope.salt, envelope.iv, envelope.ciphertext].join('|');
+}
+
+function constantTimeEquals(left: string, right: string): boolean {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return difference === 0;
+}
+
+async function encryptBackupForCloud(contents: string, passphraseInput: string): Promise<EncryptedCloudEnvelope> {
+  const passphrase = requirePassphrase(passphraseInput);
+  const salt = randomBytesToHex(await Crypto.getRandomBytesAsync(16));
+  const iv = randomBytesToHex(await Crypto.getRandomBytesAsync(16));
+  const key = deriveEncryptionKey(passphrase, salt);
+  const encrypted = CryptoJS.AES.encrypt(contents, key, {
+    iv: CryptoJS.enc.Hex.parse(iv),
+    mode: CryptoJS.mode.CBC,
+    padding: CryptoJS.pad.Pkcs7,
+  });
+  const backup = parseAndValidateBackup(contents);
+  const unsignedEnvelope = {
+    format: 'EBADSAVE_ENCRYPTED_CLOUD_BACKUP' as const,
+    version: CLOUD_BACKUP_VERSION as 1,
+    created_at: backup.created_at,
+    salt,
+    iv,
+    ciphertext: encrypted.toString(),
+  };
+  const authenticationKey = deriveAuthenticationKey(passphrase, salt);
+
+  return {
+    ...unsignedEnvelope,
+    mac: CryptoJS.HmacSHA256(authenticatedPayload(unsignedEnvelope), authenticationKey).toString(CryptoJS.enc.Hex),
+  };
+}
+
+function decryptCloudBackup(encryptedContents: string, passphraseInput: string): string {
+  const passphrase = requirePassphrase(passphraseInput);
+  let envelope: Partial<EncryptedCloudEnvelope>;
+  try {
+    envelope = JSON.parse(encryptedContents) as Partial<EncryptedCloudEnvelope>;
+  } catch {
+    throw new Error('The internet backup file is damaged or unsupported.');
+  }
+
+  if (
+    envelope.format !== 'EBADSAVE_ENCRYPTED_CLOUD_BACKUP' ||
+    envelope.version !== CLOUD_BACKUP_VERSION ||
+    typeof envelope.salt !== 'string' ||
+    typeof envelope.iv !== 'string' ||
+    typeof envelope.ciphertext !== 'string' ||
+    typeof envelope.mac !== 'string'
+  ) {
+    throw new Error('This is not a supported encrypted Ebadsave cloud backup.');
+  }
+
+  const unsignedEnvelope: Omit<EncryptedCloudEnvelope, 'mac'> = {
+    format: envelope.format,
+    version: envelope.version,
+    created_at: envelope.created_at || '',
+    salt: envelope.salt,
+    iv: envelope.iv,
+    ciphertext: envelope.ciphertext,
+  };
+  const expectedMac = CryptoJS.HmacSHA256(
+    authenticatedPayload(unsignedEnvelope),
+    deriveAuthenticationKey(passphrase, envelope.salt),
+  ).toString(CryptoJS.enc.Hex);
+  if (!constantTimeEquals(expectedMac, envelope.mac)) {
+    throw new Error('The passphrase is incorrect or the cloud backup has been altered.');
+  }
+
+  let plaintext = '';
+  try {
+    const key = deriveEncryptionKey(passphrase, envelope.salt);
+    plaintext = CryptoJS.AES.decrypt(envelope.ciphertext, key, {
+      iv: CryptoJS.enc.Hex.parse(envelope.iv),
+      mode: CryptoJS.mode.CBC,
+      padding: CryptoJS.pad.Pkcs7,
+    }).toString(CryptoJS.enc.Utf8);
+  } catch {
+    throw new Error('The passphrase is incorrect or the cloud backup is damaged.');
+  }
+
+  if (!plaintext) {
+    throw new Error('The passphrase is incorrect or the cloud backup is damaged.');
+  }
+
+  // Authenticated structure validation catches an incorrect passphrase or corrupt data before restore.
+  try {
+    parseAndValidateBackup(plaintext);
+  } catch {
+    throw new Error('Could not decrypt a valid backup. Check the passphrase and try again.');
+  }
+  return plaintext;
+}
+
+function vaultIdForPassphrase(passphraseInput: string): string {
+  const passphrase = requirePassphrase(passphraseInput);
+  return CryptoJS.PBKDF2(passphrase, VAULT_LOOKUP_SALT, {
+    keySize: 256 / 32,
+    iterations: PBKDF2_ITERATIONS,
+    hasher: CryptoJS.algo.SHA256,
+  }).toString(CryptoJS.enc.Hex);
+}
+
+function parseApiHeaders(extra?: Record<string, string>): Record<string, string> {
+  return {
+    'X-Parse-Application-Id': BACK4APP_APPLICATION_ID,
+    'X-Parse-Javascript-Key': BACK4APP_JAVASCRIPT_KEY,
+    ...extra,
+  };
+}
+
+async function parseApiRequest<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const response = await fetch(`${BACK4APP_SERVER_URL}${path}`, {
+    ...init,
+    headers: parseApiHeaders({
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(init.headers as Record<string, string> | undefined),
+    }),
+  });
+
+  const responseText = await response.text();
+  let payload: unknown = {};
+  if (responseText) {
+    try {
+      payload = JSON.parse(responseText);
+    } catch {
+      payload = { error: responseText };
+    }
+  }
+  if (!response.ok) {
+    const details = payload as { error?: string; code?: number };
+    throw new Error(
+      details.error
+        ? `Back4App error${details.code ? ` (${details.code})` : ''}: ${details.error}`
+        : `Back4App request failed (${response.status}).`,
+    );
+  }
+  return payload as T;
+}
+
+/** Create a local JSON backup, verify it, and leave the file stored on the device. */
 export async function exportDatabaseBackup(): Promise<{
   success: boolean;
   message: string;
@@ -99,12 +318,10 @@ export async function exportDatabaseBackup(): Promise<{
 }> {
   try {
     const json = await createDatabaseBackup();
-    // Validate the serialized database snapshot before writing it to storage.
     parseAndValidateBackup(json);
 
     const now = new Date();
-    const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-    const fileName = `ebadsave_backup_${stamp}.json`;
+    const fileName = `ebadsave_backup_${makeTimestamp()}.json`;
     const filePath = `${getDocumentsDirectory()}${fileName}`;
 
     await FileSystem.writeAsStringAsync(filePath, json, {
@@ -123,13 +340,155 @@ export async function exportDatabaseBackup(): Promise<{
 
     return {
       success: true,
-      message: `Verified database backup created at ${now.toLocaleString()}.`,
+      message: `Verified local database backup created at ${now.toLocaleString()}.`,
       filePath,
       fileName,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown backup error.';
     return { success: false, message: 'Backup failed.', error: message };
+  }
+}
+
+/**
+ * Upload an encrypted copy of a local backup. The original local backup is never modified or deleted.
+ * The cloud file contains ciphertext, not the readable SQLite JSON snapshot.
+ */
+export async function uploadDatabaseBackupToCloud(
+  filePath: string,
+  fileName: string,
+  passphraseInput: string,
+): Promise<{ success: boolean; message: string; error?: string }> {
+  try {
+    const passphrase = requirePassphrase(passphraseInput);
+    const info = await FileSystem.getInfoAsync(filePath);
+    if (!info.exists) throw new Error('The local backup file could not be found.');
+
+    const contents = await FileSystem.readAsStringAsync(filePath, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
+    const validated = parseAndValidateBackup(contents);
+    const encryptedEnvelope = await encryptBackupForCloud(JSON.stringify(validated), passphrase);
+    const cloudFileName = `${fileName.replace(/\.json$/i, '')}_encrypted_${Date.now()}.json`;
+
+    const uploadedFile = await parseApiRequest<{ name: string; url: string }>(
+      `/files/${encodeURIComponent(cloudFileName)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(encryptedEnvelope),
+      },
+    );
+
+    if (!uploadedFile?.name || !uploadedFile?.url) {
+      throw new Error('Back4App did not confirm that the encrypted file was uploaded.');
+    }
+
+    await parseApiRequest<{ objectId: string }>(`/classes/${BACK4APP_BACKUP_CLASS}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        file: { __type: 'File', name: uploadedFile.name, url: uploadedFile.url },
+        backupFileName: fileName,
+        backupCreatedAt: validated.created_at,
+        vaultId: vaultIdForPassphrase(passphrase),
+        encrypted: true,
+        // Cloud records can be read but cannot be changed/deleted through a public client key.
+        ACL: { '*': { read: true, write: false } },
+      }),
+    });
+
+    return {
+      success: true,
+      message: 'Encrypted backup uploaded to Back4App. Your original local backup file is still on this device.',
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown cloud backup error.';
+    return { success: false, message: 'Cloud backup failed.', error: message };
+  }
+}
+
+/** List cloud backups associated with the supplied passphrase's vault identifier. */
+export async function listCloudBackups(
+  passphraseInput: string,
+): Promise<{ success: boolean; backups: CloudBackupFileInfo[]; message: string; error?: string }> {
+  try {
+    const vaultId = vaultIdForPassphrase(passphraseInput);
+    const where = encodeURIComponent(JSON.stringify({ vaultId, encrypted: true }));
+    const result = await parseApiRequest<{
+      results?: Array<{
+        objectId: string;
+        createdAt: string;
+        backupCreatedAt?: string;
+        backupFileName?: string;
+        vaultId: string;
+        file?: { url?: string; name?: string };
+      }>;
+    }>(`/classes/${BACK4APP_BACKUP_CLASS}?where=${where}&order=-createdAt&limit=100`);
+
+    const backups = (result.results || [])
+      .filter((item) => Boolean(item.objectId && item.file?.url))
+      .map((item) => ({
+        objectId: item.objectId,
+        name: item.backupFileName || item.file?.name || 'Ebadsave cloud backup',
+        createdAt: item.createdAt || '',
+        backupCreatedAt: item.backupCreatedAt || item.createdAt || '',
+        fileUrl: item.file!.url!,
+        vaultId: item.vaultId,
+      }));
+
+    return { success: true, backups, message: `Found ${backups.length} cloud backup(s).` };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown cloud backup error.';
+    return { success: false, backups: [], message: 'Could not load internet backups.', error: message };
+  }
+}
+
+/** Download, decrypt, validate, save a new local copy, then restore through the existing DB restore path. */
+export async function restoreCloudDatabaseBackup(
+  cloudBackup: CloudBackupFileInfo,
+  passphraseInput: string,
+): Promise<{ success: boolean; message: string; error?: string; localFilePath?: string; localFileName?: string }> {
+  try {
+    requirePassphrase(passphraseInput);
+    const response = await fetch(cloudBackup.fileUrl);
+    if (!response.ok) throw new Error(`Could not download cloud backup (${response.status}).`);
+    const encryptedText = await response.text();
+    if (!encryptedText) throw new Error('The selected internet backup is empty. No data was changed.');
+
+    const decrypted = decryptCloudBackup(encryptedText, passphraseInput);
+    parseAndValidateBackup(decrypted);
+
+    // Preserve every existing local backup and save the downloaded plaintext as an additional local file.
+    const localFileName = `ebadsave_backup_cloud_${makeTimestamp()}.json`;
+    const localFilePath = `${getDocumentsDirectory()}${localFileName}`;
+    await FileSystem.writeAsStringAsync(localFilePath, decrypted, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
+
+    const localInfo = await FileSystem.getInfoAsync(localFilePath);
+    if (!localInfo.exists || !('size' in localInfo) || Number(localInfo.size) <= 0) {
+      throw new Error('The downloaded backup could not be saved locally. No data was changed.');
+    }
+
+    const savedCopy = await FileSystem.readAsStringAsync(localFilePath, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
+    parseAndValidateBackup(savedCopy);
+
+    const restoreResult = await restoreDatabaseBackup(localFilePath);
+    if (!restoreResult.success) {
+      throw new Error(restoreResult.error || restoreResult.message);
+    }
+
+    return {
+      success: true,
+      message: `Cloud backup restored. A separate local copy was saved as ${localFileName}. Your previous local backup files were not changed.`,
+      localFilePath,
+      localFileName,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown cloud restore error.';
+    return { success: false, message: 'Could not restore the internet backup.', error: message };
   }
 }
 
@@ -201,7 +560,6 @@ export async function restoreDatabaseBackup(filePath: string): Promise<{
     if (!contents.trim()) throw new Error('The selected backup file is empty. No data was changed.');
 
     const validated = parseAndValidateBackup(contents);
-    // Re-serialize the validated object to avoid passing unvalidated file content onward.
     await restoreDatabaseBackupJson(JSON.stringify(validated));
     return {
       success: true,
