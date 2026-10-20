@@ -249,7 +249,7 @@ export default function ConstitutionScreen({
       setRegistrationMessage(
         error instanceof Error
           ? error.message
-          : 'Unable to register the group. Connect to the internet and try again.',
+          : 'Unable to register the group with Back4App. Check the internet connection and try again.',
       );
     } finally {
       setRegistering(false);
@@ -407,11 +407,11 @@ export default function ConstitutionScreen({
                         </Text>
 
                         <Text style={styles.registrationHelp}>
-                          Internet is required to register a new production group and reserve its unique KYA number (2010–9090). The group will not become active unless Firebase confirms the reservation. Test groups use KYA 2000–2009 locally.
+                          Internet is required to register a new production group and reserve its unique KYA number (2010–9090). Back4App must confirm the reservation before the group becomes active. Test groups use KYA 2000–2009 locally.
                         </Text>
 
                         <Text style={styles.offlineHelp}>
-                          After registration, existing SQLite-based app features can continue working offline on this device. Only features that explicitly require Firebase or remote synchronization need an internet connection.
+                          After registration, existing SQLite-based app features can continue working offline on this device. Only features that explicitly require Back4App or another connected remote service need an internet connection.
                         </Text>
 
                         {!isRegisteringNewGroup &&
@@ -535,7 +535,7 @@ export default function ConstitutionScreen({
                                 <Text style={styles.numberWaiting}>
                                   {isTestGroup
                                     ? 'A test number will be assigned locally.'
-                                    : 'Connect to the internet. Firebase will reserve the next available KYA number before this group becomes active.'}
+                                    : 'Connect to the internet. Back4App will reserve the next available KYA number before this group becomes active.'}
                                 </Text>
                               )}
                             </View>
