@@ -175,9 +175,15 @@ const welcomeStyles = StyleSheet.create({
 });
 
 export default function App() {
+  // TEMPORARY DIAGNOSTIC TEST:
+  // Automatic backup-task initialization is paused to test the onboarding error.
+  // Keep the backup service files and dependencies unchanged.
+  // Restore this useEffect after the test.
+  /*
   useEffect(() => {
     void initializeAutomaticBackupTask().catch((error: unknown) => console.warn('Could not initialize automatic backups:', error));
   }, []);
+  */
 
   return (
     <NavigationContainer>
