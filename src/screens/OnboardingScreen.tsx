@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
-import { changeAppLanguage } from '../translations/i18n';
+import { changeAppLanguage, initializeI18n } from '../translations/i18n';
 
 type LanguageCode = 'en' | 'nyn' | 'lg' | 'sw' | 'fr' | 'rw';
 
@@ -325,32 +325,19 @@ export default function OnboardingScreen() {
         dialCode: country.dialCode,
       };
 
-      // Step 1: Save the country and language preferences.
-      try {
-        await AsyncStorage.setItem(
-          PREFERENCES_STORAGE_KEY,
-          JSON.stringify(preferences),
-        );
-      } catch (error) {
-        console.error('[Onboarding] AsyncStorage.setItem failed:', error);
-        setErrorMessage('Could not save your country and language preferences. Please try again.');
-        return;
-      }
+      await AsyncStorage.setItem(
+        PREFERENCES_STORAGE_KEY,
+        JSON.stringify(preferences),
+      );
 
-      // Step 2: Change the selected app language.
-      try {
-        await changeAppLanguage(language.code);
-      } catch (error) {
-        console.error('[Onboarding] changeAppLanguage failed:', error);
-        setErrorMessage('Preferences were saved, but changing the language failed. Please try again.');
-        return;
-      }
+      // Ensure i18next is initialized before changing the selected language.
+      await initializeI18n();
+      await changeAppLanguage(language.code);
 
-      // Step 3: Continue only after both operations succeed.
       navigation.navigate('Welcome');
     } catch (error) {
-      console.error('[Onboarding] Unexpected Get Started error:', error);
-      setErrorMessage('An unexpected error occurred. Please try again.');
+      console.error('[Onboarding] Get Started failed:', error);
+      setErrorMessage('Preferences could not be fully applied. Please try again.');
     } finally {
       setSaving(false);
     }
