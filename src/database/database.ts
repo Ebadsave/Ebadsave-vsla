@@ -128,7 +128,7 @@ export async function getMemberSavings(
   const opening = await db.getFirstAsync<{ amount: number }>(
     `SELECT CASE WHEN EXISTS (
        SELECT 1 FROM historical_transaction_imports
-       WHERE group_id = ? AND member_id = ? AND historical_type = 'savings'
+       WHERE group_id = ? AND member_id = ? AND historical_type = 'savings' AND COALESCE(is_deleted, 0) = 0
      ) THEN 0 ELSE COALESCE((
        SELECT opening_savings FROM member_opening_balances
        WHERE group_id = ? AND member_id = ? LIMIT 1
@@ -1347,6 +1347,18 @@ status TEXT NOT NULL DEFAULT 'active',
     CREATE INDEX IF NOT EXISTS idx_historical_imports_member_date
       ON historical_transaction_imports(group_id, member_id, transaction_date, id);
 
+    CREATE TABLE IF NOT EXISTS historical_extra_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, member_id INTEGER, transaction_id INTEGER,
+      entry_type TEXT NOT NULL CHECK (entry_type IN ('fine', 'insurance', 'external_loan')),
+      amount REAL NOT NULL CHECK (amount > 0), transaction_date TEXT NOT NULL, fine_reason TEXT NOT NULL DEFAULT '',
+      lender_name TEXT NOT NULL DEFAULT '', interest_amount REAL NOT NULL DEFAULT 0, due_date TEXT,
+      source_reference TEXT NOT NULL DEFAULT '', source_notes TEXT NOT NULL DEFAULT '', is_deleted INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, edited_at TEXT, edited_by_member_id INTEGER, back4app_object_id TEXT,
+      FOREIGN KEY (group_id) REFERENCES groups(id), FOREIGN KEY (member_id) REFERENCES members(id),
+      FOREIGN KEY (transaction_id) REFERENCES financial_transactions(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_historical_extra_group_date ON historical_extra_entries(group_id, transaction_date, id);
+
     CREATE TABLE IF NOT EXISTS financial_transaction_reversals (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       original_transaction_id INTEGER NOT NULL UNIQUE,
@@ -2045,6 +2057,9 @@ status TEXT NOT NULL DEFAULT 'active',
     'reversed',
     'INTEGER NOT NULL DEFAULT 0',
   );
+  await addColumnIfMissing(db, 'historical_transaction_imports', 'is_deleted', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumnIfMissing(db, 'historical_transaction_imports', 'edited_at', 'TEXT');
+  await addColumnIfMissing(db, 'historical_transaction_imports', 'edited_by_member_id', 'INTEGER');
 
   await ensureFinancialAccountsForAllGroups(db);
 
@@ -2204,8 +2219,9 @@ export async function recordHistoricalFinancialTransaction(
   const localNow = new Date();
   const localToday = `${localNow.getFullYear()}-${String(localNow.getMonth() + 1).padStart(2, '0')}-${String(localNow.getDate()).padStart(2, '0')}`;
   if (transactionDate > localToday) throw new Error('A historical transaction date cannot be in the future.');
-  if (!sourceReference) throw new Error('Enter a unique reference to the physical book/page/line.');
-  if (sourceReference.length > 120) throw new Error('The source reference must be 120 characters or fewer.');
+  // The physical-book reference is optional in the illiterate-friendly UI; retain an internal unique ID for audit and duplicate-safe storage.
+  const storedSourceReference = sourceReference || `AUTO-${groupId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  if (storedSourceReference.length > 120) throw new Error('The internal reference must be 120 characters or fewer.');
   if (!Number.isFinite(historicalInterest) || historicalInterest < 0) throw new Error('Historical interest must be zero or greater.');
   if (dueDate && !validIsoDateOnly(dueDate)) throw new Error('Loan due date must be a real date in YYYY-MM-DD format.');
 
@@ -2227,9 +2243,9 @@ export async function recordHistoricalFinancialTransaction(
   if (!member) throw new Error('The selected member does not belong to this group.');
   const duplicate = await db.getFirstAsync<{ id: number }>(
     `SELECT id FROM historical_transaction_imports WHERE group_id = ? AND source_reference = ? COLLATE NOCASE LIMIT 1`,
-    groupId, sourceReference,
+    groupId, storedSourceReference,
   );
-  if (duplicate) throw new Error('That physical-book reference has already been imported for this group. Use the original entry or enter the correct unique line reference.');
+  if (duplicate) throw new Error('That internal entry reference already exists. Refresh the records and try again.');
 
   const accountType: FinancialAccountType = type === 'savings'
     ? 'savings'
@@ -2247,9 +2263,9 @@ export async function recordHistoricalFinancialTransaction(
   await db.withTransactionAsync(async () => {
     const duplicateInside = await db.getFirstAsync<{ id: number }>(
       `SELECT id FROM historical_transaction_imports WHERE group_id = ? AND source_reference = ? COLLATE NOCASE LIMIT 1`,
-      groupId, sourceReference,
+      groupId, storedSourceReference,
     );
-    if (duplicateInside) throw new Error('That physical-book reference has already been imported for this group.');
+    if (duplicateInside) throw new Error('That internal entry reference already exists. Refresh the records and try again.');
 
     await ensureFinancialAccountsForGroup(db, groupId);
     const inserted = await db.runAsync(
@@ -2258,7 +2274,7 @@ export async function recordHistoricalFinancialTransaction(
         collection_id, transaction_type, reversed_transaction_id, reversed, created_at
       ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, NULL, 0, ?)`,
       groupId, accountType, signedAmount,
-      `Historical ${type.replace('_', ' ')} — ${sourceReference}${notes ? ` — ${notes}` : ''}`,
+      `Historical ${type.replace('_', ' ')} — ${storedSourceReference}${notes ? ` — ${notes}` : ''}`,
       input.member_id, transactionType, ledgerDate,
     );
     transactionId = inserted.lastInsertRowId;
@@ -2279,14 +2295,14 @@ export async function recordHistoricalFinancialTransaction(
       type === 'savings' ? shareValue : null,
       type === 'loan_disbursement' ? dueDate : null,
       type === 'loan_disbursement' ? historicalInterest : 0,
-      sourceReference, notes, timestamp,
+      storedSourceReference, notes, timestamp,
     );
 
     await addPassbookEntry(
       db, groupId, input.member_id, null, transactionId,
       type === 'savings' ? 'savings_contribution' : type === 'loan_disbursement' ? 'loan_issued' : 'loan_repayment',
       amount,
-      `Historical ${type.replace('_', ' ')} — ${sourceReference}${notes ? ` — ${notes}` : ''}`,
+      `Historical ${type.replace('_', ' ')} — ${storedSourceReference}${notes ? ` — ${notes}` : ''}`,
       ledgerDate,
     );
 
@@ -2320,7 +2336,7 @@ export async function getHistoricalFinancialTransactions(
     `SELECT h.*, m.full_name AS member_name, m.member_number
      FROM historical_transaction_imports h
      JOIN members m ON m.id = h.member_id AND m.group_id = h.group_id
-     WHERE h.group_id = ?
+     WHERE h.group_id = ? AND COALESCE(h.is_deleted, 0) = 0
      ORDER BY h.transaction_date DESC, h.id DESC
      LIMIT ?`,
     groupId, safeLimit,
@@ -2333,6 +2349,9 @@ export type HistoricalFinancialSummary = {
   loanDisbursements: number;
   loanRepayments: number;
   recordedHistoricalInterest: number;
+  fines: number;
+  insurance: number;
+  externalLoans: number;
 };
 
 export async function getHistoricalFinancialSummary(
@@ -2351,16 +2370,228 @@ export async function getHistoricalFinancialSummary(
        COALESCE(SUM(CASE WHEN historical_type = 'loan_disbursement' THEN amount ELSE 0 END), 0) AS loanDisbursements,
        COALESCE(SUM(CASE WHEN historical_type = 'loan_repayment' THEN amount ELSE 0 END), 0) AS loanRepayments,
        COALESCE(SUM(CASE WHEN historical_type = 'loan_disbursement' THEN historical_interest ELSE 0 END), 0) AS recordedHistoricalInterest
-     FROM historical_transaction_imports WHERE group_id = ?`,
+     FROM historical_transaction_imports WHERE group_id = ? AND COALESCE(is_deleted, 0) = 0`,
     groupId,
   );
+  const extras = await db.getFirstAsync<{ records: number; fines: number; insurance: number; externalLoans: number }>(
+    `SELECT COUNT(*) AS records,
+      COALESCE(SUM(CASE WHEN entry_type = 'fine' THEN amount ELSE 0 END), 0) AS fines,
+      COALESCE(SUM(CASE WHEN entry_type = 'insurance' THEN amount ELSE 0 END), 0) AS insurance,
+      COALESCE(SUM(CASE WHEN entry_type = 'external_loan' THEN amount ELSE 0 END), 0) AS externalLoans
+     FROM historical_extra_entries WHERE group_id = ? AND is_deleted = 0`, groupId,
+  );
   return {
-    records: Number(row?.records ?? 0),
+    records: Number(row?.records ?? 0) + Number(extras?.records ?? 0),
     savings: Number(row?.savings ?? 0),
     loanDisbursements: Number(row?.loanDisbursements ?? 0),
     loanRepayments: Number(row?.loanRepayments ?? 0),
     recordedHistoricalInterest: Number(row?.recordedHistoricalInterest ?? 0),
+    fines: Number(extras?.fines ?? 0),
+    insurance: Number(extras?.insurance ?? 0),
+    externalLoans: Number(extras?.externalLoans ?? 0),
   };
+}
+
+export async function canManageHistoricalEntries(groupId: number, memberId: number): Promise<boolean> {
+  try { await requireHistoricalGroupAdmin(groupId, memberId); return true; } catch { return false; }
+}
+
+export type HistoricalExtraType = 'fine' | 'insurance' | 'external_loan';
+export type HistoricalExtraInput = {
+  member_id?: number | null;
+  entry_type: HistoricalExtraType;
+  amount: number;
+  transaction_date: string;
+  fine_reason?: 'late' | 'absent' | 'other' | '';
+  lender_name?: string;
+  interest_amount?: number;
+  due_date?: string | null;
+  source_reference?: string;
+  source_notes?: string;
+};
+export type HistoricalExtraRecord = {
+  id: number; group_id: number; member_id: number | null; member_name: string; member_number: string;
+  transaction_id: number | null; entry_type: HistoricalExtraType; amount: number; transaction_date: string;
+  fine_reason: string; lender_name: string; interest_amount: number; due_date: string | null;
+  source_reference: string; source_notes: string; is_deleted: number; created_at: string;
+  edited_at: string | null; back4app_object_id: string | null;
+};
+export type HistoricalEditInput = {
+  amount: number; transaction_date: string; fine_reason?: string; lender_name?: string;
+  interest_amount?: number; due_date?: string | null; source_notes?: string;
+};
+
+function validateHistoricalDate(value: string, field = 'Transaction date'): void {
+  if (!validIsoDateOnly(value)) throw new Error(`${field} must be a real date in YYYY-MM-DD format.`);
+}
+
+async function requireHistoricalGroupAdmin(groupId: number, memberId: number): Promise<void> {
+  const db = await getDatabase();
+  const member = await db.getFirstAsync<{ group_id: number; status: string; is_super_user: number; assigned_roles: string | null }>(
+    'SELECT group_id, status, is_super_user, assigned_roles FROM members WHERE id = ? AND group_id = ? LIMIT 1', memberId, groupId,
+  );
+  const roles = (member?.assigned_roles || '').split(',').map((role) => role.trim().toLowerCase());
+  if (!member || member.status !== 'active' || (!Number(member.is_super_user) && !roles.includes('admin') && !roles.includes('group admin') && !roles.includes('chairperson') && !roles.includes('chair'))) {
+    throw new Error('Only this group’s administrator or Chairperson can edit or delete imported entries.');
+  }
+}
+
+export async function getHistoricalExtraEntries(groupId: number, limit = 100): Promise<HistoricalExtraRecord[]> {
+  const db = await getDatabase();
+  const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+  return db.getAllAsync<HistoricalExtraRecord>(
+    `SELECT e.*, COALESCE(m.full_name, '') AS member_name, COALESCE(m.member_number, '') AS member_number
+     FROM historical_extra_entries e LEFT JOIN members m ON m.id = e.member_id AND m.group_id = e.group_id
+     WHERE e.group_id = ? AND e.is_deleted = 0 ORDER BY e.transaction_date DESC, e.id DESC LIMIT ?`, groupId, safeLimit,
+  );
+}
+
+async function writeBack4AppFine(groupId: number, entryId: number, memberId: number | null, amount: number, date: string, reason: string, sourceReference: string): Promise<void> {
+  const db = await getDatabase();
+  const group = await db.getFirstAsync<{ group_number: string; group_name: string }>('SELECT group_number, group_name FROM groups WHERE id = ? LIMIT 1', groupId);
+  const member = memberId ? await db.getFirstAsync<{ full_name: string; member_number: string }>('SELECT full_name, member_number FROM members WHERE id = ? AND group_id = ? LIMIT 1', memberId, groupId) : null;
+  const response = await fetch(`${BACK4APP_SERVER_URL}/classes/Fines`, {
+    method: 'POST',
+    headers: { 'X-Parse-Application-Id': BACK4APP_APPLICATION_ID, 'X-Parse-JavaScript-Key': BACK4APP_JAVASCRIPT_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ groupNumber: String(group?.group_number ?? groupId), groupName: group?.group_name ?? '', localGroupId: groupId, localEntryId: entryId, memberId, memberName: member?.full_name ?? '', memberNumber: member?.member_number ?? '', amount, reason, transactionDate: date, sourceReference, isDeleted: false, app: 'Ebadsave-vsla' }),
+  });
+  const body = await response.json().catch(() => ({} as any));
+  if (!response.ok) throw new Error(body?.error || `Back4App Fines sync failed (${response.status}).`);
+  if (body?.objectId) await db.runAsync('UPDATE historical_extra_entries SET back4app_object_id = ? WHERE id = ? AND group_id = ?', String(body.objectId), entryId, groupId);
+}
+
+async function syncBack4AppFineState(groupId: number, entryId: number, isDeleted: boolean): Promise<void> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<any>('SELECT * FROM historical_extra_entries WHERE id = ? AND group_id = ? LIMIT 1', entryId, groupId);
+  if (!row || row.entry_type !== 'fine' || !row.back4app_object_id) return;
+  const group = await db.getFirstAsync<{ group_number: string; group_name: string }>('SELECT group_number, group_name FROM groups WHERE id = ? LIMIT 1', groupId);
+  const member = row.member_id ? await db.getFirstAsync<{ full_name: string; member_number: string }>('SELECT full_name, member_number FROM members WHERE id = ? AND group_id = ? LIMIT 1', row.member_id, groupId) : null;
+  await fetch(`${BACK4APP_SERVER_URL}/classes/Fines/${row.back4app_object_id}`, {
+    method: 'PUT', headers: { 'X-Parse-Application-Id': BACK4APP_APPLICATION_ID, 'X-Parse-JavaScript-Key': BACK4APP_JAVASCRIPT_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ groupNumber: String(group?.group_number ?? groupId), groupName: group?.group_name ?? '', localGroupId: groupId, localEntryId: entryId, memberId: row.member_id, memberName: member?.full_name ?? '', memberNumber: member?.member_number ?? '', amount: Number(row.amount), reason: row.fine_reason || 'other', transactionDate: row.transaction_date, sourceReference: row.source_reference, isDeleted, editedAt: now(), app: 'Ebadsave-vsla' }),
+  });
+}
+
+export async function recordHistoricalExtraEntry(groupId: number, input: HistoricalExtraInput): Promise<{ id: number; cloudSynced: boolean }> {
+  const db = await getDatabase();
+  const amount = Number(input.amount); const date = normalizeText(input.transaction_date);
+  if (!Number.isInteger(groupId) || groupId <= 0) throw new Error('Select a valid group.');
+  if (!['fine', 'insurance', 'external_loan'].includes(input.entry_type)) throw new Error('Select a valid entry type.');
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('Amount must be greater than zero.');
+  validateHistoricalDate(date);
+  const dueDate = normalizeText(input.due_date || '') || null;
+  if (dueDate) validateHistoricalDate(dueDate, 'Due date');
+  const interest = Number(input.interest_amount ?? 0);
+  if (!Number.isFinite(interest) || interest < 0) throw new Error('Interest must be zero or greater.');
+  if (input.entry_type === 'external_loan' && !normalizeText(input.lender_name)) throw new Error('Enter the external lender name.');
+  if (input.entry_type !== 'external_loan' && input.member_id == null) throw new Error('Select a member.');
+  if (input.member_id != null) {
+    const member = await db.getFirstAsync<{ id: number }>('SELECT id FROM members WHERE id = ? AND group_id = ? LIMIT 1', input.member_id, groupId);
+    if (!member) throw new Error('The selected member does not belong to this group.');
+  }
+  const timestamp = now();
+  const sourceReference = normalizeText(input.source_reference || '') || `AUTO-${groupId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  let id = 0;
+  await db.withTransactionAsync(async () => {
+    await ensureFinancialAccountsForGroup(db, groupId);
+    const accountType: FinancialAccountType = input.entry_type === 'fine' ? 'fines' : input.entry_type === 'insurance' ? 'insurance_fund' : 'external_fund';
+    const transactionType = input.entry_type === 'fine' ? 'fine' : input.entry_type === 'insurance' ? 'insurance_contribution' : 'external_loan_received';
+    const transaction = await db.runAsync(
+      `INSERT INTO financial_transactions (group_id, account_type, amount, reason, member_id, meeting_id, collection_id, transaction_type, reversed_transaction_id, reversed, created_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, NULL, 0, ?)`,
+      groupId, accountType, amount, input.entry_type === 'fine' ? `Historical fine: ${input.fine_reason || 'other'}` : input.entry_type === 'insurance' ? 'Historical insurance contribution' : `External group loan from ${normalizeText(input.lender_name)}`,
+      input.member_id ?? null, transactionType, `${date}T12:00:00.000Z`,
+    );
+    await db.runAsync('UPDATE financial_accounts SET balance = balance + ?, updated_at = ? WHERE group_id = ? AND account_type = ?', amount, timestamp, groupId, accountType);
+    const result = await db.runAsync(
+      `INSERT INTO historical_extra_entries (group_id, member_id, transaction_id, entry_type, amount, transaction_date, fine_reason, lender_name, interest_amount, due_date, source_reference, source_notes, is_deleted, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+      groupId, input.member_id ?? null, transaction.lastInsertRowId, input.entry_type, amount, date, normalizeText(input.fine_reason || ''), normalizeText(input.lender_name || ''), interest, dueDate, sourceReference, normalizeText(input.source_notes || ''), timestamp,
+    );
+    id = result.lastInsertRowId;
+    if (input.member_id != null) await addPassbookEntry(db, groupId, input.member_id, null, transaction.lastInsertRowId, input.entry_type === 'fine' ? 'fine' : 'insurance_contribution', amount, input.entry_type === 'fine' ? `Fine: ${input.fine_reason || 'other'}` : 'Insurance contribution', `${date}T12:00:00.000Z`);
+    await db.runAsync('UPDATE groups SET last_activity_at = ? WHERE id = ?', timestamp, groupId);
+  });
+  let cloudSynced = true;
+  if (input.entry_type === 'fine') {
+    try { await writeBack4AppFine(groupId, id, input.member_id ?? null, amount, date, normalizeText(input.fine_reason || 'other'), sourceReference); }
+    catch { cloudSynced = false; }
+  }
+  return { id, cloudSynced };
+}
+
+export async function editHistoricalEntry(groupId: number, entryKind: 'standard' | 'extra', entryId: number, input: HistoricalEditInput, editorMemberId: number): Promise<void> {
+  await requireHistoricalGroupAdmin(groupId, editorMemberId);
+  const db = await getDatabase(); const amount = Number(input.amount); const date = normalizeText(input.transaction_date); const timestamp = now();
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('Amount must be greater than zero.');
+  validateHistoricalDate(date);
+  await db.withTransactionAsync(async () => {
+    if (entryKind === 'standard') {
+      const row = await db.getFirstAsync<any>('SELECT * FROM historical_transaction_imports WHERE id = ? AND group_id = ? AND is_deleted = 0 LIMIT 1', entryId, groupId);
+      if (!row) throw new Error('This entry is no longer available. Refresh the list.');
+      const signedOld = row.historical_type === 'loan_disbursement' ? -Number(row.amount) : Number(row.amount);
+      const signedNew = row.historical_type === 'loan_disbursement' ? -amount : amount;
+      const accountType: FinancialAccountType = row.historical_type === 'savings' ? 'savings' : row.historical_type === 'loan_disbursement' ? 'loan_fund' : 'loan_repayment';
+      let editedShareCount = row.share_count;
+      if (row.historical_type === 'savings') {
+        const unit = Number(row.share_value || 0);
+        if (unit <= 0 || Math.abs(amount / unit - Math.round(amount / unit)) > 0.0001) throw new Error('Savings amount must be a whole number of the original share value.');
+        editedShareCount = Math.round(amount / unit);
+      }
+      const audit = `Edited on ${timestamp.slice(0, 10)} by ${editorMemberId}; previous amount ${row.amount}; previous date ${row.transaction_date}.`;
+      await db.runAsync('UPDATE historical_transaction_imports SET amount = ?, transaction_date = ?, share_count = ?, source_notes = ?, edited_at = ?, edited_by_member_id = ? WHERE id = ? AND group_id = ?', amount, date, editedShareCount, [normalizeText(input.source_notes || row.source_notes || ''), audit].filter(Boolean).join(' | '), timestamp, editorMemberId, entryId, groupId);
+      await db.runAsync('UPDATE financial_transactions SET amount = ?, created_at = ? WHERE id = ? AND group_id = ?', signedNew, `${date}T12:00:00.000Z`, row.transaction_id, groupId);
+      await db.runAsync('UPDATE financial_accounts SET balance = balance + ?, updated_at = ? WHERE group_id = ? AND account_type = ?', signedNew - signedOld, timestamp, groupId, accountType);
+      await db.runAsync('UPDATE member_passbook_records SET amount = ?, created_at = ?, reason = ? WHERE transaction_id = ? AND group_id = ?', amount, `${date}T12:00:00.000Z`, `Historical ${row.historical_type.replace('_', ' ')} (edited on ${timestamp.slice(0, 10)})`, row.transaction_id, groupId);
+      await rebuildHistoricalPassbookBalance(db, groupId, Number(row.member_id));
+    } else {
+      const row = await db.getFirstAsync<any>('SELECT * FROM historical_extra_entries WHERE id = ? AND group_id = ? AND is_deleted = 0 LIMIT 1', entryId, groupId);
+      if (!row) throw new Error('This entry is no longer available. Refresh the list.');
+      const dueDate = normalizeText(input.due_date || '') || null; if (dueDate) validateHistoricalDate(dueDate, 'Due date');
+      const interest = Number(input.interest_amount ?? row.interest_amount ?? 0); if (!Number.isFinite(interest) || interest < 0) throw new Error('Interest must be zero or greater.');
+      const audit = `Edited on ${timestamp.slice(0, 10)} by ${editorMemberId}; previous amount ${row.amount}; previous date ${row.transaction_date}.`;
+      const accountType: FinancialAccountType = row.entry_type === 'fine' ? 'fines' : row.entry_type === 'insurance' ? 'insurance_fund' : 'external_fund';
+      await db.runAsync('UPDATE historical_extra_entries SET amount = ?, transaction_date = ?, fine_reason = ?, lender_name = ?, interest_amount = ?, due_date = ?, source_notes = ?, edited_at = ?, edited_by_member_id = ? WHERE id = ? AND group_id = ?', amount, date, normalizeText(input.fine_reason || row.fine_reason || ''), normalizeText(input.lender_name || row.lender_name || ''), interest, dueDate, [normalizeText(input.source_notes || row.source_notes || ''), audit].filter(Boolean).join(' | '), timestamp, editorMemberId, entryId, groupId);
+      await db.runAsync('UPDATE financial_transactions SET amount = ?, created_at = ?, reason = ? WHERE id = ? AND group_id = ?', amount, `${date}T12:00:00.000Z`, `${row.entry_type} (edited on ${timestamp.slice(0, 10)})`, row.transaction_id, groupId);
+      await db.runAsync('UPDATE financial_accounts SET balance = balance + ?, updated_at = ? WHERE group_id = ? AND account_type = ?', amount - Number(row.amount), timestamp, groupId, accountType);
+      if (row.member_id != null) await db.runAsync('UPDATE member_passbook_records SET amount = ?, created_at = ?, reason = ? WHERE transaction_id = ? AND group_id = ?', amount, `${date}T12:00:00.000Z`, `${row.entry_type} (edited on ${timestamp.slice(0, 10)})`, row.transaction_id, groupId);
+    }
+  });
+  if (entryKind === 'extra') { try { await syncBack4AppFineState(groupId, entryId, false); } catch { /* Local audit remains authoritative until the next cloud sync. */ } }
+}
+
+export async function softDeleteHistoricalEntry(groupId: number, entryKind: 'standard' | 'extra', entryId: number, adminMemberId: number): Promise<void> {
+  await requireHistoricalGroupAdmin(groupId, adminMemberId);
+  const db = await getDatabase(); const timestamp = now();
+  await db.withTransactionAsync(async () => {
+    if (entryKind === 'standard') {
+      const row = await db.getFirstAsync<any>('SELECT * FROM historical_transaction_imports WHERE id = ? AND group_id = ? AND is_deleted = 0 LIMIT 1', entryId, groupId);
+      if (!row) throw new Error('This entry is already deleted or does not exist.');
+      const signed = row.historical_type === 'loan_disbursement' ? -Number(row.amount) : Number(row.amount);
+      const accountType: FinancialAccountType = row.historical_type === 'savings' ? 'savings' : row.historical_type === 'loan_disbursement' ? 'loan_fund' : 'loan_repayment';
+      await db.runAsync('UPDATE historical_transaction_imports SET is_deleted = 1, edited_at = ?, edited_by_member_id = ? WHERE id = ? AND group_id = ?', timestamp, adminMemberId, entryId, groupId);
+      await db.runAsync('UPDATE financial_transactions SET reversed = 1 WHERE id = ? AND group_id = ?', row.transaction_id, groupId);
+      await db.runAsync('UPDATE financial_accounts SET balance = balance - ?, updated_at = ? WHERE group_id = ? AND account_type = ?', signed, timestamp, groupId, accountType);
+      await db.runAsync('UPDATE member_passbook_records SET amount = 0, reason = ? WHERE transaction_id = ? AND group_id = ?', `DELETED on ${timestamp.slice(0, 10)} by admin ${adminMemberId}`, row.transaction_id, groupId);
+      await rebuildHistoricalPassbookBalance(db, groupId, Number(row.member_id));
+    } else {
+      const row = await db.getFirstAsync<any>('SELECT * FROM historical_extra_entries WHERE id = ? AND group_id = ? AND is_deleted = 0 LIMIT 1', entryId, groupId);
+      if (!row) throw new Error('This entry is already deleted or does not exist.');
+      const accountType: FinancialAccountType = row.entry_type === 'fine' ? 'fines' : row.entry_type === 'insurance' ? 'insurance_fund' : 'external_fund';
+      await db.runAsync('UPDATE historical_extra_entries SET is_deleted = 1, edited_at = ?, edited_by_member_id = ? WHERE id = ? AND group_id = ?', timestamp, adminMemberId, entryId, groupId);
+      await db.runAsync('UPDATE financial_transactions SET reversed = 1 WHERE id = ? AND group_id = ?', row.transaction_id, groupId);
+      await db.runAsync('UPDATE financial_accounts SET balance = balance - ?, updated_at = ? WHERE group_id = ? AND account_type = ?', Number(row.amount), timestamp, groupId, accountType);
+      if (row.member_id != null) {
+        await db.runAsync('UPDATE member_passbook_records SET amount = 0, reason = ? WHERE transaction_id = ? AND group_id = ?', `DELETED on ${timestamp.slice(0, 10)} by admin ${adminMemberId}`, row.transaction_id, groupId);
+        await rebuildHistoricalPassbookBalance(db, groupId, Number(row.member_id));
+      }
+    }
+  });
+  if (entryKind === 'extra') { try { await syncBack4AppFineState(groupId, entryId, true); } catch { /* Preserve the local soft-delete if the device is offline. */ } }
+}
+
+async function rebuildHistoricalPassbookBalance(db: SQLite.SQLiteDatabase, groupId: number, memberId: number): Promise<void> {
+  const rows = await db.getAllAsync<{ id: number; amount: number }>('SELECT id, amount FROM member_passbook_records WHERE group_id = ? AND member_id = ? ORDER BY created_at ASC, id ASC', groupId, memberId);
+  let balance = 0;
+  for (const row of rows) { balance += Number(row.amount) || 0; await db.runAsync('UPDATE member_passbook_records SET balance_after = ? WHERE id = ?', balance, row.id); }
 }
 
 /** The number of known/estimated shares for share-based cycle distribution. */
@@ -2376,7 +2607,7 @@ export async function getMemberShareOutBasis(
   );
   const imported = await db.getFirstAsync<{ shares: number; count: number }>(
     `SELECT COALESCE(SUM(share_count), 0) AS shares, COUNT(*) AS count
-     FROM historical_transaction_imports WHERE group_id = ? AND member_id = ? AND historical_type = 'savings'`,
+     FROM historical_transaction_imports WHERE group_id = ? AND member_id = ? AND historical_type = 'savings' AND COALESCE(is_deleted, 0) = 0`,
     groupId, memberId,
   );
   const settings = await getVSLASetupRules(groupId);
@@ -2421,7 +2652,7 @@ const BACKUP_TABLES = [
   'member_auth_attempts', 'member_transaction_signatures', 'app_access_sessions',
   'app_access_authorizers', 'meeting_attendance', 'meeting_closures',
   'financial_accounts', 'financial_collections', 'financial_collection_items',
-  'financial_transactions', 'historical_transaction_imports', 'financial_transaction_reversals', 'receipts',
+  'financial_transactions', 'historical_transaction_imports', 'historical_extra_entries', 'financial_transaction_reversals', 'receipts',
   'notification_queue', 'notification_delivery', 'meeting_audit_records',
   'sync_queue', 'member_passbook_records', 'member_statement_records',
   'loan_interest_charges', 'meeting_loan_interest_charges', 'loan_policy_settings', 'loan_committee_members', 'loan_applications',
@@ -7413,7 +7644,7 @@ export async function getMemberLoanBalance(
          + COALESCE((SELECT SUM(mlic.interest_amount) FROM meeting_loan_interest_charges mlic
            WHERE mlic.group_id = ? AND mlic.member_id = ?), 0)
          + COALESCE((SELECT SUM(hi.historical_interest) FROM historical_transaction_imports hi
-           WHERE hi.group_id = ? AND hi.member_id = ? AND hi.historical_type = 'loan_disbursement'), 0)
+           WHERE hi.group_id = ? AND hi.member_id = ? AND hi.historical_type = 'loan_disbursement' AND COALESCE(hi.is_deleted, 0) = 0), 0)
          AS total`,
       groupId, memberId, groupId, memberId, groupId, memberId, groupId, memberId,
     );
