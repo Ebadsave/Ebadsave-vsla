@@ -93,14 +93,14 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
         AsyncStorage.getItem(ACTIVE_GROUP_STORAGE_KEY),
       ]);
       const activeGroups = allGroups.filter(
-        (item) => item.status?.toLowerCase() === 'active',
+        (item: GroupRecord) => item.status?.toLowerCase() === 'active',
       );
       setAvailableGroups(activeGroups);
 
       const storedId = savedGroupId ? Number(savedGroupId) : NaN;
       const requestedId = preferredGroupId ?? storedId;
       const group = activeGroups.find(
-        (item) => item.id === requestedId,
+        (item: GroupRecord) => item.id === requestedId,
       ) || activeGroups[0] || null;
 
       setActiveGroup(group);
