@@ -349,6 +349,8 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
         <View style={styles.navigationSection}>
           <Text style={styles.sectionTitle}>Group Management</Text>
           <TouchableOpacity style={styles.actionButton} onPress={openAddMembers}><Text style={styles.actionButtonText}>Add Members</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.actionButton} onPress={() => navigateWithGroup('HistoricalRecords')}><Text style={styles.actionButtonText}>Enter Historical Passbook Records</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.actionButton} onPress={() => navigateWithGroup('ShareOutCalculation')}><Text style={styles.actionButtonText}>Share-out Calculation Preview</Text></TouchableOpacity>
           <TouchableOpacity style={styles.actionButton} onPress={() => navigateWithGroup('MemberCollection')}><Text style={styles.actionButtonText}>Member Collection</Text></TouchableOpacity>
           <TouchableOpacity style={styles.actionButton} onPress={() => navigateWithGroup('Expenditure')}><Text style={styles.actionButtonText}>Expenditure</Text></TouchableOpacity>
         </View>
