@@ -97,7 +97,7 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
       } else setPreviousBalance(0);
       if (rules?.share_value != null) setShareValue(String(rules.share_value));
       setCanAdmin(admin);
-      const standard: Entry[] = oldRows.map((r) => ({
+      const standard: Entry[] = oldRows.map((r: HistoricalFinancialTransactionRecord) => ({
         id: r.id, kind: 'standard', type: typeFromStandard(r), amount: Number(r.amount), date: r.transaction_date,
         member_id: r.member_id, member_name: r.member_name, member_number: r.member_number,
         source_reference: r.source_reference, source_notes: r.source_notes, share_count: r.share_count,
