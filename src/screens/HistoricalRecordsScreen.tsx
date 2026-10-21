@@ -3,7 +3,6 @@ import {
   ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal, Platform,
   SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
-import * as Speech from 'expo-speech';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../App';
@@ -38,15 +37,14 @@ const toIsoDate = (display: string) => {
   const d = new Date(`${iso}T12:00:00.000Z`);
   return Number.isFinite(d.getTime()) && d.toISOString().slice(0,10) === iso ? iso : '';
 };
-const labels: Record<EntryType, { title: string; icon: string; color: string; bg: string; voice: string }> = {
-  savings: { title: 'Savings', icon: '🪙', color: '#166534', bg: '#dcfce7', voice: 'Tutahe sente omu nsawo y’okutereka.' },
-  loan_balance: { title: 'Loan Balance', icon: '🤲', color: '#9a3412', bg: '#ffedd5', voice: 'Obusente obusigireyo ku mabanja ni bungahi?' },
-  loan_disbursement: { title: 'Loan Issued', icon: '💸', color: '#92400e', bg: '#fef3c7', voice: 'Sente ezihaire omunywani.' },
-  fine: { title: 'Fine', icon: '⚠️', color: '#b91c1c', bg: '#fee2e2', voice: 'Eky’okubonereza. Tora ekigambo.' },
-  insurance: { title: 'Insurance', icon: '🛡️', color: '#1d4ed8', bg: '#dbeafe', voice: 'Sente z’obulinzi n’okuyambagana.' },
-  external_loan: { title: 'External Loan', icon: '🏦', color: '#6b21a8', bg: '#f3e8ff', voice: 'Ebanja erya guruupu kuruga ahandi.' },
+const labels: Record<EntryType, { title: string; icon: string; color: string; bg: string }> = {
+  savings: { title: 'Savings', icon: '🪙', color: '#166534', bg: '#dcfce7' },
+  loan_balance: { title: 'Loan Balance', icon: '🤲', color: '#9a3412', bg: '#ffedd5' },
+  loan_disbursement: { title: 'Loan Issued', icon: '💸', color: '#92400e', bg: '#fef3c7' },
+  fine: { title: 'Fine', icon: '⚠️', color: '#b91c1c', bg: '#fee2e2' },
+  insurance: { title: 'Insurance', icon: '🛡️', color: '#1d4ed8', bg: '#dbeafe' },
+  external_loan: { title: 'External Loan', icon: '🏦', color: '#6b21a8', bg: '#f3e8ff' },
 };
-const speak = (text: string) => { try { Speech.stop(); Speech.speak(text, { language: 'en-UG', rate: 0.82, pitch: 1.0 }); } catch { /* Device may not have a compatible speech voice installed. */ } };
 const typeFromStandard = (r: HistoricalFinancialTransactionRecord): EntryType => r.historical_type === 'savings' ? 'savings' : r.historical_type === 'loan_disbursement' ? 'loan_disbursement' : 'loan_balance';
 const labelFor = (type: EntryType) => labels[type].title;
 
@@ -125,16 +123,16 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
   const savingsAmount = amountValue(shareCount) * amountValue(shareValue);
   const totalIncome = summary.savings + summary.fines + summary.insurance + summary.externalLoans + summary.loanDisbursements + summary.loanBalances;
 
-  const chooseType = (next: EntryType) => { setType(next); speak(labels[next].voice); if (!editing) { setAmount(''); setDate(displayDate(isoToday())); setDueDate(''); setInterest('0'); setLenderName(''); setReference(''); setNotes(''); } };
+  const chooseType = (next: EntryType) => { setType(next); if (!editing) { setAmount(''); setDate(displayDate(isoToday())); setDueDate(''); setInterest('0'); setLenderName(''); setReference(''); setNotes(''); } };
   const chooseMember = async (member: MemberOption) => {
-    setSelectedMemberId(member.id); setMemberPickerVisible(false); speak(`Omuntu ${member.full_name}.`);
+    setSelectedMemberId(member.id); setMemberPickerVisible(false);
     try { const balance = await getMemberLoanBalance(groupId, member.id); setPreviousBalance(balance.balance); }
     catch { setPreviousBalance(0); }
   };
   const resetForm = () => { setEditing(null); setAmount(''); setDate(displayDate(isoToday())); setDueDate(''); setInterest('0'); setLenderName(''); setReference(''); setNotes(''); setShareCount('1'); setFineReason('late'); };
 
   const save = async () => {
-    if (type !== 'external_loan' && !selectedMemberId) { Alert.alert('Choose a member', 'Tap a member photo first.'); speak('Tora omuntu okusooka.'); return; }
+    if (type !== 'external_loan' && !selectedMemberId) { Alert.alert('Choose a member', 'Tap a member photo first.'); return; }
     const iso = toIsoDate(date);
     if (!iso) { Alert.alert('Date is not correct', 'Enter date as DD-MM-YYYY, for example 17-04-2025.'); return; }
     const dueIso = dueDate.trim() ? toIsoDate(dueDate) : '';
@@ -193,9 +191,8 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
     setFineReason((entry.fine_reason === 'absent' || entry.fine_reason === 'other') ? entry.fine_reason : 'late');
     setLenderName(entry.lender_name || ''); setReference(entry.source_reference || ''); setNotes(entry.source_notes || '');
     if (entry.member_id) void getMemberLoanBalance(groupId, entry.member_id).then(v => setPreviousBalance(v.balance)).catch(() => setPreviousBalance(0));
-    speak('Hindura omubaro n’ekiro kya sente.');
   };
-  const askDelete = (entry: Entry) => { if (!canAdmin) { Alert.alert('Admin only', 'Only the group administrator can delete entries.'); return; } setDeleteTarget(entry); speak('Noha okugyamu omubaro?'); };
+  const askDelete = (entry: Entry) => { if (!canAdmin) { Alert.alert('Admin only', 'Only the group administrator can delete entries.'); return; } setDeleteTarget(entry); };
   const confirmDelete = async () => {
     if (!deleteTarget || !executiveMemberId) return;
     try { await softDeleteHistoricalEntry(groupId, deleteTarget.kind, deleteTarget.id, executiveMemberId); setDeleteTarget(null); await loadData(); }
@@ -205,7 +202,7 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
   if (loading && !groupName) return <SafeAreaView style={styles.center}><ActivityIndicator size="large" color="#166534"/><Text style={styles.help}>Loading group records…</Text></SafeAreaView>;
   return <SafeAreaView style={styles.safe}><KeyboardAvoidingView style={styles.safe} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-      <View style={styles.header}><Text style={styles.eyebrow}>EBADSAVE • KYAMUSONI TUTUNGUKYE</Text><Text style={styles.title}>{groupName}</Text><Text style={styles.groupNo}>{groupNumber}</Text><Text style={styles.subtitle}>Tap the big picture buttons. Listen to the voice prompt. Enter what is written in the passbook.</Text></View>
+      <View style={styles.header}><Text style={styles.eyebrow}>EBADSAVE • KYAMUSONI TUTUNGUKYE</Text><Text style={styles.title}>{groupName}</Text><Text style={styles.groupNo}>{groupNumber}</Text><Text style={styles.subtitle}>Tap the big picture buttons. Enter what is written in the passbook.</Text></View>
       <Text style={styles.sectionTitle}>📊 Imported history totals</Text>
       <View style={styles.summaryCard}>
         {([['🪙 Savings',summary.savings],['⚠️ Fines',summary.fines],['🛡️ Insurance',summary.insurance],['🏦 External Loans',summary.externalLoans],['💸 Loans Issued',summary.loanDisbursements],['🤲 Loan Balances',summary.loanBalances]] as Array<[string,number]>).map(([label,value]) => <View key={label} style={styles.totalLine}><Text style={styles.totalLabel}>{label}</Text><Text style={styles.totalValue}>{money(value)}</Text></View>)}
@@ -218,7 +215,7 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
         <View style={styles.typeGrid}>
           {(['savings','loan_balance','fine','insurance','external_loan','loan_disbursement'] as EntryType[]).map(t => <TouchableOpacity key={t} disabled={!!editing && t !== editing.type} onPress={() => chooseType(t)} style={[styles.typeButton,{backgroundColor: type === t ? labels[t].color : labels[t].bg, borderColor: labels[t].color, opacity: !!editing && t !== editing.type ? 0.35 : 1}]} activeOpacity={0.85}><Text style={styles.typeIcon}>{labels[t].icon}</Text><Text style={[styles.typeText,{color:type===t?'#fff':labels[t].color}]}>{labels[t].title}</Text></TouchableOpacity>)}
         </View>
-        {type !== 'external_loan' && <><Text style={styles.label}>👤 Member — tap photo</Text><TouchableOpacity style={styles.memberSelect} onPress={() => {setMemberPickerVisible(true); speak('Tora omuntu omu bifaananyi.');}} activeOpacity={0.85}>
+        {type !== 'external_loan' && <><Text style={styles.label}>👤 Member — tap photo</Text><TouchableOpacity style={styles.memberSelect} onPress={() => {setMemberPickerVisible(true);}} activeOpacity={0.85}>
           {selectedMember?.photo_uri ? <Image source={{uri:selectedMember.photo_uri}} style={styles.selectedPhoto}/> : <View style={styles.selectedPhotoPlaceholder}><Text style={styles.photoEmoji}>👤</Text></View>}
           <View style={{flex:1}}><Text style={styles.memberName}>{selectedMember?.full_name || 'Choose member'}</Text><Text style={styles.memberNumber}>{selectedMember?.member_number || 'Tap to select'}</Text></View><Text style={styles.pickArrow}>▦</Text>
         </TouchableOpacity></>}
@@ -226,7 +223,7 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
         {type === 'loan_balance' && <>{!editing && <View style={styles.balanceBox}><Text style={styles.balanceLabel}>🤲 PREVIOUS LOAN BALANCE</Text><Text style={styles.balanceValue}>{money(previousBalance)}</Text><Text style={styles.help}>Enter how much the member STILL OWES after today’s payment.</Text></View>}<Text style={styles.label}>{editing ? 'Amount repaid to correct (UGX)' : 'New loan balance — still owe? (UGX)'}</Text><TextInput value={amount} onChangeText={setAmount} keyboardType="numeric" style={styles.input} placeholder={editing ? 'Repayment amount' : 'Balance still owed'}/>{!editing && <View style={styles.calculated}><Text style={styles.calculatedLabel}>REPAYMENT AMOUNT</Text><Text style={styles.calculatedValue}>{money(Math.max(0,previousBalance-amountValue(amount)))}</Text></View>}</>}
         {(type === 'loan_disbursement' || type === 'external_loan') && <><Text style={styles.label}>💰 Amount (UGX)</Text><TextInput value={amount} onChangeText={setAmount} keyboardType="numeric" style={styles.input} placeholder="Enter amount"/><Text style={styles.label}>Interest (UGX)</Text><TextInput value={interest} onChangeText={setInterest} keyboardType="numeric" style={styles.input} placeholder="Interest amount"/><Text style={styles.label}>{type === 'external_loan' ? '🏦 Lender name' : 'Due date (DD-MM-YYYY)'}</Text>{type === 'external_loan' ? <TextInput value={lenderName} onChangeText={setLenderName} style={styles.input} placeholder="Bank / lender / person"/> : null}{type === 'loan_disbursement' ? <TextInput value={dueDate} onChangeText={setDueDate} style={styles.input} placeholder="DD-MM-YYYY" keyboardType="numbers-and-punctuation"/> : null}{type === 'external_loan' && <><Text style={styles.label}>Due date (DD-MM-YYYY)</Text><TextInput value={dueDate} onChangeText={setDueDate} style={styles.input} placeholder="DD-MM-YYYY" keyboardType="numbers-and-punctuation"/></>}</>}
         {(type === 'fine' || type === 'insurance') && <><Text style={styles.label}>💰 Amount (UGX)</Text><TextInput value={amount} onChangeText={setAmount} keyboardType="numeric" style={styles.input} placeholder="Enter amount"/></>}
-        {type === 'fine' && <><Text style={styles.label}>⚠️ Reason — tap icon</Text><View style={styles.reasonRow}>{([['late','⏰','Late'],['absent','🚫','Absent'],['other','❗','Other']] as const).map(([value,icon,label]) => <TouchableOpacity key={value} onPress={() => {setFineReason(value); speak(value==='late'?'Omuntu akereire.':value==='absent'?'Omuntu ataine omu nteerane.':'Ekindi ekibonerezo.');}} style={[styles.reasonButton,fineReason===value&&styles.reasonButtonActive]}><Text style={styles.reasonIcon}>{icon}</Text><Text style={styles.reasonText}>{label}</Text></TouchableOpacity>)}</View></>}
+        {type === 'fine' && <><Text style={styles.label}>⚠️ Reason — tap icon</Text><View style={styles.reasonRow}>{([['late','⏰','Late'],['absent','🚫','Absent'],['other','❗','Other']] as const).map(([value,icon,label]) => <TouchableOpacity key={value} onPress={() => {setFineReason(value);}} style={[styles.reasonButton,fineReason===value&&styles.reasonButtonActive]}><Text style={styles.reasonIcon}>{icon}</Text><Text style={styles.reasonText}>{label}</Text></TouchableOpacity>)}</View></>}
         {type === 'insurance' && <View style={styles.balanceBox}><Text style={styles.balanceLabel}>🛡️ INSURANCE / WELFARE FUND</Text><Text style={styles.help}>This contribution is recorded separately from savings.</Text></View>}
         <Text style={styles.label}>📅 Date (DD-MM-YYYY)</Text><TextInput value={date} onChangeText={setDate} style={styles.input} placeholder="DD-MM-YYYY" keyboardType="numbers-and-punctuation"/>
         <Text style={styles.label}>Notes (optional)</Text><TextInput value={notes} onChangeText={setNotes} style={[styles.input,styles.notes]} placeholder="Optional note" multiline/>
