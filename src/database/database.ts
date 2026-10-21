@@ -121,7 +121,22 @@ export async function getMemberSavings(
       memberId,
     );
 
-  return result?.total ?? 0;
+  // Existing groups can use a verified opening balance when their old books
+  // cannot be completely reconstructed. When actual historical savings lines
+  // have been imported, those lines are the source of truth and the opening
+  // total is not added again.
+  const opening = await db.getFirstAsync<{ amount: number }>(
+    `SELECT CASE WHEN EXISTS (
+       SELECT 1 FROM historical_transaction_imports
+       WHERE group_id = ? AND member_id = ? AND historical_type = 'savings'
+     ) THEN 0 ELSE COALESCE((
+       SELECT opening_savings FROM member_opening_balances
+       WHERE group_id = ? AND member_id = ? LIMIT 1
+     ), 0) END AS amount`,
+    groupId, memberId, groupId, memberId,
+  );
+
+  return Number(result?.total ?? 0) + Number(opening?.amount ?? 0);
 }
 const EXECUTIVE_POSTS = [
   'Chairperson',
@@ -1309,6 +1324,29 @@ status TEXT NOT NULL DEFAULT 'active',
       FOREIGN KEY (meeting_id) REFERENCES group_meetings(id)
     );
 
+    CREATE TABLE IF NOT EXISTS historical_transaction_imports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      member_id INTEGER NOT NULL,
+      transaction_id INTEGER NOT NULL UNIQUE,
+      historical_type TEXT NOT NULL CHECK (historical_type IN ('savings', 'loan_disbursement', 'loan_repayment')),
+      amount REAL NOT NULL CHECK (amount > 0),
+      transaction_date TEXT NOT NULL,
+      share_count INTEGER,
+      share_value REAL,
+      loan_due_date TEXT,
+      historical_interest REAL NOT NULL DEFAULT 0,
+      source_reference TEXT NOT NULL COLLATE NOCASE,
+      source_notes TEXT NOT NULL DEFAULT '',
+      imported_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (member_id) REFERENCES members(id),
+      FOREIGN KEY (transaction_id) REFERENCES financial_transactions(id),
+      UNIQUE (group_id, source_reference)
+    );
+    CREATE INDEX IF NOT EXISTS idx_historical_imports_member_date
+      ON historical_transaction_imports(group_id, member_id, transaction_date, id);
+
     CREATE TABLE IF NOT EXISTS financial_transaction_reversals (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       original_transaction_id INTEGER NOT NULL UNIQUE,
@@ -2093,6 +2131,280 @@ status TEXT NOT NULL DEFAULT 'active',
 }
 
 /* ============================================================
+   HISTORICAL PASSBOOK / LOAN-BOOK IMPORT
+   ============================================================ */
+
+export type HistoricalFinancialType = 'savings' | 'loan_disbursement' | 'loan_repayment';
+
+export type HistoricalFinancialTransactionInput = {
+  member_id: number;
+  historical_type: HistoricalFinancialType;
+  amount: number;
+  transaction_date: string; // YYYY-MM-DD, as written in the physical book
+  source_reference: string; // unique group-wide reference, e.g. PBOOK-04-LINE-02
+  source_notes?: string;
+  share_count?: number | null;
+  share_value?: number | null;
+  loan_due_date?: string | null;
+  historical_interest?: number | null;
+};
+
+export type HistoricalFinancialTransactionRecord = {
+  id: number;
+  group_id: number;
+  member_id: number;
+  member_name: string;
+  member_number: string;
+  transaction_id: number;
+  historical_type: HistoricalFinancialType;
+  amount: number;
+  transaction_date: string;
+  share_count: number | null;
+  share_value: number | null;
+  loan_due_date: string | null;
+  historical_interest: number;
+  source_reference: string;
+  source_notes: string;
+  imported_at: string;
+};
+
+function validIsoDateOnly(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T12:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+/**
+ * Import one historical entry from a physical passbook or loan book.
+ * It becomes a real ledger transaction, so savings and loan-balance summaries
+ * use it. The source reference is unique per group to prevent duplicate imports.
+ * It intentionally does not enforce today's share limits or today's loan rules
+ * on transactions that occurred before the group began using Ebadsave.
+ */
+export async function recordHistoricalFinancialTransaction(
+  groupId: number,
+  input: HistoricalFinancialTransactionInput,
+): Promise<number> {
+  const db = await getDatabase();
+  const type = input.historical_type;
+  const amount = Number(input.amount);
+  const sourceReference = normalizeText(input.source_reference);
+  const notes = normalizeText(input.source_notes);
+  const transactionDate = normalizeText(input.transaction_date);
+  const shareCount = input.share_count == null ? null : Number(input.share_count);
+  const shareValue = input.share_value == null ? null : Number(input.share_value);
+  const dueDate = normalizeText(input.loan_due_date || '') || null;
+  const historicalInterest = Number(input.historical_interest ?? 0);
+
+  if (!Number.isInteger(groupId) || groupId <= 0) throw new Error('Select a valid group.');
+  if (!Number.isInteger(input.member_id) || input.member_id <= 0) throw new Error('Select a valid member.');
+  if (!['savings', 'loan_disbursement', 'loan_repayment'].includes(type)) throw new Error('Select a valid historical transaction type.');
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('Amount must be greater than zero.');
+  if (!validIsoDateOnly(transactionDate)) throw new Error('Transaction date must be a real date in YYYY-MM-DD format.');
+  const localNow = new Date();
+  const localToday = `${localNow.getFullYear()}-${String(localNow.getMonth() + 1).padStart(2, '0')}-${String(localNow.getDate()).padStart(2, '0')}`;
+  if (transactionDate > localToday) throw new Error('A historical transaction date cannot be in the future.');
+  if (!sourceReference) throw new Error('Enter a unique reference to the physical book/page/line.');
+  if (sourceReference.length > 120) throw new Error('The source reference must be 120 characters or fewer.');
+  if (!Number.isFinite(historicalInterest) || historicalInterest < 0) throw new Error('Historical interest must be zero or greater.');
+  if (dueDate && !validIsoDateOnly(dueDate)) throw new Error('Loan due date must be a real date in YYYY-MM-DD format.');
+
+  if (type === 'savings') {
+    if (!Number.isInteger(shareCount) || Number(shareCount) < 1) throw new Error('For a historical savings entry, enter the whole number of shares recorded in the book.');
+    if (!Number.isFinite(shareValue) || Number(shareValue) <= 0) throw new Error('Enter the share value that applied on that historical date.');
+    const expectedAmount = Number(shareCount) * Number(shareValue);
+    if (Math.abs(expectedAmount - amount) > 0.01) {
+      throw new Error(`The amount in the book should match shares × historical share value (${expectedAmount.toLocaleString()}). Check the entry before importing.`);
+    }
+  } else if (shareCount != null || shareValue != null) {
+    throw new Error('Share count and share value should only be entered for savings entries.');
+  }
+
+  const member = await db.getFirstAsync<{ id: number; group_id: number; full_name: string }>(
+    `SELECT id, group_id, full_name FROM members WHERE id = ? AND group_id = ? LIMIT 1`,
+    input.member_id, groupId,
+  );
+  if (!member) throw new Error('The selected member does not belong to this group.');
+  const duplicate = await db.getFirstAsync<{ id: number }>(
+    `SELECT id FROM historical_transaction_imports WHERE group_id = ? AND source_reference = ? COLLATE NOCASE LIMIT 1`,
+    groupId, sourceReference,
+  );
+  if (duplicate) throw new Error('That physical-book reference has already been imported for this group. Use the original entry or enter the correct unique line reference.');
+
+  const accountType: FinancialAccountType = type === 'savings'
+    ? 'savings'
+    : type === 'loan_disbursement' ? 'loan_fund' : 'loan_repayment';
+  const transactionType = type === 'savings'
+    ? 'savings_contribution'
+    : type === 'loan_disbursement' ? 'loan_issued' : 'loan_repayment';
+  const signedAmount = type === 'loan_disbursement' ? -Math.abs(amount) : amount;
+  // Noon UTC prevents the date-only book date shifting to the previous/next day
+  // when viewed on devices in different time zones.
+  const ledgerDate = `${transactionDate}T12:00:00.000Z`;
+  const timestamp = now();
+  let transactionId = 0;
+
+  await db.withTransactionAsync(async () => {
+    const duplicateInside = await db.getFirstAsync<{ id: number }>(
+      `SELECT id FROM historical_transaction_imports WHERE group_id = ? AND source_reference = ? COLLATE NOCASE LIMIT 1`,
+      groupId, sourceReference,
+    );
+    if (duplicateInside) throw new Error('That physical-book reference has already been imported for this group.');
+
+    await ensureFinancialAccountsForGroup(db, groupId);
+    const inserted = await db.runAsync(
+      `INSERT INTO financial_transactions (
+        group_id, account_type, amount, reason, member_id, meeting_id,
+        collection_id, transaction_type, reversed_transaction_id, reversed, created_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, NULL, 0, ?)`,
+      groupId, accountType, signedAmount,
+      `Historical ${type.replace('_', ' ')} — ${sourceReference}${notes ? ` — ${notes}` : ''}`,
+      input.member_id, transactionType, ledgerDate,
+    );
+    transactionId = inserted.lastInsertRowId;
+
+    await db.runAsync(
+      `UPDATE financial_accounts SET balance = balance + ?, updated_at = ? WHERE group_id = ? AND account_type = ?`,
+      signedAmount, timestamp, groupId, accountType,
+    );
+
+    await db.runAsync(
+      `INSERT INTO historical_transaction_imports (
+        group_id, member_id, transaction_id, historical_type, amount, transaction_date,
+        share_count, share_value, loan_due_date, historical_interest,
+        source_reference, source_notes, imported_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      groupId, input.member_id, transactionId, type, amount, transactionDate,
+      type === 'savings' ? shareCount : null,
+      type === 'savings' ? shareValue : null,
+      type === 'loan_disbursement' ? dueDate : null,
+      type === 'loan_disbursement' ? historicalInterest : 0,
+      sourceReference, notes, timestamp,
+    );
+
+    await addPassbookEntry(
+      db, groupId, input.member_id, null, transactionId,
+      type === 'savings' ? 'savings_contribution' : type === 'loan_disbursement' ? 'loan_issued' : 'loan_repayment',
+      amount,
+      `Historical ${type.replace('_', ' ')} — ${sourceReference}${notes ? ` — ${notes}` : ''}`,
+      ledgerDate,
+    );
+
+    // Backdated passbook rows change the chronological running balance.
+    // Rebuild the member's displayed running balances in date order rather than
+    // leaving later entries with balances calculated before this import.
+    const passbookRows = await db.getAllAsync<{ id: number; amount: number }>(
+      `SELECT id, amount FROM member_passbook_records
+       WHERE group_id = ? AND member_id = ? ORDER BY created_at ASC, id ASC`,
+      groupId, input.member_id,
+    );
+    let runningPassbookBalance = 0;
+    for (const row of passbookRows) {
+      runningPassbookBalance += Number(row.amount) || 0;
+      await db.runAsync(`UPDATE member_passbook_records SET balance_after = ? WHERE id = ?`, runningPassbookBalance, row.id);
+    }
+
+    await db.runAsync(`UPDATE groups SET last_activity_at = ? WHERE id = ?`, timestamp, groupId);
+  });
+
+  return transactionId;
+}
+
+export async function getHistoricalFinancialTransactions(
+  groupId: number,
+  limit = 100,
+): Promise<HistoricalFinancialTransactionRecord[]> {
+  const db = await getDatabase();
+  const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+  return db.getAllAsync<HistoricalFinancialTransactionRecord>(
+    `SELECT h.*, m.full_name AS member_name, m.member_number
+     FROM historical_transaction_imports h
+     JOIN members m ON m.id = h.member_id AND m.group_id = h.group_id
+     WHERE h.group_id = ?
+     ORDER BY h.transaction_date DESC, h.id DESC
+     LIMIT ?`,
+    groupId, safeLimit,
+  );
+}
+
+export type HistoricalFinancialSummary = {
+  records: number;
+  savings: number;
+  loanDisbursements: number;
+  loanRepayments: number;
+  recordedHistoricalInterest: number;
+};
+
+export async function getHistoricalFinancialSummary(
+  groupId: number,
+): Promise<HistoricalFinancialSummary> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{
+    records: number;
+    savings: number;
+    loanDisbursements: number;
+    loanRepayments: number;
+    recordedHistoricalInterest: number;
+  }>(
+    `SELECT COUNT(*) AS records,
+       COALESCE(SUM(CASE WHEN historical_type = 'savings' THEN amount ELSE 0 END), 0) AS savings,
+       COALESCE(SUM(CASE WHEN historical_type = 'loan_disbursement' THEN amount ELSE 0 END), 0) AS loanDisbursements,
+       COALESCE(SUM(CASE WHEN historical_type = 'loan_repayment' THEN amount ELSE 0 END), 0) AS loanRepayments,
+       COALESCE(SUM(CASE WHEN historical_type = 'loan_disbursement' THEN historical_interest ELSE 0 END), 0) AS recordedHistoricalInterest
+     FROM historical_transaction_imports WHERE group_id = ?`,
+    groupId,
+  );
+  return {
+    records: Number(row?.records ?? 0),
+    savings: Number(row?.savings ?? 0),
+    loanDisbursements: Number(row?.loanDisbursements ?? 0),
+    loanRepayments: Number(row?.loanRepayments ?? 0),
+    recordedHistoricalInterest: Number(row?.recordedHistoricalInterest ?? 0),
+  };
+}
+
+/** The number of known/estimated shares for share-based cycle distribution. */
+export async function getMemberShareOutBasis(
+  groupId: number,
+  memberId: number,
+): Promise<{ savings: number; shares: number; sharesEstimated: boolean }> {
+  const db = await getDatabase();
+  const savings = await getMemberSavings(groupId, memberId);
+  const opening = await db.getFirstAsync<{ opening_shares: number | null }>(
+    `SELECT opening_shares FROM member_opening_balances WHERE group_id = ? AND member_id = ? LIMIT 1`,
+    groupId, memberId,
+  );
+  const imported = await db.getFirstAsync<{ shares: number; count: number }>(
+    `SELECT COALESCE(SUM(share_count), 0) AS shares, COUNT(*) AS count
+     FROM historical_transaction_imports WHERE group_id = ? AND member_id = ? AND historical_type = 'savings'`,
+    groupId, memberId,
+  );
+  const settings = await getVSLASetupRules(groupId);
+  const currentShareValue = Number(settings?.share_value ?? 0);
+  const unimportedSavings = await db.getFirstAsync<{ amount: number }>(
+    `SELECT COALESCE(SUM(ft.amount), 0) AS amount
+     FROM financial_transactions ft
+     LEFT JOIN historical_transaction_imports h ON h.transaction_id = ft.id
+     WHERE ft.group_id = ? AND ft.member_id = ? AND ft.account_type = 'savings'
+       AND ft.transaction_type = 'savings_contribution' AND ft.reversed = 0
+       AND h.id IS NULL`,
+    groupId, memberId,
+  );
+  const hasHistoricalShares = Number(imported?.count ?? 0) > 0;
+  const openingShares = hasHistoricalShares ? 0 : Number(opening?.opening_shares ?? 0);
+  const rawEstimatedShares = currentShareValue > 0
+    ? Number(unimportedSavings?.amount ?? 0) / currentShareValue
+    : 0;
+  const roundedEstimatedShares = Math.round(rawEstimatedShares);
+  const sharesEstimated = Math.abs(rawEstimatedShares - roundedEstimatedShares) > 0.001 || Number(unimportedSavings?.amount ?? 0) > 0;
+  return {
+    savings,
+    shares: Number(imported?.shares ?? 0) + openingShares + roundedEstimatedShares,
+    sharesEstimated,
+  };
+}
+
+/* ============================================================
    BACKUP / RESTORE
    ============================================================ */
 
@@ -2103,13 +2415,13 @@ export type EbadsaveBackup = {
 };
 
 const BACKUP_TABLES = [
-  'groups', 'group_registration_attempts', 'members', 'deleted_member_numbers', 'member_next_of_kin',
-  'next_of_kin_change_history', 'next_of_kin_benefits', 'group_rules',
+  'groups', 'group_registration_attempts', 'members', 'member_opening_balances', 'onboarding_balance_audit',
+  'deleted_member_numbers', 'member_next_of_kin', 'next_of_kin_change_history', 'next_of_kin_benefits', 'group_rules',
   'vsla_setup_rules', 'group_meetings', 'member_credentials',
   'member_auth_attempts', 'member_transaction_signatures', 'app_access_sessions',
   'app_access_authorizers', 'meeting_attendance', 'meeting_closures',
   'financial_accounts', 'financial_collections', 'financial_collection_items',
-  'financial_transactions', 'financial_transaction_reversals', 'receipts',
+  'financial_transactions', 'historical_transaction_imports', 'financial_transaction_reversals', 'receipts',
   'notification_queue', 'notification_delivery', 'meeting_audit_records',
   'sync_queue', 'member_passbook_records', 'member_statement_records',
   'loan_interest_charges', 'meeting_loan_interest_charges', 'loan_policy_settings', 'loan_committee_members', 'loan_applications',
@@ -5034,7 +5346,7 @@ export async function getMemberPassbook(
     `SELECT *
      FROM member_passbook_records
      WHERE member_id = ?
-     ORDER BY id ASC`,
+     ORDER BY created_at ASC, id ASC`,
     memberId,
   );
 }
@@ -6992,6 +7304,33 @@ export async function getMemberLoanDueDate(
   );
   if (contract?.due_date) return contract.due_date;
 
+  const outstanding = await getMemberLoanBalance(groupId, memberId);
+  if (outstanding.balance > 0) {
+    const historicalLoan = await db.getFirstAsync<{ loan_due_date: string | null }>(
+      `SELECT loan_due_date FROM historical_transaction_imports
+       WHERE group_id = ? AND member_id = ? AND historical_type = 'loan_disbursement'
+         AND loan_due_date IS NOT NULL
+       ORDER BY transaction_date DESC, id DESC LIMIT 1`,
+      groupId, memberId,
+    );
+    if (historicalLoan?.loan_due_date) return historicalLoan.loan_due_date;
+  } else {
+    const recordedLoanLedger = await db.getFirstAsync<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM financial_transactions
+       WHERE group_id = ? AND member_id = ? AND reversed = 0
+         AND transaction_type IN ('loan_issued', 'loan_repayment')`,
+      groupId, memberId,
+    );
+    const openingLoan = await db.getFirstAsync<{ amount: number }>(
+      `SELECT COALESCE(opening_loan_balance, 0) AS amount
+       FROM member_opening_balances WHERE group_id = ? AND member_id = ? LIMIT 1`,
+      groupId, memberId,
+    );
+    // Do not return stale statement/opening due dates after a tracked balance
+    // has been cleared. Legacy statement-only members remain supported below.
+    if (Number(recordedLoanLedger?.count ?? 0) > 0 || Number(openingLoan?.amount ?? 0) > 0) return null;
+  }
+
   // Older loans may have a due date saved in a member statement rather than
   // a loan contract record. Use that only when the last statement still had
   // an outstanding loan balance.
@@ -7073,11 +7412,23 @@ export async function getMemberLoanBalance(
            WHERE lr.group_id = ? AND lr.member_id = ? AND lr.status != 'cancelled' AND lft.reversed = 0), 0)
          + COALESCE((SELECT SUM(mlic.interest_amount) FROM meeting_loan_interest_charges mlic
            WHERE mlic.group_id = ? AND mlic.member_id = ?), 0)
+         + COALESCE((SELECT SUM(hi.historical_interest) FROM historical_transaction_imports hi
+           WHERE hi.group_id = ? AND hi.member_id = ? AND hi.historical_type = 'loan_disbursement'), 0)
          AS total`,
-      groupId, memberId, groupId, memberId, groupId, memberId,
+      groupId, memberId, groupId, memberId, groupId, memberId, groupId, memberId,
     );
 
-  const principal = issued?.total ?? 0;
+  const openingPrincipal = await db.getFirstAsync<{ amount: number }>(
+    `SELECT CASE WHEN EXISTS (
+       SELECT 1 FROM historical_transaction_imports
+       WHERE group_id = ? AND member_id = ? AND historical_type = 'loan_disbursement'
+     ) THEN 0 ELSE COALESCE((
+       SELECT opening_loan_balance FROM member_opening_balances
+       WHERE group_id = ? AND member_id = ? LIMIT 1
+     ), 0) END AS amount`,
+    groupId, memberId, groupId, memberId,
+  );
+  const principal = Number(issued?.total ?? 0) + Number(openingPrincipal?.amount ?? 0);
   const paid = repayments?.total ?? 0;
   const interest = interestCharges?.total ?? 0;
 
