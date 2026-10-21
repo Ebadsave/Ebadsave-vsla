@@ -25,6 +25,8 @@ import ExpenditureScreen from './src/screens/ExpenditureScreen';
 import BackupRestoreScreen from './src/screens/BackupRestoreScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
 import ExistingGroupOnboardingScreen from './src/screens/ExistingGroupOnboardingScreen';
+import HistoricalRecordsScreen from './src/screens/HistoricalRecordsScreen';
+import ShareOutCalculationScreen from './src/screens/ShareOutCalculationScreen';
 import './src/services/backupBackground';
 import { initializeAutomaticBackupTask } from './src/services/backupBackground';
 
@@ -32,6 +34,8 @@ export type RootStackParamList = {
   Onboarding: undefined;
   Welcome: undefined;
   ExistingGroupOnboarding: { groupId: number };
+  HistoricalRecords: { groupId: number; executiveMemberId: number };
+  ShareOutCalculation: { groupId: number; executiveMemberId: number };
   PreAppAuthorization: undefined;
   Home: undefined;
   Constitution: undefined;
@@ -196,6 +200,8 @@ export default function App() {
         <Stack.Screen name="Onboarding" component={OnboardingScreen} />
         <Stack.Screen name="Welcome" component={WelcomeScreen} />
         <Stack.Screen name="ExistingGroupOnboarding" component={ExistingGroupOnboardingScreen} />
+        <Stack.Screen name="HistoricalRecords" component={HistoricalRecordsScreen} />
+        <Stack.Screen name="ShareOutCalculation" component={ShareOutCalculationScreen} />
 
         <Stack.Screen
           name="PreAppAuthorization"
