@@ -9,26 +9,27 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
-import { useTranslation } from 'react-i18next';
 
 import {
   getAllGroups,
   getHomeDashboardSummary,
-  getFinancialTransactions,
   getLastConcludedMeeting,
   getMembersByGroupId,
-  getMemberSavings,
-  getVSLASetupRules,
   getOpenMeeting,
-  type FinancialTransactionRecord,
   type GroupRecord,
   type MemberRecord,
 } from '../database/database';
 
-type HomeScreenProps = { navigation: any };
-type DetailRow = { label: string; amount?: number; detail?: string; deduction?: boolean };
-type CardDetails = { title: string; subtitle: string; rows: DetailRow[]; totalLabel: string; totalValue?: number; note?: string; warning?: string };
+type HomeScreenProps = {
+  navigation: any;
+  route?: any;
+};
+
+// Keep one explicit selection so the group name on screen and all data queries
+// always use the same group, including after navigating away and returning.
+export const ACTIVE_GROUP_STORAGE_KEY = '@ebadsave/activeGroupId';
 
 type Dashboard = {
   savings: number;
@@ -59,6 +60,7 @@ const emptyDashboard: Dashboard = {
   fundBalance: 0,
   loansOut: 0,
   members: 0,
+  // Currency is loaded from the active group's configured currency.
   currency: '',
   openMeetingId: null,
   lastClosedMeetingId: null,
@@ -69,88 +71,69 @@ const money = (currency: string, value: number) => {
   return currency?.trim() ? `${currency.trim()} ${amount}` : amount;
 };
 
-export default function HomeScreen({ navigation }: HomeScreenProps) {
-  const { t } = useTranslation();
+export default function HomeScreen({ navigation, route }: HomeScreenProps) {
+  const routeGroupId = typeof route?.params?.groupId === 'number'
+    ? route.params.groupId
+    : undefined;
   const [activeGroup, setActiveGroup] = useState<GroupRecord | null>(null);
+  const [availableGroups, setAvailableGroups] = useState<GroupRecord[]>([]);
+  const [groupPickerVisible, setGroupPickerVisible] = useState(false);
   const [executiveMemberId, setExecutiveMemberId] = useState<number | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard>(emptyDashboard);
   const [lastMeetingNumber, setLastMeetingNumber] = useState<number | null>(null);
   const [currentMeetingNumber, setCurrentMeetingNumber] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
-  const [cardDetailsVisible, setCardDetailsVisible] = useState(false);
-  const [cardDetailsLoading, setCardDetailsLoading] = useState(false);
-  const [cardDetails, setCardDetails] = useState<CardDetails | null>(null);
 
-  const loadHome = useCallback(async () => {
+  const loadHome = useCallback(async (preferredGroupId?: number) => {
     try {
       setLoading(true);
 
-      const groups = await getAllGroups();
+      const [allGroups, savedGroupId] = await Promise.all([
+        getAllGroups(),
+        AsyncStorage.getItem(ACTIVE_GROUP_STORAGE_KEY),
+      ]);
+      const activeGroups = allGroups.filter(
+        (item) => item.status?.toLowerCase() === 'active',
+      );
+      setAvailableGroups(activeGroups);
 
-      const group =
-        groups.find(
-          (item) => item.status?.toLowerCase() === 'active',
-        ) || null;
+      const storedId = savedGroupId ? Number(savedGroupId) : NaN;
+      const requestedId = preferredGroupId ?? storedId;
+      const group = activeGroups.find(
+        (item) => item.id === requestedId,
+      ) || activeGroups[0] || null;
 
       setActiveGroup(group);
+      // Never leave the previous group's totals visible under the new name
+      // while the selected group's records are loading.
+      setDashboard(emptyDashboard);
+      setExecutiveMemberId(null);
+      setLastMeetingNumber(null);
+      setCurrentMeetingNumber(null);
 
       if (!group) {
-        setExecutiveMemberId(null);
-        setDashboard(emptyDashboard);
-        setLastMeetingNumber(null);
-        setCurrentMeetingNumber(null);
         return;
       }
 
+      // Persist the exact group used to load the dashboard. Do not infer the
+      // selected group from the first database row on subsequent visits.
+      await AsyncStorage.setItem(ACTIVE_GROUP_STORAGE_KEY, String(group.id));
+
       const members = await getMembersByGroupId(group.id);
-
-      // updateMemberRoles() stores the general role as 'executive' and the
-      // actual post in assigned_roles. Older records may store the post in
-      // role directly, so accept both formats without changing any records.
-      const executiveRoles = new Set([
-        'chairperson',
-        'chair',
-        'vice chair',
-        'vice chairperson',
-        'vice-chair',
-        'secretary',
-        'treasurer',
-        'money counter',
-        'key keeper',
-        'supervisor',
-      ]);
-
-      const executive = members.find((member: MemberRecord) => {
-        if (member.status?.toLowerCase() !== 'active') return false;
-
-        const legacyRole = member.role?.trim().toLowerCase() || '';
-        const assignedPosts = (member.assigned_roles || '')
-          .split(',')
-          .map((post) => post.trim().toLowerCase())
-          .filter(Boolean);
-
-        // Do not treat the generic value 'executive' alone as a post. A
-        // member must have an actual executive post assigned.
-        // Legacy records may mark the group administrator with is_super_user
-        // even when assigned_roles has not been migrated yet. Keep this
-        // compatible with that stored role while still requiring an actual
-        // executive post for ordinary executive members.
-        return Number(member.is_super_user) === 1 ||
-          executiveRoles.has(legacyRole) ||
-          assignedPosts.some((post) => executiveRoles.has(post));
-      });
-
+      const executive = members.find(
+        (member: MemberRecord) =>
+          member.status?.toLowerCase() === 'active' &&
+          (member.role?.toLowerCase() === 'executive' || Number(member.is_super_user ?? 0) === 1),
+      );
       setExecutiveMemberId(executive?.id ?? null);
 
       const summary = await getHomeDashboardSummary(group.id);
       setDashboard(summary);
 
-      // Meeting IDs come from getHomeDashboardSummary().
-      // Fetch only the corresponding meeting records when we need their numbers.
+      // All meeting details are looked up using the same selected group ID.
       const last = summary.lastClosedMeetingId
         ? await getLastConcludedMeeting(group.id)
         : null;
-
       const open = summary.openMeetingId
         ? await getOpenMeeting(group.id)
         : null;
@@ -159,60 +142,69 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
       setCurrentMeetingNumber(open?.meeting_number ?? null);
     } catch (error) {
       console.error('Failed to load Home dashboard:', error);
-      Alert.alert(
-        'Home screen error',
-        'Unable to load the latest database totals.',
-      );
+      Alert.alert('Home screen error', 'Unable to load the selected group and its database totals.');
     } finally {
       setLoading(false);
     }
   }, []);
 
+  const switchToGroup = async (group: GroupRecord) => {
+    try {
+      setGroupPickerVisible(false);
+      await AsyncStorage.setItem(ACTIVE_GROUP_STORAGE_KEY, String(group.id));
+      await loadHome(group.id);
+    } catch (error) {
+      console.error('Failed to switch group:', error);
+      Alert.alert('Group switch failed', 'Could not switch to the selected group. Please try again.');
+    }
+  };
+
   useFocusEffect(
     useCallback(() => {
-      loadHome();
-    }, [loadHome]),
+      let focused = true;
+
+      const loadRequestedGroup = async () => {
+        // Constitution passes groupId when a user explicitly opens a group.
+        // Consume that request after it is loaded so it does not override a
+        // later manual switch when returning from another screen.
+        await loadHome(routeGroupId);
+        if (focused && routeGroupId !== undefined) {
+          navigation.setParams?.({ groupId: undefined });
+        }
+      };
+
+      void loadRequestedGroup();
+      return () => {
+        focused = false;
+      };
+    }, [loadHome, navigation, routeGroupId]),
   );
 
   const requireGroup = () => {
     if (!activeGroup) {
-      Alert.alert(
-        'No Active Group',
-        'Please register a group before continuing.',
-      );
+      Alert.alert('No Active Group', 'Please register a group before continuing.');
       return false;
     }
-
     return true;
   };
 
   const requireExecutive = () => {
     if (!requireGroup()) return false;
-
     if (!executiveMemberId) {
-      Alert.alert(
-        'Executive Required',
-        'Please assign an executive role to a member first.',
-      );
+      Alert.alert('Executive Required', 'Please assign an executive member first.');
       return false;
     }
-
     return true;
   };
 
   const openAddMembers = () => {
     if (!requireGroup()) return;
-
-    navigation.navigate('AddMembers', {
-      groupId: activeGroup!.id,
-    });
+    navigation.navigate('AddMembers', { groupId: activeGroup!.id });
   };
 
   const currentMeeting = async () => {
     if (!requireGroup()) return;
-
     const meeting = await getOpenMeeting(activeGroup!.id);
-
     if (!meeting) {
       Alert.alert(
         'No Current Meeting',
@@ -221,24 +213,18 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
       return;
     }
 
-    // Return to the meeting control screen so the user can continue roll call
-    // and still reach the existing close-meeting checklist.
-    navigation.navigate('NewMeeting', {
+    navigation.navigate('FinancialTransactions', {
       groupId: activeGroup!.id,
-      executiveMemberId: executiveMemberId!,
+      meetingId: meeting.id,
+      currency: dashboard.currency,
     });
   };
 
   const previousSummary = async () => {
     if (!requireGroup()) return;
-
     const meeting = await getLastConcludedMeeting(activeGroup!.id);
-
     if (!meeting) {
-      Alert.alert(
-        'No Meeting Summary',
-        'No concluded meeting is available yet.',
-      );
+      Alert.alert('No Meeting Summary', 'No concluded meeting is available yet.');
       return;
     }
 
@@ -249,12 +235,8 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
     });
   };
 
-  const navigateWithGroup = (
-    screen: string,
-    extra: Record<string, unknown> = {},
-  ) => {
+  const navigateWithGroup = (screen: string, extra: Record<string, unknown> = {}) => {
     if (!requireExecutive()) return;
-
     navigation.navigate(screen, {
       groupId: activeGroup!.id,
       executiveMemberId: executiveMemberId!,
@@ -265,287 +247,66 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
 
   const startMeeting = () => {
     if (!requireExecutive()) return;
-
     navigation.navigate('NewMeeting', {
       groupId: activeGroup!.id,
       executiveMemberId: executiveMemberId!,
     });
   };
 
-  const openCardDetails = async (cardKey: 'savings' | 'loansOut' | 'members' | 'loanFund' | 'insuranceFund' | 'fines') => {
-    if (!requireGroup()) return;
-
-    const titles: Record<typeof cardKey, string> = {
-      savings: 'Total Savings — Breakdown',
-      loansOut: 'Loans Out — Breakdown',
-      members: 'Members — Details',
-      loanFund: 'Loan Fund — Source of Funds',
-      insuranceFund: 'Insurance Fund — Breakdown',
-      fines: 'Fines Fund — Breakdown',
-    };
-    setCardDetails({ title: titles[cardKey], subtitle: 'Loading current records…', rows: [], totalLabel: 'Total' });
-    setCardDetailsVisible(true);
-    setCardDetailsLoading(true);
-
-    try {
-      const transactions: FinancialTransactionRecord[] = await getFinancialTransactions(activeGroup!.id);
-      const valid = transactions.filter((t) => Number(t.reversed) !== 1);
-      const sum = (rows: FinancialTransactionRecord[]) => rows.reduce((total, t) => {
-        const amount = Number(t.amount);
-        return total + (Number.isFinite(amount) ? amount : 0);
-      }, 0);
-      const byType = (rows: FinancialTransactionRecord[]): DetailRow[] => {
-        const totals = new Map<string, number>();
-        for (const transaction of rows) {
-          const type = (transaction.transaction_type || 'other_transaction').replace(/_/g, ' ');
-          const amount = Number(transaction.amount) || 0;
-          totals.set(type, (totals.get(type) || 0) + amount);
-        }
-        return [...totals.entries()]
-          .sort((a, b) => a[0].localeCompare(b[0]))
-          .map(([label, amount]) => ({ label: label.charAt(0).toUpperCase() + label.slice(1), amount, deduction: amount < 0 }));
-      };
-      const accountRows = (account: string) => valid.filter((t) => t.account_type === account);
-      let rows: DetailRow[] = [];
-      let totalLabel = 'Current balance';
-      let totalValue = 0;
-      let subtitle = 'Based on recorded transactions in this group.';
-      let note = 'Reversed transactions are excluded. Amounts are taken from the local transaction ledger.';
-      let warning: string | undefined;
-
-      if (cardKey === 'members') {
-        const members = (await getMembersByGroupId(activeGroup!.id)).filter((m) => m.status?.toLowerCase() === 'active');
-        rows = members.map((m) => ({
-          label: m.full_name || `Member ${m.member_number}`,
-          detail: [m.member_number, m.role || 'Member', m.phone || 'No phone number'].filter(Boolean).join(' • '),
-        }));
-        totalLabel = 'Active members';
-        totalValue = members.length;
-        subtitle = 'Active members registered in this group.';
-        note = 'Tap Add Members in Group Management to register or update a member.';
-      } else if (cardKey === 'savings') {
-        const allMembers = await getMembersByGroupId(activeGroup!.id);
-        const setupRules = await getVSLASetupRules(activeGroup!.id);
-        const shareValue = Math.max(1, Number(setupRules?.share_value) || 1);
-        const methodology = setupRules?.share_out_methodology === 'share_based'
-          ? 'share_based'
-          : 'savings_based';
-        const memberSavings = await Promise.all(allMembers.map(async (member) => ({
-          member,
-          savings: Math.max(0, Number(await getMemberSavings(activeGroup!.id, member.id)) || 0),
-        })));
-        const groupSavings = memberSavings.reduce((total, item) => total + item.savings, 0);
-        const displayedMemberSavings = memberSavings.filter(
-          ({ member, savings }) => savings > 0 || member.status?.toLowerCase() === 'active',
-        );
-        rows = displayedMemberSavings
-          .sort((a, b) => a.member.full_name.localeCompare(b.member.full_name))
-          .map(({ member, savings }) => {
-            const estimatedShareOut = methodology === 'share_based'
-              ? Math.floor(savings / shareValue) * shareValue
-              : savings;
-            const remainder = Math.max(0, savings - estimatedShareOut);
-            const detailParts = [
-              `Member no. ${member.member_number}`,
-              `Total savings: ${money(dashboard.currency, savings)}`,
-            ];
-            if (methodology === 'share_based') {
-              detailParts.push(`Estimated whole shares: ${Math.floor(savings / shareValue)}`);
-              if (remainder > 0) detailParts.push(`Amount outside whole shares: ${money(dashboard.currency, remainder)}`);
-            }
-            return {
-              label: member.full_name || `Member ${member.member_number}`,
-              amount: estimatedShareOut,
-              detail: detailParts.join(' • '),
-            };
-          });
-        totalValue = dashboard.savings;
-        totalLabel = 'Total group savings (database)';
-        subtitle = `Each row shows an estimated share-out principal using the ${methodology === 'share_based' ? 'share-based' : 'savings-based'} method; member savings are shown below each name.`;
-        note = methodology === 'share_based'
-          ? `Share-based estimates infer whole shares from recorded savings divided by the configured share value (${money(dashboard.currency, shareValue)} per share). Actual share units are not stored separately yet, so treat this as an estimate. Amounts outside whole shares are shown separately. Profit allocation and approved deductions are not included.`
-          : 'Savings-based estimates use each member’s recorded savings as the principal portion. This is not the final share-out amount: group profits and approved deductions are not included in the current estimate.';
-        if (setupRules?.share_out_enabled === 0) {
-          note += ' Share-out is currently disabled in Setup Rules.';
-        }
-        if (Math.abs(groupSavings - dashboard.savings) > 0.01) {
-          warning = `The sum of member savings (${money(dashboard.currency, groupSavings)}) differs from the database group savings total (${money(dashboard.currency, dashboard.savings)}). Review unassigned transactions or adjustments before share-out.`;
-        }
-      } else if (cardKey === 'loansOut') {
-        const issued = valid.filter((t) => t.account_type === 'loan_fund' && t.transaction_type === 'loan_issued');
-        const repayments = valid.filter((t) => t.account_type === 'loan_repayment' && t.transaction_type === 'loan_repayment');
-        rows = [
-          { label: 'Loans disbursed (recorded)', amount: issued.reduce((n, t) => n + Math.abs(Number(t.amount) || 0), 0) },
-          { label: 'Loan repayments received (recorded)', amount: sum(repayments), deduction: true },
-        ];
-        totalValue = dashboard.loansOut;
-        subtitle = 'Outstanding amount owed by members; separate from the Loan Fund cash balance.';
-        note = 'The outstanding balance uses the database summary, including recorded interest charges. The rows above show transaction totals and may not sum to the outstanding balance when interest or adjustments apply.';
-      } else if (cardKey === 'loanFund') {
-        const savings = sum(accountRows('savings'));
-        const fines = sum(accountRows('fines').filter((t) => t.transaction_type === 'fine_payment'));
-        const repayments = sum(accountRows('loan_repayment'));
-        const social = sum(accountRows('social_fund'));
-        const external = sum(accountRows('external_fund'));
-        const direct = sum(accountRows('loan_fund').filter((t) => t.transaction_type !== 'loan_issued'));
-        const issued = accountRows('loan_fund').filter((t) => t.transaction_type === 'loan_issued').reduce((n, t) => n + Math.abs(Number(t.amount) || 0), 0);
-        rows = [
-          { label: 'Member savings', amount: savings },
-          { label: 'Fines actually collected', amount: fines },
-          { label: 'Loan repayments received', amount: repayments },
-          { label: 'Social fund collections', amount: social },
-          { label: 'External funds received', amount: external },
-          { label: 'Direct Loan Fund collections / adjustments', amount: direct },
-          { label: 'Loan disbursements', amount: issued, deduction: true },
-        ];
-        const calculated = savings + fines + repayments + social + external + direct - issued;
-        totalValue = dashboard.loanFund;
-        totalLabel = 'Loan Fund balance (database)';
-        subtitle = 'Source of funds using your rule: savings + fines + all other collections − loan disbursements.';
-        note = "Insurance contributions are kept separate. Expenditures are not included in this formula; review the group accounting rules if expenditures should also reduce Loan Fund.";
-        if (Math.abs(calculated - dashboard.loanFund) > 0.01) warning = `Source calculation: ${money(dashboard.currency, calculated)}. Database Loan Fund: ${money(dashboard.currency, dashboard.loanFund)}. These figures differ; reconcile the ledger before relying on the breakdown.`;
-      } else if (cardKey === 'insuranceFund') {
-        rows = byType(accountRows('insurance_fund'));
-        totalValue = dashboard.insuranceFund;
-        subtitle = 'Insurance contributions and adjustments recorded separately from the Loan Fund.';
-        note = 'Only transactions assigned to the Insurance Fund account are included in the breakdown.';
-      } else {
-        const fines = accountRows('fines');
-        rows = byType(fines);
-        totalValue = dashboard.fines;
-        subtitle = 'Fines recorded in the group ledger, including amounts collected and any recorded adjustments.';
-        note = 'This balance reflects recorded fine transactions; unpaid fines assessed but not collected may be tracked separately.';
-      }
-
-      setCardDetails({ title: titles[cardKey], subtitle, rows, totalLabel, totalValue, note, warning });
-    } catch (error) {
-      console.error(`Unable to load ${cardKey} card details:`, error);
-      Alert.alert('Card details', 'Could not load the latest details. Please try again.');
-      setCardDetailsVisible(false);
-    } finally {
-      setCardDetailsLoading(false);
-    }
-  };
-
   const cards = [
-    {
-      title: t('home.totalSavings'),
-      value: money(dashboard.currency, dashboard.savings),
-      icon: 'S',
-      action: () => openCardDetails('savings'),
-    },
-    {
-      title: t('home.loansOut'),
-      value: money(dashboard.currency, dashboard.loansOut),
-      icon: 'L',
-      action: () => openCardDetails('loansOut'),
-    },
-    {
-      title: t('home.members'),
-      value: String(dashboard.members),
-      icon: 'M',
-      action: () => openCardDetails('members'),
-    },
-    {
-      title: t('home.loanFund', 'Loan Fund'),
-      value: money(dashboard.currency, dashboard.loanFund),
-      icon: 'F',
-      action: () => openCardDetails('loanFund'),
-    },
-    {
-      title: t('home.insuranceFund'),
-      value: money(dashboard.currency, dashboard.insuranceFund),
-      icon: 'I',
-      action: () => openCardDetails('insuranceFund'),
-    },
-    {
-      title: t('home.finesFund'),
-      value: money(dashboard.currency, dashboard.fines),
-      icon: 'N',
-      action: () => openCardDetails('fines'),
-    },
+    { title: 'Total Savings', value: money(dashboard.currency, dashboard.savings), icon: 'S', action: () => navigateWithGroup('FinancialTransactions') },
+    { title: 'Loans Out', value: money(dashboard.currency, dashboard.loansOut), icon: 'L', action: () => navigateWithGroup('Loans') },
+    { title: 'Members', value: String(dashboard.members), icon: 'M', action: openAddMembers },
+    { title: 'Fund Balance', value: money(dashboard.currency, dashboard.fundBalance), icon: 'F', action: () => navigateWithGroup('FinancialTransactions') },
+    { title: 'Insurance Fund', value: money(dashboard.currency, dashboard.insuranceFund), icon: 'I', action: () => navigateWithGroup('Insurance') },
+    { title: 'Fines Fund', value: money(dashboard.currency, dashboard.fines), icon: 'N', action: () => navigateWithGroup('Fines') },
   ];
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <View style={styles.headerInfo}>
-          <View style={styles.logo}>
-            <Text style={styles.logoText}>E</Text>
-          </View>
-
+          <View style={styles.logo}><Text style={styles.logoText}>E</Text></View>
           <View style={styles.titleContainer}>
-            <Text style={styles.appName}>{t('app.name')}</Text>
-            <Text style={styles.tagline}>
-              {t('app.slogan')}
-            </Text>
+            <Text style={styles.appName}>Ebadsave VSLA</Text>
+            <Text style={styles.tagline}>save together,grow together</Text>
           </View>
         </View>
-
         <View style={styles.headerButtons}>
-          <TouchableOpacity
-            style={styles.headerButton}
-            onPress={() => navigation.navigate('Constitution')}
-          >
-            <Text style={styles.headerButtonText}>{t('navigation.constitution')}</Text>
+          <TouchableOpacity style={styles.headerButton} onPress={() => navigation.navigate('Constitution')}>
+            <Text style={styles.headerButtonText}>Constitution</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.headerButton}
-            onPress={() =>
-              requireGroup() &&
-              navigation.navigate('SetupRules', {
-                groupId: activeGroup!.id,
-              })
-            }
-          >
-            <Text style={styles.headerButtonText}>{t('home.setupRules', 'Setup Rules')}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.headerButton}
-            onPress={() => navigation.navigate('BackupRestore')}
-          >
-            <Text style={styles.headerButtonText}>{t('backup.title')}</Text>
+          <TouchableOpacity style={styles.headerButton} onPress={() => requireGroup() && navigation.navigate('SetupRules', { groupId: activeGroup!.id })}>
+            <Text style={styles.headerButtonText}>Setup Rules</Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.content}
-      >
-        <Text style={styles.groupTitle}>
-          {activeGroup
-            ? `KYA ${activeGroup.group_number} • ${activeGroup.group_name}`
-            : t('home.noActiveGroup', 'No active group')}
-        </Text>
-
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel="Open Backup and Restore"
-          style={styles.backupRestoreAction}
-          onPress={() => navigation.navigate('BackupRestore')}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.backupRestoreActionTitle}>{t('backup.title')}</Text>
-          <Text style={styles.backupRestoreActionSubtitle}>
-            {t('backup.homeDescription', 'Save a backup or restore a verified backup file')}
-          </Text>
-        </TouchableOpacity>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+        <View style={styles.groupSwitcherRow}>
+          <View style={styles.groupTitleArea}>
+            <Text style={styles.groupTitle}>
+              {activeGroup ? `KYA ${activeGroup.group_number} • ${activeGroup.group_name}` : 'No active group'}
+            </Text>
+            {activeGroup ? (
+              <Text style={styles.groupSubtitle}>
+                {activeGroup.district}, {activeGroup.country}
+              </Text>
+            ) : null}
+          </View>
+          <TouchableOpacity
+            style={styles.switchGroupButton}
+            onPress={() => setGroupPickerVisible(true)}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.switchGroupButtonText}>Switch group ▾</Text>
+          </TouchableOpacity>
+        </View>
 
         <View style={styles.cardsGrid}>
           {cards.map((card) => (
-            <TouchableOpacity
-              key={card.title}
-              style={styles.card}
-              onPress={card.action}
-              activeOpacity={0.8}
-            >
-              <View style={styles.iconCircle}>
-                <Text style={styles.iconText}>{card.icon}</Text>
-              </View>
-
+            <TouchableOpacity key={card.title} style={styles.card} onPress={card.action} activeOpacity={0.8}>
+              <View style={styles.iconCircle}><Text style={styles.iconText}>{card.icon}</Text></View>
               <Text style={styles.cardTitle}>{card.title}</Text>
               <Text style={styles.cardValue}>{card.value}</Text>
             </TouchableOpacity>
@@ -553,152 +314,90 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
         </View>
 
         <View style={styles.meetingPanel}>
-          <Text style={styles.sectionTitle}>{t('meetings.title')}</Text>
-
+          <Text style={styles.sectionTitle}>Meeting</Text>
           {dashboard.openMeetingId ? (
-            <TouchableOpacity
-              style={styles.primaryButton}
-              onPress={currentMeeting}
-            >
-              <Text style={styles.primaryButtonText}>
-                {t('home.currentMeeting', 'Current Meeting')}
-              </Text>
-
-              <Text style={styles.buttonSubtext}>
-                {t('home.resumeMeeting', 'Resume meeting')} #{currentMeetingNumber ?? 'open'}
-              </Text>
+            <TouchableOpacity style={styles.primaryButton} onPress={currentMeeting}>
+              <Text style={styles.primaryButtonText}>Current Meeting</Text>
+              <Text style={styles.buttonSubtext}>Resume meeting #{currentMeetingNumber ?? 'open'}</Text>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity
-              style={styles.primaryButton}
-              onPress={startMeeting}
-            >
-              <Text style={styles.primaryButtonText}>
-                {t('meetings.newMeeting')}
-              </Text>
-
-              <Text style={styles.buttonSubtext}>
-                {t('home.newMeetingDescription', 'Register and continue with a new meeting')}
-              </Text>
+            <TouchableOpacity style={styles.primaryButton} onPress={startMeeting}>
+              <Text style={styles.primaryButtonText}>Start New Meeting</Text>
+              <Text style={styles.buttonSubtext}>Register and continue with a new meeting</Text>
             </TouchableOpacity>
           )}
 
           {dashboard.lastClosedMeetingId && (
-            <TouchableOpacity
-              style={styles.secondaryButton}
-              onPress={previousSummary}
-            >
+            <TouchableOpacity style={styles.secondaryButton} onPress={previousSummary}>
               <Text style={styles.secondaryButtonText}>
-                {t('home.previousMeetingSummary', 'Read Previous Meeting Summary')}
-                {lastMeetingNumber ? ` #${lastMeetingNumber}` : ''}
+                Read Previous Meeting Summary{lastMeetingNumber ? ` #${lastMeetingNumber}` : ''}
               </Text>
             </TouchableOpacity>
           )}
         </View>
 
         <View style={styles.activityContainer}>
-          <Text style={styles.sectionTitle}>{t('home.databaseStatus', 'Database Status')}</Text>
-
+          <Text style={styles.sectionTitle}>Database Status</Text>
           <View style={styles.statusBox}>
-            <Text style={styles.statusText}>
-              {loading
-                ? t('home.updatingTotals', 'Updating database totals…')
-                : t('home.databaseLinked', 'Home totals are linked to the database.')}
-            </Text>
-
-            <Text style={styles.statusText}>
-              {t('home.loanFund', 'Loan Fund')}: {money(dashboard.currency, dashboard.loanFund)}
-            </Text>
-
-            <Text style={styles.statusText}>
-              {t('home.insuranceFund')}:{' '}
-              {money(dashboard.currency, dashboard.insuranceFund)}
-            </Text>
-
-            <Text style={styles.statusText}>
-              {t('home.finesFund')}: {money(dashboard.currency, dashboard.fines)}
-            </Text>
+            <Text style={styles.statusText}>{loading ? 'Updating database totals…' : 'Home totals are linked to the database.'}</Text>
+            <Text style={styles.statusText}>Loan fund: {money(dashboard.currency, dashboard.loanFund)}</Text>
+            <Text style={styles.statusText}>Insurance: {money(dashboard.currency, dashboard.insuranceFund)}</Text>
+            <Text style={styles.statusText}>Fines: {money(dashboard.currency, dashboard.fines)}</Text>
           </View>
         </View>
 
         <View style={styles.navigationSection}>
-          <Text style={styles.sectionTitle}>{t('home.groupManagement', 'Group Management')}</Text>
-
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={openAddMembers}
-          >
-            <Text style={styles.actionButtonText}>{t('home.addMembers', 'Add Members')}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => navigateWithGroup('MemberCollection')}
-          >
-            <Text style={styles.actionButtonText}>
-              {t('home.memberCollection', 'Member Collection')}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => navigateWithGroup('Expenditure')}
-          >
-            <Text style={styles.actionButtonText}>{t('home.expenditure', 'Expenditure')}</Text>
-          </TouchableOpacity>
+          <Text style={styles.sectionTitle}>Group Management</Text>
+          <TouchableOpacity style={styles.actionButton} onPress={openAddMembers}><Text style={styles.actionButtonText}>Add Members</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.actionButton} onPress={() => navigateWithGroup('MemberCollection')}><Text style={styles.actionButtonText}>Member Collection</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.actionButton} onPress={() => navigateWithGroup('Expenditure')}><Text style={styles.actionButtonText}>Expenditure</Text></TouchableOpacity>
         </View>
       </ScrollView>
 
       <Modal
-        visible={cardDetailsVisible}
+        visible={groupPickerVisible}
         transparent
-        animationType="slide"
-        onRequestClose={() => setCardDetailsVisible(false)}
+        animationType="fade"
+        onRequestClose={() => setGroupPickerVisible(false)}
       >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.loanFundModal}>
-            <Text style={styles.modalTitle}>{cardDetails?.title || t('home.cardDetails', 'Card details')}</Text>
-            <Text style={styles.modalSubtitle}>{cardDetails?.subtitle || t('home.groupRecordDetails', 'Details from your group records.')}</Text>
+        <View style={styles.modalOverlay}>
+          <View style={styles.groupPickerCard}>
+            <Text style={styles.groupPickerTitle}>Switch group</Text>
+            <Text style={styles.groupPickerDescription}>
+              Choose a registered active group. The dashboard and next screens will use only that group’s data.
+            </Text>
 
-            {cardDetailsLoading ? (
-              <Text style={styles.modalLoading}>{t('common.loading')}</Text>
+            {availableGroups.length === 0 ? (
+              <Text style={styles.noGroupsText}>No active registered groups were found.</Text>
             ) : (
-              <ScrollView style={styles.breakdownList}>
-                {cardDetails?.rows.length ? cardDetails.rows.map((row, index) => (
-                  <View key={`${row.label}-${index}`} style={styles.breakdownRow}>
-                    <View style={styles.breakdownRowText}>
-                      <Text style={styles.breakdownLabel}>{row.label}</Text>
-                      {row.detail ? <Text style={styles.breakdownDetail}>{row.detail}</Text> : null}
-                    </View>
-                    {typeof row.amount === 'number' ? (
-                      <Text style={[styles.breakdownAmount, (row.deduction || row.amount < 0) && styles.deductionAmount]}>
-                        {row.amount < 0 ? '− ' : ''}{money(dashboard.currency, Math.abs(row.amount))}
-                      </Text>
-                    ) : null}
-                  </View>
-                )) : (
-                  <Text style={styles.modalLoading}>{t('home.noMatchingRecords', 'No matching records found.')}</Text>
-                )}
-                <View style={styles.breakdownDivider} />
-                <View style={styles.breakdownRow}>
-                  <Text style={styles.breakdownTotalLabel}>{cardDetails?.totalLabel || t('home.total', 'Total')}</Text>
-                  {typeof cardDetails?.totalValue === 'number' ? (
-                    <Text style={styles.breakdownTotalAmount}>
-                      {cardDetails?.title.startsWith('Members') ? String(cardDetails.totalValue) : money(dashboard.currency, cardDetails.totalValue)}
-                    </Text>
-                  ) : null}
-                </View>
-                {cardDetails?.warning ? <Text style={styles.breakdownWarning}>{cardDetails.warning}</Text> : null}
-                {cardDetails?.note ? <Text style={styles.modalNote}>{cardDetails.note}</Text> : null}
+              <ScrollView style={styles.groupPickerList} keyboardShouldPersistTaps="handled">
+                {availableGroups.map((group) => {
+                  const selected = group.id === activeGroup?.id;
+                  return (
+                    <TouchableOpacity
+                      key={group.id}
+                      style={[styles.groupOption, selected && styles.groupOptionSelected]}
+                      onPress={() => void switchToGroup(group)}
+                      activeOpacity={0.8}
+                    >
+                      <View style={styles.groupOptionText}>
+                        <Text style={styles.groupOptionNumber}>KYA {group.group_number}</Text>
+                        <Text style={styles.groupOptionName}>{group.group_name}</Text>
+                        <Text style={styles.groupOptionLocation}>{group.district}, {group.country}</Text>
+                      </View>
+                      <Text style={styles.groupOptionStatus}>{selected ? 'CURRENT' : 'SELECT'}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </ScrollView>
             )}
 
             <TouchableOpacity
-              accessibilityRole="button"
-              style={styles.modalCloseButton}
-              onPress={() => setCardDetailsVisible(false)}
+              style={styles.cancelPickerButton}
+              onPress={() => setGroupPickerVisible(false)}
+              activeOpacity={0.8}
             >
-              <Text style={styles.modalCloseText}>{t('common.close')}</Text>
+              <Text style={styles.cancelPickerText}>Cancel</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -709,341 +408,55 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
-
-  header: {
-    backgroundColor: '#16a34a',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 14,
-  },
-
-  headerInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-
-  logo: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#fff',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  logoText: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: '#16a34a',
-  },
-
-  titleContainer: {
-    marginLeft: 12,
-  },
-
-  appName: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#fff',
-  },
-
-  tagline: {
-    marginTop: 2,
-    fontSize: 12,
-    color: '#fff',
-  },
-
-  headerButtons: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginTop: 12,
-    gap: 8,
-  },
-
-  headerButton: {
-    backgroundColor: '#fff',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-
-  headerButtonText: {
-    color: '#16a34a',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-
-  content: {
-    padding: 16,
-    paddingBottom: 32,
-  },
-
-  groupTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#166534',
-    marginBottom: 12,
-  },
-
-  backupRestoreAction: {
-    backgroundColor: '#ecfdf5',
-    borderColor: '#16a34a',
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 13,
-    marginBottom: 14,
-  },
-
-  backupRestoreActionTitle: {
-    color: '#166534',
-    fontSize: 15,
-    fontWeight: '800',
-  },
-
-  backupRestoreActionSubtitle: {
-    color: '#166534',
-    fontSize: 12,
-    marginTop: 3,
-  },
-
-  cardsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-
-  card: {
-    width: '48%',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-
-  iconCircle: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#dcfce7',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-
-  iconText: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#16a34a',
-  },
-
-  cardTitle: {
-    fontSize: 13,
-    color: '#374151',
-  },
-
-  cardValue: {
-    marginTop: 4,
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#111827',
-  },
-
-  meetingPanel: {
-    marginTop: 8,
-  },
-
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111827',
-    marginBottom: 10,
-  },
-
-  primaryButton: {
-    backgroundColor: '#16a34a',
-    borderRadius: 10,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    marginBottom: 10,
-  },
-
-  primaryButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '800',
-    textAlign: 'center',
-  },
-
-  buttonSubtext: {
-    color: '#dcfce7',
-    fontSize: 12,
-    textAlign: 'center',
-    marginTop: 4,
-  },
-
-  secondaryButton: {
-    borderWidth: 1,
-    borderColor: '#16a34a',
-    borderRadius: 10,
-    paddingVertical: 13,
-    paddingHorizontal: 16,
-    marginBottom: 10,
-  },
-
-  secondaryButtonText: {
-    color: '#16a34a',
-    fontSize: 14,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-
-  activityContainer: {
-    marginTop: 12,
-  },
-
-  statusBox: {
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 12,
-    padding: 14,
-  },
-
-  statusText: {
-    fontSize: 13,
-    color: '#374151',
-    marginBottom: 5,
-  },
-
-  navigationSection: {
-    marginTop: 22,
-  },
-
-  actionButton: {
-    backgroundColor: '#16a34a',
-    borderRadius: 10,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    marginBottom: 10,
-  },
-
-  actionButtonText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
-    justifyContent: 'center',
-    padding: 18,
-  },
-  loanFundModal: {
-    maxHeight: '88%',
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 18,
-  },
-  modalTitle: {
-    fontSize: 19,
-    fontWeight: '800',
-    color: '#166534',
-  },
-  modalSubtitle: {
-    marginTop: 5,
-    marginBottom: 12,
-    fontSize: 13,
-    lineHeight: 19,
-    color: '#4b5563',
-  },
-  modalLoading: {
-    paddingVertical: 22,
-    color: '#374151',
-  },
-  breakdownList: {
-    flexShrink: 1,
-  },
-  breakdownRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    paddingVertical: 9,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f3f4f6',
-    gap: 12,
-  },
-  breakdownRowText: {
-    flex: 1,
-    minWidth: 0,
-  },
-  breakdownDetail: {
-    marginTop: 3,
-    fontSize: 12,
-    lineHeight: 16,
-    color: '#6b7280',
-  },
-  breakdownLabel: {
-    flex: 1,
-    fontSize: 13,
-    lineHeight: 18,
-    color: '#374151',
-  },
-  breakdownAmount: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#111827',
-    textAlign: 'right',
-  },
-  deductionAmount: {
-    color: '#b91c1c',
-  },
-  breakdownDivider: {
-    height: 1,
-    backgroundColor: '#9ca3af',
-    marginTop: 7,
-  },
-  breakdownTotalLabel: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#166534',
-  },
-  breakdownTotalAmount: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#166534',
-    textAlign: 'right',
-  },
-  breakdownWarning: {
-    marginTop: 10,
-    padding: 10,
-    borderRadius: 8,
-    backgroundColor: '#fef2f2',
-    color: '#991b1b',
-    fontSize: 12,
-    lineHeight: 17,
-  },
-  modalNote: {
-    marginTop: 12,
-    marginBottom: 6,
-    color: '#6b7280',
-    fontSize: 12,
-    lineHeight: 17,
-  },
-  modalCloseButton: {
-    marginTop: 12,
-    backgroundColor: '#16a34a',
-    paddingVertical: 13,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  modalCloseText: {
-    color: '#fff',
-    fontWeight: '800',
-    fontSize: 15,
-  },
+  header: { backgroundColor: '#16a34a', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 14 },
+  headerInfo: { flexDirection: 'row', alignItems: 'center' },
+  logo: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center' },
+  logoText: { fontSize: 26, fontWeight: '800', color: '#16a34a' },
+  titleContainer: { marginLeft: 12 },
+  appName: { fontSize: 20, fontWeight: '700', color: '#fff' },
+  tagline: { marginTop: 2, fontSize: 12, color: '#fff' },
+  headerButtons: { flexDirection: 'row', marginTop: 12, gap: 8 },
+  headerButton: { backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 },
+  headerButtonText: { color: '#16a34a', fontSize: 13, fontWeight: '700' },
+  content: { padding: 16, paddingBottom: 32 },
+  groupSwitcherRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 10 },
+  groupTitleArea: { flex: 1 },
+  groupTitle: { fontSize: 15, fontWeight: '700', color: '#166534' },
+  groupSubtitle: { fontSize: 12, color: '#64748b', marginTop: 4 },
+  switchGroupButton: { backgroundColor: '#dcfce7', borderColor: '#86efac', borderWidth: 1, borderRadius: 9, paddingHorizontal: 11, paddingVertical: 10 },
+  switchGroupButtonText: { color: '#166534', fontWeight: '800', fontSize: 12 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.55)', justifyContent: 'center', padding: 20 },
+  groupPickerCard: { backgroundColor: '#ffffff', borderRadius: 16, padding: 18, maxHeight: '85%' },
+  groupPickerTitle: { color: '#14532d', fontSize: 21, fontWeight: '800' },
+  groupPickerDescription: { color: '#64748b', fontSize: 13, lineHeight: 19, marginTop: 6, marginBottom: 12 },
+  groupPickerList: { flexGrow: 0, flexShrink: 1 },
+  groupOption: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 11, padding: 12, marginTop: 8, backgroundColor: '#ffffff' },
+  groupOptionSelected: { borderColor: '#16a34a', backgroundColor: '#f0fdf4' },
+  groupOptionText: { flex: 1, paddingRight: 8 },
+  groupOptionNumber: { color: '#16a34a', fontSize: 12, fontWeight: '800' },
+  groupOptionName: { color: '#111827', fontSize: 15, fontWeight: '700', marginTop: 2 },
+  groupOptionLocation: { color: '#64748b', fontSize: 11, marginTop: 3 },
+  groupOptionStatus: { color: '#15803d', fontSize: 10, fontWeight: '800' },
+  noGroupsText: { color: '#b45309', backgroundColor: '#fffbeb', borderRadius: 9, padding: 12, marginTop: 8 },
+  cancelPickerButton: { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 9, paddingVertical: 12, alignItems: 'center', marginTop: 14 },
+  cancelPickerText: { color: '#334155', fontWeight: '700' },
+  cardsGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
+  card: { width: '48%', backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#e5e7eb' },
+  iconCircle: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#dcfce7', justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
+  iconText: { fontSize: 17, fontWeight: '800', color: '#16a34a' },
+  cardTitle: { fontSize: 13, color: '#374151' },
+  cardValue: { marginTop: 4, fontSize: 17, fontWeight: '700', color: '#111827' },
+  meetingPanel: { marginTop: 8 },
+  sectionTitle: { fontSize: 18, fontWeight: '700', color: '#111827', marginBottom: 10 },
+  primaryButton: { backgroundColor: '#16a34a', borderRadius: 10, paddingVertical: 14, paddingHorizontal: 16, marginBottom: 10 },
+  primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: '800', textAlign: 'center' },
+  buttonSubtext: { color: '#dcfce7', fontSize: 12, textAlign: 'center', marginTop: 4 },
+  secondaryButton: { borderWidth: 1, borderColor: '#16a34a', borderRadius: 10, paddingVertical: 13, paddingHorizontal: 16, marginBottom: 10 },
+  secondaryButtonText: { color: '#16a34a', fontSize: 14, fontWeight: '700', textAlign: 'center' },
+  activityContainer: { marginTop: 12 },
+  statusBox: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, padding: 14 },
+  statusText: { fontSize: 13, color: '#374151', marginBottom: 5 },
+  navigationSection: { marginTop: 22 },
+  actionButton: { backgroundColor: '#16a34a', borderRadius: 10, paddingVertical: 14, paddingHorizontal: 16, marginBottom: 10 },
+  actionButtonText: { color: '#fff', fontSize: 15, fontWeight: '700', textAlign: 'center' },
 });

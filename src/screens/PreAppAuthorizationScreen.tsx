@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   ActivityIndicator,
   Alert,
@@ -164,6 +165,7 @@ export default function PreAppAuthorizationScreen({ navigation }: Props) {
       return;
     }
 
+    const authorizedGroupId = selectedGroup.id;
     setWorking(true);
     try {
       const nextProgress = await authorizeMemberForAppAccess(
@@ -178,6 +180,14 @@ export default function PreAppAuthorizationScreen({ navigation }: Props) {
       setSelectedMember(null);
 
       if (nextProgress.authorized) {
+        // Preserve the group the members just authorized. HomeScreen uses this
+        // ID to show totals and transactions for the same group.
+        try {
+          await AsyncStorage.setItem('@ebadsave/activeGroupId', String(authorizedGroupId));
+        } catch (storageError) {
+          console.warn('Could not persist the authorized group selection:', storageError);
+        }
+
         Alert.alert(
           getAuthText().authSuccess,
           getAuthText().authSuccessMessage,
