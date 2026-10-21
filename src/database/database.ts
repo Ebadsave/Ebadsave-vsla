@@ -2540,7 +2540,7 @@ export async function editHistoricalEntry(groupId: number, entryKind: 'standard'
       await db.runAsync('UPDATE historical_transaction_imports SET amount = ?, transaction_date = ?, share_count = ?, source_notes = ?, edited_at = ?, edited_by_member_id = ? WHERE id = ? AND group_id = ?', amount, date, editedShareCount, [normalizeText(input.source_notes || row.source_notes || ''), audit].filter(Boolean).join(' | '), timestamp, editorMemberId, entryId, groupId);
       await db.runAsync('UPDATE financial_transactions SET amount = ?, created_at = ? WHERE id = ? AND group_id = ?', signedNew, `${date}T12:00:00.000Z`, row.transaction_id, groupId);
       await db.runAsync('UPDATE financial_accounts SET balance = balance + ?, updated_at = ? WHERE group_id = ? AND account_type = ?', signedNew - signedOld, timestamp, groupId, accountType);
-      await db.runAsync('UPDATE member_passbook_records SET amount = ?, created_at = ?, reason = ? WHERE transaction_id = ? AND group_id = ?', amount, `${date}T12:00:00.000Z`, `Historical ${row.historical_type.replace('_', ' ')} (edited on ${timestamp.slice(0, 10)})`, row.transaction_id, groupId);
+      await db.runAsync('UPDATE member_passbook_records SET amount = ?, created_at = ?, description = ? WHERE transaction_id = ? AND group_id = ?', amount, `${date}T12:00:00.000Z`, `Historical ${row.historical_type.replace('_', ' ')} (edited on ${timestamp.slice(0, 10)})`, row.transaction_id, groupId);
       await rebuildHistoricalPassbookBalance(db, groupId, Number(row.member_id));
     } else {
       const row = await db.getFirstAsync<any>('SELECT * FROM historical_extra_entries WHERE id = ? AND group_id = ? AND is_deleted = 0 LIMIT 1', entryId, groupId);
@@ -2552,7 +2552,7 @@ export async function editHistoricalEntry(groupId: number, entryKind: 'standard'
       await db.runAsync('UPDATE historical_extra_entries SET amount = ?, transaction_date = ?, fine_reason = ?, lender_name = ?, interest_amount = ?, due_date = ?, source_notes = ?, edited_at = ?, edited_by_member_id = ? WHERE id = ? AND group_id = ?', amount, date, normalizeText(input.fine_reason || row.fine_reason || ''), normalizeText(input.lender_name || row.lender_name || ''), interest, dueDate, [normalizeText(input.source_notes || row.source_notes || ''), audit].filter(Boolean).join(' | '), timestamp, editorMemberId, entryId, groupId);
       await db.runAsync('UPDATE financial_transactions SET amount = ?, created_at = ?, reason = ? WHERE id = ? AND group_id = ?', amount, `${date}T12:00:00.000Z`, `${row.entry_type} (edited on ${timestamp.slice(0, 10)})`, row.transaction_id, groupId);
       await db.runAsync('UPDATE financial_accounts SET balance = balance + ?, updated_at = ? WHERE group_id = ? AND account_type = ?', amount - Number(row.amount), timestamp, groupId, accountType);
-      if (row.member_id != null) await db.runAsync('UPDATE member_passbook_records SET amount = ?, created_at = ?, reason = ? WHERE transaction_id = ? AND group_id = ?', amount, `${date}T12:00:00.000Z`, `${row.entry_type} (edited on ${timestamp.slice(0, 10)})`, row.transaction_id, groupId);
+      if (row.member_id != null) await db.runAsync('UPDATE member_passbook_records SET amount = ?, created_at = ?, description = ? WHERE transaction_id = ? AND group_id = ?', amount, `${date}T12:00:00.000Z`, `${row.entry_type} (edited on ${timestamp.slice(0, 10)})`, row.transaction_id, groupId);
     }
   });
   if (entryKind === 'extra') { try { await syncBack4AppFineState(groupId, entryId, false); } catch { /* Local audit remains authoritative until the next cloud sync. */ } }
@@ -2570,7 +2570,7 @@ export async function softDeleteHistoricalEntry(groupId: number, entryKind: 'sta
       await db.runAsync('UPDATE historical_transaction_imports SET is_deleted = 1, edited_at = ?, edited_by_member_id = ? WHERE id = ? AND group_id = ?', timestamp, adminMemberId, entryId, groupId);
       await db.runAsync('UPDATE financial_transactions SET reversed = 1 WHERE id = ? AND group_id = ?', row.transaction_id, groupId);
       await db.runAsync('UPDATE financial_accounts SET balance = balance - ?, updated_at = ? WHERE group_id = ? AND account_type = ?', signed, timestamp, groupId, accountType);
-      await db.runAsync('UPDATE member_passbook_records SET amount = 0, reason = ? WHERE transaction_id = ? AND group_id = ?', `DELETED on ${timestamp.slice(0, 10)} by admin ${adminMemberId}`, row.transaction_id, groupId);
+      await db.runAsync('UPDATE member_passbook_records SET amount = 0, description = ? WHERE transaction_id = ? AND group_id = ?', `DELETED on ${timestamp.slice(0, 10)} by admin ${adminMemberId}`, row.transaction_id, groupId);
       await rebuildHistoricalPassbookBalance(db, groupId, Number(row.member_id));
     } else {
       const row = await db.getFirstAsync<any>('SELECT * FROM historical_extra_entries WHERE id = ? AND group_id = ? AND is_deleted = 0 LIMIT 1', entryId, groupId);
@@ -2580,7 +2580,7 @@ export async function softDeleteHistoricalEntry(groupId: number, entryKind: 'sta
       await db.runAsync('UPDATE financial_transactions SET reversed = 1 WHERE id = ? AND group_id = ?', row.transaction_id, groupId);
       await db.runAsync('UPDATE financial_accounts SET balance = balance - ?, updated_at = ? WHERE group_id = ? AND account_type = ?', Number(row.amount), timestamp, groupId, accountType);
       if (row.member_id != null) {
-        await db.runAsync('UPDATE member_passbook_records SET amount = 0, reason = ? WHERE transaction_id = ? AND group_id = ?', `DELETED on ${timestamp.slice(0, 10)} by admin ${adminMemberId}`, row.transaction_id, groupId);
+        await db.runAsync('UPDATE member_passbook_records SET amount = 0, description = ? WHERE transaction_id = ? AND group_id = ?', `DELETED on ${timestamp.slice(0, 10)} by admin ${adminMemberId}`, row.transaction_id, groupId);
         await rebuildHistoricalPassbookBalance(db, groupId, Number(row.member_id));
       }
     }
