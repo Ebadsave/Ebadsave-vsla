@@ -60,7 +60,6 @@ const emptyDashboard: Dashboard = {
   fundBalance: 0,
   loansOut: 0,
   members: 0,
-  // Currency is loaded from the active group's configured currency.
   currency: '',
   openMeetingId: null,
   lastClosedMeetingId: null,
@@ -104,19 +103,13 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
       ) || activeGroups[0] || null;
 
       setActiveGroup(group);
-      // Never leave the previous group's totals visible under the new name
-      // while the selected group's records are loading.
       setDashboard(emptyDashboard);
       setExecutiveMemberId(null);
       setLastMeetingNumber(null);
       setCurrentMeetingNumber(null);
 
-      if (!group) {
-        return;
-      }
+      if (!group) return;
 
-      // Persist the exact group used to load the dashboard. Do not infer the
-      // selected group from the first database row on subsequent visits.
       await AsyncStorage.setItem(ACTIVE_GROUP_STORAGE_KEY, String(group.id));
 
       const members = await getMembersByGroupId(group.id);
@@ -130,7 +123,6 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
       const summary = await getHomeDashboardSummary(group.id);
       setDashboard(summary);
 
-      // All meeting details are looked up using the same selected group ID.
       const last = summary.lastClosedMeetingId
         ? await getLastConcludedMeeting(group.id)
         : null;
@@ -162,17 +154,12 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
   useFocusEffect(
     useCallback(() => {
       let focused = true;
-
       const loadRequestedGroup = async () => {
-        // Constitution passes groupId when a user explicitly opens a group.
-        // Consume that request after it is loaded so it does not override a
-        // later manual switch when returning from another screen.
         await loadHome(routeGroupId);
         if (focused && routeGroupId !== undefined) {
           navigation.setParams?.({ groupId: undefined });
         }
       };
-
       void loadRequestedGroup();
       return () => {
         focused = false;
@@ -206,13 +193,9 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
     if (!requireGroup()) return;
     const meeting = await getOpenMeeting(activeGroup!.id);
     if (!meeting) {
-      Alert.alert(
-        'No Current Meeting',
-        'There is no open meeting. Start a new meeting first.',
-      );
+      Alert.alert('No Current Meeting', 'There is no open meeting. Start a new meeting first.');
       return;
     }
-
     navigation.navigate('FinancialTransactions', {
       groupId: activeGroup!.id,
       meetingId: meeting.id,
@@ -227,7 +210,6 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
       Alert.alert('No Meeting Summary', 'No concluded meeting is available yet.');
       return;
     }
-
     navigation.navigate('MeetingSummary', {
       groupId: activeGroup!.id,
       meetingId: meeting.id,
@@ -251,6 +233,11 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
       groupId: activeGroup!.id,
       executiveMemberId: executiveMemberId!,
     });
+  };
+
+  const openBackupRestore = () => {
+    // Keep backup and restore available even when no active group is selected.
+    navigation.navigate('BackupRestore');
   };
 
   const cards = [
@@ -279,6 +266,15 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
           <TouchableOpacity style={styles.headerButton} onPress={() => requireGroup() && navigation.navigate('SetupRules', { groupId: activeGroup!.id })}>
             <Text style={styles.headerButtonText}>Setup Rules</Text>
           </TouchableOpacity>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Open Backup and Restore"
+            style={styles.headerButton}
+            onPress={openBackupRestore}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.headerButtonText}>Backup &amp; Restore</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -289,9 +285,7 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
               {activeGroup ? `KYA ${activeGroup.group_number} • ${activeGroup.group_name}` : 'No active group'}
             </Text>
             {activeGroup ? (
-              <Text style={styles.groupSubtitle}>
-                {activeGroup.district}, {activeGroup.country}
-              </Text>
+              <Text style={styles.groupSubtitle}>{activeGroup.district}, {activeGroup.country}</Text>
             ) : null}
           </View>
           <TouchableOpacity
@@ -302,6 +296,19 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
             <Text style={styles.switchGroupButtonText}>Switch group ▾</Text>
           </TouchableOpacity>
         </View>
+
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Open Backup and Restore"
+          style={styles.backupRestoreAction}
+          onPress={openBackupRestore}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.backupRestoreActionTitle}>Backup &amp; Restore</Text>
+          <Text style={styles.backupRestoreActionSubtitle}>
+            Save a backup or restore a verified backup file
+          </Text>
+        </TouchableOpacity>
 
         <View style={styles.cardsGrid}>
           {cards.map((card) => (
@@ -417,7 +424,7 @@ const styles = StyleSheet.create({
   titleContainer: { marginLeft: 12 },
   appName: { fontSize: 20, fontWeight: '700', color: '#fff' },
   tagline: { marginTop: 2, fontSize: 12, color: '#fff' },
-  headerButtons: { flexDirection: 'row', marginTop: 12, gap: 8 },
+  headerButtons: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 12, gap: 8 },
   headerButton: { backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 },
   headerButtonText: { color: '#16a34a', fontSize: 13, fontWeight: '700' },
   content: { padding: 16, paddingBottom: 32 },
@@ -442,6 +449,9 @@ const styles = StyleSheet.create({
   noGroupsText: { color: '#b45309', backgroundColor: '#fffbeb', borderRadius: 9, padding: 12, marginTop: 8 },
   cancelPickerButton: { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 9, paddingVertical: 12, alignItems: 'center', marginTop: 14 },
   cancelPickerText: { color: '#334155', fontWeight: '700' },
+  backupRestoreAction: { backgroundColor: '#ecfdf5', borderColor: '#16a34a', borderWidth: 1, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 13, marginBottom: 14 },
+  backupRestoreActionTitle: { color: '#166534', fontSize: 15, fontWeight: '800' },
+  backupRestoreActionSubtitle: { color: '#166534', fontSize: 12, marginTop: 3 },
   cardsGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
   card: { width: '48%', backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#e5e7eb' },
   iconCircle: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#dcfce7', justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
