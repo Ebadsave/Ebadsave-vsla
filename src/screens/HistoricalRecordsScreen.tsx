@@ -118,7 +118,8 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
       setRecords([...standard, ...extras].sort((a,b) => b.date.localeCompare(a.date) || b.id-a.id));
       setSummary({ records: baseSummary.records, savings: baseSummary.savings, fines: baseSummary.fines, insurance: baseSummary.insurance,
         externalLoans: baseSummary.externalLoans, loanDisbursements: baseSummary.loanDisbursements,
-        loanBalances: baseSummary.loanBalances, loanRepayments: baseSummary.loanRepayments });
+        loanBalances: standard.filter(r => r.type === 'loan_balance').reduce((sum, r) => sum + r.amount, 0),
+        loanRepayments: 0 });
     } catch (e) { Alert.alert('Could not load group records', e instanceof Error ? e.message : 'Please try again.'); }
     finally { setLoading(false); }
   }, [groupId, executiveMemberId, selectedMemberId]);
