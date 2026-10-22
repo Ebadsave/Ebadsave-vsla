@@ -57,6 +57,7 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
   const [members, setMembers] = useState<MemberOption[]>([]);
   const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
   const [memberPickerVisible, setMemberPickerVisible] = useState(false);
+  const [memberListTab, setMemberListTab] = useState<'current' | 'finished'>('current');
   const [canAdmin, setCanAdmin] = useState(false);
   const [type, setType] = useState<EntryType>('savings');
   const [date, setDate] = useState(displayDate(isoToday()));
@@ -79,8 +80,8 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
     setLoading(true);
     try {
       const [group, loadedMembers, oldRows, extraRows, baseSummary, rules, admin] = await Promise.all([
-        getGroupById(groupId), getMembersByGroupId(groupId), getHistoricalFinancialTransactions(groupId, 150),
-        getHistoricalExtraEntries(groupId, 150), getHistoricalFinancialSummary(groupId), getVSLASetupRules(groupId),
+        getGroupById(groupId), getMembersByGroupId(groupId), getHistoricalFinancialTransactions(groupId, 10000),
+        getHistoricalExtraEntries(groupId, 10000), getHistoricalFinancialSummary(groupId), getVSLASetupRules(groupId),
         executiveMemberId ? canManageHistoricalEntries(groupId, executiveMemberId) : Promise.resolve(false),
       ]);
       if (!group) throw new Error('The selected group could not be found.');
@@ -109,8 +110,8 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
         lender_name: r.lender_name, interest_amount: Number(r.interest_amount), due_date: r.due_date, edited_at: r.edited_at,
       }));
       setRecords([...standard, ...extras].sort((a,b) => b.date.localeCompare(a.date) || b.id-a.id));
-      let outstanding = 0;
-      for (const m of memberList) { const loan = await getMemberLoanBalance(groupId, m.id); outstanding += loan.balance; }
+      const memberLoans = await Promise.all(memberList.map(m => getMemberLoanBalance(groupId, m.id)));
+      const outstanding = memberLoans.reduce((sum, loan) => sum + Number(loan.balance || 0), 0);
       setSummary({ records: baseSummary.records, savings: baseSummary.savings, fines: baseSummary.fines, insurance: baseSummary.insurance,
         externalLoans: baseSummary.externalLoans, loanDisbursements: baseSummary.loanDisbursements,
         loanBalances: outstanding, loanRepayments: baseSummary.loanRepayments });
@@ -120,6 +121,15 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
   useFocusEffect(useCallback(() => { void loadData(); }, [loadData]));
 
   const selectedMember = useMemo(() => members.find(m => m.id === selectedMemberId) ?? null, [members, selectedMemberId]);
+  // A member is Finished after any saved historical entry linked to that member:
+  // savings, loan issued/repayment, fine, or insurance. Group-level external loans
+  // do not finish an individual member because they have no member_id.
+  const completedHistoricalMemberIds = useMemo(() => new Set(
+    records.filter(r => r.member_id != null).map(r => r.member_id as number),
+  ), [records]);
+  const visibleMembers = useMemo(() => members.filter(member => memberListTab === 'finished'
+    ? completedHistoricalMemberIds.has(member.id)
+    : !completedHistoricalMemberIds.has(member.id)), [members, memberListTab, completedHistoricalMemberIds]);
   const savingsAmount = amountValue(shareCount) * amountValue(shareValue);
   const totalIncome = summary.savings + summary.fines + summary.insurance + summary.externalLoans + summary.loanDisbursements + summary.loanBalances;
 
@@ -155,7 +165,7 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
           amount: saveAmount, transaction_date: iso, fine_reason: fineReason, lender_name: lenderName,
           interest_amount: amountValue(interest), due_date: dueIso || null, source_notes: notes,
         }, executiveMemberId);
-        Alert.alert('Saved', `Changes saved. Audit: edited on ${isoToday()}.`);
+        // Keep editing responsive; the updated entry is shown after refresh.
       } else if (type === 'savings' || type === 'loan_disbursement' || type === 'loan_balance') {
         const standardType = type === 'loan_balance' ? 'loan_repayment' : type;
         const ref = reference.trim() || `AUTO-${groupId}-${Date.now()}`;
@@ -167,7 +177,9 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
           historical_interest: type === 'loan_disbursement' ? amountValue(interest) : 0,
         });
         if (type === 'loan_balance' && !editing) setPreviousBalance(amountValue(amount));
-        Alert.alert('Saved', `${labelFor(type)} saved for ${selectedMember?.full_name ?? 'member'}.`);
+        // Refresh immediately after any successful member-linked historical entry.
+        // The selected member will appear under Finished for every entry type.
+        if (selectedMemberId != null) setMemberListTab('finished');
       } else {
         const result = await recordHistoricalExtraEntry(groupId, {
           member_id: type === 'external_loan' ? null : selectedMemberId, entry_type: type,
@@ -175,10 +187,11 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
           lender_name: type === 'external_loan' ? lenderName.trim() : '', interest_amount: type === 'external_loan' ? amountValue(interest) : 0,
           due_date: type === 'external_loan' ? (dueIso || null) : null, source_reference: reference.trim(), source_notes: notes,
         });
-        if (type === 'fine' && !result.cloudSynced) Alert.alert('Saved on this phone', 'The fine is saved locally, but Back4App sync failed. Check internet and sync before another phone relies on this entry.');
-        else Alert.alert('Saved', `${labelFor(type)} saved.`);
+        if (selectedMemberId != null) setMemberListTab('finished');
+        if (!result.cloudSynced) Alert.alert('Saved on this phone', `${labelFor(type)} is saved locally, but Back4App sync failed. Check internet and sync before another phone relies on this entry.`);
       }
-      resetForm(); await loadData();
+      resetForm();
+      await loadData();
     } catch (e) { Alert.alert('Could not save', e instanceof Error ? e.message : 'Please check the entry.'); }
     finally { setSaving(false); }
   };
@@ -247,10 +260,10 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
     </ScrollView>
   </KeyboardAvoidingView>
 
-  <Modal visible={memberPickerVisible} transparent animationType="fade" onRequestClose={() => setMemberPickerVisible(false)}><View style={styles.modalShade}><View style={styles.memberModal}><Text style={styles.modalTitle}>👤 Choose member photo</Text><Text style={styles.help}>Tap the correct person.</Text><ScrollView><View style={styles.photoGrid}>{members.map(m => <TouchableOpacity key={m.id} onPress={() => void chooseMember(m)} style={[styles.photoTile,selectedMemberId===m.id&&styles.photoTileActive]}>
+  <Modal visible={memberPickerVisible} transparent animationType="fade" onRequestClose={() => setMemberPickerVisible(false)}><View style={styles.modalShade}><View style={styles.memberModal}><Text style={styles.modalTitle}>👤 Choose member photo</Text><Text style={styles.help}>Current members have no historical entries yet. Finished members already have at least one saved historical entry of any member-linked type.</Text><View style={styles.memberTabs}><TouchableOpacity onPress={() => setMemberListTab('current')} style={[styles.memberTab, memberListTab === 'current' && styles.memberTabActive]}><Text style={[styles.memberTabText, memberListTab === 'current' && styles.memberTabTextActive]}>Current ({members.filter(m => !completedHistoricalMemberIds.has(m.id)).length})</Text></TouchableOpacity><TouchableOpacity onPress={() => setMemberListTab('finished')} style={[styles.memberTab, memberListTab === 'finished' && styles.memberTabActive]}><Text style={[styles.memberTabText, memberListTab === 'finished' && styles.memberTabTextActive]}>Finished ({members.filter(m => completedHistoricalMemberIds.has(m.id)).length})</Text></TouchableOpacity></View><ScrollView><View style={styles.photoGrid}>{visibleMembers.map(m => <TouchableOpacity key={m.id} onPress={() => void chooseMember(m)} style={[styles.photoTile,selectedMemberId===m.id&&styles.photoTileActive]}>
     {m.photo_uri ? <Image source={{uri:m.photo_uri}} style={styles.memberPhoto}/> : <View style={styles.memberPhotoEmpty}><Text style={styles.photoEmoji}>👤</Text></View>}
     <Text style={styles.photoName} numberOfLines={2}>{m.full_name}</Text><Text style={styles.photoNumber}>{m.member_number}</Text>
-  </TouchableOpacity>)}</View>{!members.length&&<Text style={styles.help}>No members are registered yet.</Text>}</ScrollView><TouchableOpacity onPress={() => setMemberPickerVisible(false)} style={styles.noButton}><Text style={styles.noText}>Close</Text></TouchableOpacity></View></View></Modal>
+  </TouchableOpacity>)}</View>{!visibleMembers.length&&<Text style={styles.help}>{members.length === 0 ? 'No members are registered yet.' : memberListTab === 'finished' ? 'No members have historical entries yet.' : 'All members have at least one historical entry.'}</Text>}</ScrollView><TouchableOpacity onPress={() => setMemberPickerVisible(false)} style={styles.noButton}><Text style={styles.noText}>Close</Text></TouchableOpacity></View></View></Modal>
 
   <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}><View style={styles.modalShade}><View style={styles.deleteModal}><Text style={styles.deleteModalIcon}>🗑️</Text><Text style={styles.modalTitle}>Delete this?</Text><Text style={styles.deleteQuestion}>Delete this? {money(deleteTarget?.amount || 0)} {deleteTarget ? labelFor(deleteTarget.type) : 'entry'} for {deleteTarget?.member_name || deleteTarget?.lender_name || 'the group'}?</Text><Text style={styles.help}>The record will be marked deleted, not erased. Group totals will be recalculated.</Text><View style={styles.confirmRow}><TouchableOpacity onPress={() => setDeleteTarget(null)} style={styles.noButtonLarge}><Text style={styles.noTextLarge}>NO</Text></TouchableOpacity><TouchableOpacity onPress={() => void confirmDelete()} style={styles.yesButtonLarge}><Text style={styles.yesTextLarge}>YES, DELETE</Text></TouchableOpacity></View></View></View></Modal>
   </SafeAreaView>;
@@ -262,5 +275,5 @@ const styles = StyleSheet.create({
   sectionTitle:{fontSize:18,fontWeight:'900',color:'#111827',marginTop:10,marginBottom:10},summaryCard:{backgroundColor:'#fff',borderRadius:15,padding:14,borderWidth:1,borderColor:'#dbe4dc',marginBottom:18},totalLine:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',paddingVertical:7},totalLabel:{color:'#334155',fontSize:14,fontWeight:'700'},totalValue:{color:'#111827',fontSize:14,fontWeight:'900'},totalDivider:{height:1,backgroundColor:'#cbd5e1',marginVertical:8},cashBoxLabel:{fontSize:13,color:'#14532d',fontWeight:'900'},cashBoxValue:{fontSize:25,color:'#14532d',fontWeight:'900',marginTop:5},
   formCard:{backgroundColor:'#fff',borderRadius:16,padding:14,borderWidth:1,borderColor:'#e2e8f0',marginBottom:20},typeGrid:{flexDirection:'row',flexWrap:'wrap',gap:8},typeButton:{width:'31.5%',minHeight:92,borderWidth:2,borderRadius:13,alignItems:'center',justifyContent:'center',padding:7},typeIcon:{fontSize:27},typeText:{fontSize:12,fontWeight:'900',textAlign:'center',marginTop:5},label:{color:'#334155',fontSize:13,fontWeight:'800',marginTop:14,marginBottom:6},input:{minHeight:48,borderRadius:10,borderWidth:1,borderColor:'#cbd5e1',backgroundColor:'#fff',paddingHorizontal:12,color:'#111827',fontSize:16},notes:{minHeight:65,textAlignVertical:'top',paddingTop:10},memberSelect:{flexDirection:'row',alignItems:'center',gap:11,borderWidth:2,borderColor:'#94a3b8',borderRadius:13,padding:10,marginTop:2},selectedPhoto:{width:58,height:58,borderRadius:29},selectedPhotoPlaceholder:{width:58,height:58,borderRadius:29,backgroundColor:'#e2e8f0',alignItems:'center',justifyContent:'center'},photoEmoji:{fontSize:27},memberName:{fontSize:15,fontWeight:'900',color:'#111827'},memberNumber:{fontSize:12,color:'#64748b',marginTop:3},pickArrow:{fontSize:24,color:'#166534',fontWeight:'900'},calculated:{marginTop:10,padding:12,borderRadius:11,backgroundColor:'#f0fdf4',borderColor:'#86efac',borderWidth:1},calculatedLabel:{fontSize:11,fontWeight:'900',color:'#166534'},calculatedValue:{fontSize:22,fontWeight:'900',color:'#14532d',marginTop:3},balanceBox:{marginTop:12,padding:12,borderRadius:12,backgroundColor:'#fff7ed',borderColor:'#fdba74',borderWidth:1},balanceLabel:{fontSize:12,fontWeight:'900',color:'#9a3412'},balanceValue:{fontSize:22,fontWeight:'900',color:'#9a3412',marginTop:4},reasonRow:{flexDirection:'row',gap:8},reasonButton:{flex:1,borderWidth:1,borderColor:'#fecaca',borderRadius:11,paddingVertical:12,alignItems:'center',backgroundColor:'#fff'},reasonButtonActive:{backgroundColor:'#fee2e2',borderWidth:2,borderColor:'#b91c1c'},reasonIcon:{fontSize:24},reasonText:{fontSize:13,fontWeight:'900',color:'#991b1b',marginTop:4},saveButton:{minHeight:55,borderRadius:13,alignItems:'center',justifyContent:'center',flexDirection:'row',gap:9,marginTop:20},saveIcon:{fontSize:23},saveText:{color:'#fff',fontSize:17,fontWeight:'900'},disabled:{opacity:.6},cancelEdit:{marginTop:9,alignItems:'center',padding:12},cancelEditText:{color:'#475569',fontWeight:'800'},
   recentHeader:{flexDirection:'row',alignItems:'center',justifyContent:'space-between'},refresh:{padding:9,backgroundColor:'#dcfce7',borderRadius:9},refreshText:{color:'#166534',fontWeight:'900'},entryCard:{backgroundColor:'#fff',borderRadius:14,borderWidth:1,borderColor:'#e2e8f0',padding:13,marginBottom:9},entryTop:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:8},entryTypePill:{flexDirection:'row',alignItems:'center',gap:6,paddingVertical:6,paddingHorizontal:8,borderRadius:9,flexShrink:1},entryTypeText:{fontWeight:'900',fontSize:12},entryAmount:{fontSize:16,fontWeight:'900',color:'#111827'},entryMember:{fontSize:14,fontWeight:'900',color:'#1f2937',marginTop:9},entryMeta:{fontSize:12,color:'#64748b',marginTop:4,lineHeight:17},audit:{fontSize:11,color:'#1d4ed8',fontWeight:'800',marginTop:5},actions:{flexDirection:'row',gap:10,marginTop:12},editButton:{flex:1,backgroundColor:'#dbeafe',borderRadius:10,minHeight:43,alignItems:'center',justifyContent:'center',flexDirection:'row',gap:6},deleteButton:{flex:1,backgroundColor:'#fee2e2',borderRadius:10,minHeight:43,alignItems:'center',justifyContent:'center',flexDirection:'row',gap:6},actionIcon:{fontSize:18},editText:{color:'#1d4ed8',fontWeight:'900'},deleteText:{color:'#b91c1c',fontWeight:'900'},empty:{backgroundColor:'#fff',padding:15,borderRadius:12},emptyTitle:{fontWeight:'900',color:'#334155'},help:{fontSize:12,color:'#64748b',lineHeight:17,marginTop:6},backButton:{minHeight:48,borderWidth:1,borderColor:'#cbd5e1',borderRadius:12,alignItems:'center',justifyContent:'center',marginTop:12},backText:{fontSize:14,fontWeight:'900',color:'#334155'},
-  modalShade:{flex:1,backgroundColor:'rgba(15,23,42,.6)',justifyContent:'center',padding:14},memberModal:{maxHeight:'88%',backgroundColor:'#fff',borderRadius:18,padding:15},modalTitle:{fontSize:21,fontWeight:'900',color:'#111827',textAlign:'center',marginBottom:7},photoGrid:{flexDirection:'row',flexWrap:'wrap',justifyContent:'space-between',marginTop:12},photoTile:{width:'31.5%',alignItems:'center',padding:7,marginBottom:9,borderWidth:1,borderColor:'#e2e8f0',borderRadius:12,backgroundColor:'#fff'},photoTileActive:{borderWidth:2,borderColor:'#16a34a',backgroundColor:'#f0fdf4'},memberPhoto:{width:66,height:66,borderRadius:33},memberPhotoEmpty:{width:66,height:66,borderRadius:33,backgroundColor:'#e2e8f0',alignItems:'center',justifyContent:'center'},photoName:{fontSize:11,fontWeight:'900',color:'#111827',textAlign:'center',marginTop:6},photoNumber:{fontSize:10,color:'#64748b',marginTop:3},noButton:{minHeight:46,backgroundColor:'#e2e8f0',borderRadius:11,alignItems:'center',justifyContent:'center',marginTop:12},noText:{fontSize:15,fontWeight:'900',color:'#334155'},deleteModal:{backgroundColor:'#fff',borderRadius:20,padding:20,alignItems:'center'},deleteModalIcon:{fontSize:45,marginBottom:6},deleteQuestion:{fontSize:17,fontWeight:'800',textAlign:'center',color:'#334155',lineHeight:24,marginTop:8},confirmRow:{flexDirection:'row',gap:12,width:'100%',marginTop:18},noButtonLarge:{flex:1,minHeight:58,backgroundColor:'#e2e8f0',borderRadius:12,alignItems:'center',justifyContent:'center'},noTextLarge:{fontSize:17,fontWeight:'900',color:'#334155'},yesButtonLarge:{flex:1,minHeight:58,backgroundColor:'#b91c1c',borderRadius:12,alignItems:'center',justifyContent:'center'},yesTextLarge:{fontSize:16,fontWeight:'900',color:'#fff'},
+  modalShade:{flex:1,backgroundColor:'rgba(15,23,42,.6)',justifyContent:'center',padding:14},memberTabs:{flexDirection:'row',gap:8,marginTop:12,marginBottom:4},memberTab:{flex:1,minHeight:42,borderRadius:10,borderWidth:1,borderColor:'#cbd5e1',alignItems:'center',justifyContent:'center',backgroundColor:'#f8fafc'},memberTabActive:{backgroundColor:'#166534',borderColor:'#166534'},memberTabText:{fontSize:13,fontWeight:'900',color:'#334155'},memberTabTextActive:{color:'#fff'},memberModal:{maxHeight:'88%',backgroundColor:'#fff',borderRadius:18,padding:15},modalTitle:{fontSize:21,fontWeight:'900',color:'#111827',textAlign:'center',marginBottom:7},photoGrid:{flexDirection:'row',flexWrap:'wrap',justifyContent:'space-between',marginTop:12},photoTile:{width:'31.5%',alignItems:'center',padding:7,marginBottom:9,borderWidth:1,borderColor:'#e2e8f0',borderRadius:12,backgroundColor:'#fff'},photoTileActive:{borderWidth:2,borderColor:'#16a34a',backgroundColor:'#f0fdf4'},memberPhoto:{width:66,height:66,borderRadius:33},memberPhotoEmpty:{width:66,height:66,borderRadius:33,backgroundColor:'#e2e8f0',alignItems:'center',justifyContent:'center'},photoName:{fontSize:11,fontWeight:'900',color:'#111827',textAlign:'center',marginTop:6},photoNumber:{fontSize:10,color:'#64748b',marginTop:3},noButton:{minHeight:46,backgroundColor:'#e2e8f0',borderRadius:11,alignItems:'center',justifyContent:'center',marginTop:12},noText:{fontSize:15,fontWeight:'900',color:'#334155'},deleteModal:{backgroundColor:'#fff',borderRadius:20,padding:20,alignItems:'center'},deleteModalIcon:{fontSize:45,marginBottom:6},deleteQuestion:{fontSize:17,fontWeight:'800',textAlign:'center',color:'#334155',lineHeight:24,marginTop:8},confirmRow:{flexDirection:'row',gap:12,width:'100%',marginTop:18},noButtonLarge:{flex:1,minHeight:58,backgroundColor:'#e2e8f0',borderRadius:12,alignItems:'center',justifyContent:'center'},noTextLarge:{fontSize:17,fontWeight:'900',color:'#334155'},yesButtonLarge:{flex:1,minHeight:58,backgroundColor:'#b91c1c',borderRadius:12,alignItems:'center',justifyContent:'center'},yesTextLarge:{fontSize:16,fontWeight:'900',color:'#fff'},
 });
