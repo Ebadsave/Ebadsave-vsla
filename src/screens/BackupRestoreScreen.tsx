@@ -34,11 +34,26 @@ const [backupFiles, setBackupFiles] = useState<BackupFile[]>([]);
 const [loading, setLoading] = useState(false);
 const [exporting, setExporting] = useState(false);
 const [restoringFile, setRestoringFile] = useState<string | null>(null);
-const [cloudBackupConsent, setCloudBackupConsent] = useState(false);
+const [cloudBackupConsent, setCloudBackupConsent] = useState<boolean | null>(null);
 const [changingConsent, setChangingConsent] = useState(false);
-const [cloudBackupStatus, setCloudBackupStatus] = useState('Automatic cloud backup is off until enabled.');
+const [cloudBackupStatus, setCloudBackupStatus] = useState('Checking automatic cloud backup status…');
 
-const loadConsent = useCallback(async () => { setCloudBackupConsent(await getAutomaticCloudBackupConsent()); }, []);
+const loadConsent = useCallback(async () => {
+  try {
+    const enabled = await getAutomaticCloudBackupConsent();
+    setCloudBackupConsent(enabled);
+    setCloudBackupStatus(
+      enabled
+        ? 'Consent is enabled. Automatic encrypted cloud uploads are allowed; backups may run approximately every 6 hours when Android/iOS allows them.'
+        : 'Automatic cloud backup is off because consent is disabled. Local backups remain available.',
+    );
+  } catch (error) {
+    console.error('Could not load automatic cloud backup setting:', error);
+    setCloudBackupStatus(
+      'Unable to verify the automatic cloud backup setting. Please reopen this screen.',
+    );
+  }
+}, []);
 
 const loadBackupFiles = useCallback(async () => {
 try {
@@ -61,6 +76,7 @@ loadConsent();
 );
 
 const handleCloudBackupConsent = async () => {
+  if (cloudBackupConsent === null) return;
   const nextValue = !cloudBackupConsent;
   try {
     setChangingConsent(true);
@@ -345,10 +361,10 @@ Data Backup & Restore
   <View style={styles.section}>
   <Text style={styles.sectionTitle}>Automatic Back4App Backup</Text>
   <Text style={styles.bodyText}>Enable consent to allow encrypted cloud backups approximately every 6 hours. Android/iOS controls the exact run time. Backups can run while you use another app when the operating system allows it. Your local SQLite database is not changed by backup uploads.</Text>
-  <TouchableOpacity style={[styles.consentButton, cloudBackupConsent ? styles.disableConsentButton : null, changingConsent && styles.disabledButton]} onPress={() => void handleCloudBackupConsent()} disabled={changingConsent}>
-    {changingConsent ? <ActivityIndicator color="#fff" /> : <Text style={styles.consentButtonText}>{cloudBackupConsent ? 'Disable Automatic Cloud Backup' : 'Enable Automatic Cloud Backup (Consent)'}</Text>}
+  <TouchableOpacity style={[styles.consentButton, cloudBackupConsent === true ? styles.disableConsentButton : null, (changingConsent || cloudBackupConsent === null) && styles.disabledButton]} onPress={() => void handleCloudBackupConsent()} disabled={changingConsent || cloudBackupConsent === null}>
+    {changingConsent ? <ActivityIndicator color="#fff" /> : <Text style={styles.consentButtonText}>{cloudBackupConsent === null ? 'Checking Automatic Backup…' : cloudBackupConsent ? 'Disable Automatic Cloud Backup' : 'Enable Automatic Cloud Backup (Consent)'}</Text>}
   </TouchableOpacity>
-  <View style={styles.infoBox}><Text style={styles.infoText}>{cloudBackupConsent ? 'Consent enabled: encrypted automatic uploads are allowed.' : 'Consent disabled: automatic cloud uploads will not occur.'}</Text></View>
+  <View style={styles.infoBox}><Text style={styles.infoText}>{cloudBackupConsent === null ? 'Checking saved automatic backup consent…' : cloudBackupConsent ? 'Consent enabled: automatic encrypted cloud backups are allowed.' : 'Consent disabled: automatic cloud backups are turned off.'}</Text></View>
   <Text style={styles.bodyText}>{cloudBackupStatus}</Text>
 </View>
 
