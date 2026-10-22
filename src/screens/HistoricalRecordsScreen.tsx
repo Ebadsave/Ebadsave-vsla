@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal, Platform,
   SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View,
@@ -75,6 +76,11 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
   const [summary, setSummary] = useState<Summary>(initialSummary);
   const [editing, setEditing] = useState<Entry | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Entry | null>(null);
+  const [recordSearch, setRecordSearch] = useState('');
+  const [passcodeVisible, setPasscodeVisible] = useState(false);
+  const [passcodeEntry, setPasscodeEntry] = useState('');
+  const [pendingEdit, setPendingEdit] = useState<Entry | null>(null);
+  const [passcodeSetup, setPasscodeSetup] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -110,11 +116,9 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
         lender_name: r.lender_name, interest_amount: Number(r.interest_amount), due_date: r.due_date, edited_at: r.edited_at,
       }));
       setRecords([...standard, ...extras].sort((a,b) => b.date.localeCompare(a.date) || b.id-a.id));
-      const memberLoans = await Promise.all(memberList.map(m => getMemberLoanBalance(groupId, m.id)));
-      const outstanding = memberLoans.reduce((sum, loan) => sum + Number(loan.balance || 0), 0);
       setSummary({ records: baseSummary.records, savings: baseSummary.savings, fines: baseSummary.fines, insurance: baseSummary.insurance,
         externalLoans: baseSummary.externalLoans, loanDisbursements: baseSummary.loanDisbursements,
-        loanBalances: outstanding, loanRepayments: baseSummary.loanRepayments });
+        loanBalances: baseSummary.loanBalances, loanRepayments: baseSummary.loanRepayments });
     } catch (e) { Alert.alert('Could not load group records', e instanceof Error ? e.message : 'Please try again.'); }
     finally { setLoading(false); }
   }, [groupId, executiveMemberId, selectedMemberId]);
@@ -132,6 +136,7 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
     : !completedHistoricalMemberIds.has(member.id)), [members, memberListTab, completedHistoricalMemberIds]);
   const savingsAmount = amountValue(shareCount) * amountValue(shareValue);
   const totalIncome = summary.savings + summary.fines + summary.insurance + summary.externalLoans + summary.loanDisbursements + summary.loanBalances;
+  const filteredRecords = useMemo(() => { const q = recordSearch.trim().toLocaleLowerCase(); if (!q) return records; return records.filter(r => [r.member_name, r.member_number, r.lender_name, r.source_reference, r.source_notes, labelFor(r.type), displayDate(r.date), String(r.amount)].some(v => String(v || '').toLocaleLowerCase().includes(q))); }, [records, recordSearch]);
 
   const chooseType = (next: EntryType) => { setType(next); if (!editing) { setAmount(''); setDate(displayDate(isoToday())); setDueDate(''); setInterest('0'); setLenderName(''); setReference(''); setNotes(''); } };
   const chooseMember = async (member: MemberOption) => {
@@ -158,6 +163,10 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
     if (!Number.isFinite(saveAmount) || saveAmount <= 0) { Alert.alert('Enter an amount', 'The amount must be greater than zero.'); return; }
     if (type === 'external_loan' && !lenderName.trim()) { Alert.alert('Lender required', 'Enter the name of the person or institution lending to the group.'); return; }
     if (editing && !canAdmin) { Alert.alert('Admin only', 'Only the group administrator can edit entries.'); return; }
+    if (type !== 'external_loan') {
+      const duplicate = records.some(r => r.id !== editing?.id && r.member_id === selectedMemberId && r.type === type && r.date === iso);
+      if (duplicate) { Alert.alert('Possible duplicate record', 'This member already has a historical record of this type on this date. Search the records and edit the existing entry instead.'); return; }
+    }
     setSaving(true);
     try {
       if (editing) {
@@ -196,14 +205,29 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
     finally { setSaving(false); }
   };
 
-  const beginEdit = (entry: Entry) => {
-    if (!canAdmin) { Alert.alert('Admin only', 'Only the group administrator can edit entries.'); return; }
+  const openEditForm = (entry: Entry) => {
     setEditing(entry); setType(entry.type); setSelectedMemberId(entry.member_id); setDate(displayDate(entry.date)); setAmount(String(entry.amount));
     setShareCount(String(entry.share_count ?? 1)); setShareValue(String(entry.share_value ?? shareValue));
     setDueDate(displayDate(entry.due_date || entry.loan_due_date || '')); setInterest(String(entry.interest_amount ?? entry.historical_interest ?? 0));
     setFineReason((entry.fine_reason === 'absent' || entry.fine_reason === 'other') ? entry.fine_reason : 'late');
     setLenderName(entry.lender_name || ''); setReference(entry.source_reference || ''); setNotes(entry.source_notes || '');
     if (entry.member_id) void getMemberLoanBalance(groupId, entry.member_id).then(v => setPreviousBalance(v.balance)).catch(() => setPreviousBalance(0));
+  };
+  const beginEdit = async (entry: Entry) => {
+    if (!canAdmin) { Alert.alert('Admin only', 'Only the group administrator can edit entries.'); return; }
+    setPendingEdit(entry); setPasscodeEntry('');
+    const stored = await AsyncStorage.getItem(`@ebadsave/historical_records_passcode_${groupId}`);
+    setPasscodeSetup(!stored); setPasscodeVisible(true);
+  };
+  const unlockEdit = async () => {
+    const code = passcodeEntry.trim();
+    if (code.length < 4) { Alert.alert('Passcode required', 'Use at least 4 characters.'); return; }
+    const key = `@ebadsave/historical_records_passcode_${groupId}`;
+    const stored = await AsyncStorage.getItem(key);
+    if (!stored) { await AsyncStorage.setItem(key, code); }
+    else if (stored !== code) { Alert.alert('Incorrect passcode', 'The record remains read-only.'); return; }
+    const entry = pendingEdit; setPasscodeVisible(false); setPendingEdit(null); setPasscodeEntry('');
+    if (entry) openEditForm(entry);
   };
   const askDelete = (entry: Entry) => { if (!canAdmin) { Alert.alert('Admin only', 'Only the group administrator can delete entries.'); return; } setDeleteTarget(entry); };
   const confirmDelete = async () => {
@@ -245,16 +269,17 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
       </View>
 
       <View style={styles.recentHeader}><Text style={styles.sectionTitle}>📚 Recent imported entries</Text><TouchableOpacity onPress={() => void loadData()} style={styles.refresh}><Text style={styles.refreshText}>↻ Refresh</Text></TouchableOpacity></View>
-      {!records.length ? <View style={styles.empty}><Text style={styles.emptyTitle}>No entries yet</Text><Text style={styles.help}>Start entering records from the physical passbooks.</Text></View> : records.map((r) => <View key={`${r.kind}-${r.id}`} style={styles.entryCard}>
+      <TextInput value={recordSearch} onChangeText={setRecordSearch} style={styles.input} placeholder="🔎 Search name, member number, type, date, reference…" returnKeyType="search" />
+      {!filteredRecords.length ? <View style={styles.empty}><Text style={styles.emptyTitle}>{records.length ? 'No matching records' : 'No entries yet'}</Text><Text style={styles.help}>{records.length ? 'Try another name, number, type, date, or reference.' : 'Start entering records from the physical passbooks.'}</Text></View> : filteredRecords.map((r) => <View key={`${r.kind}-${r.id}`} style={styles.entryCard}>
         <View style={styles.entryTop}><View style={[styles.entryTypePill,{backgroundColor:labels[r.type].bg}]}><Text style={{fontSize:17}}>{labels[r.type].icon}</Text><Text style={[styles.entryTypeText,{color:labels[r.type].color}]}>{labelFor(r.type)}</Text></View><Text style={styles.entryAmount}>{money(r.amount)}</Text></View>
         <Text style={styles.entryMember}>{r.member_name || r.lender_name || 'Group liability'} {r.member_number ? `· ${r.member_number}` : ''}</Text>
         <Text style={styles.entryMeta}>Date: {displayDate(r.date)}</Text>
         {r.type==='fine' && <Text style={styles.entryMeta}>Reason: {r.fine_reason || 'Other'}</Text>}
         {r.type==='external_loan' && <Text style={styles.entryMeta}>Lender: {r.lender_name} · Interest: {money(r.interest_amount || 0)} · Due: {r.due_date ? displayDate(r.due_date) : 'Not recorded'}</Text>}
         {r.type==='loan_disbursement' && <Text style={styles.entryMeta}>Due: {r.loan_due_date ? displayDate(r.loan_due_date) : 'Not recorded'} · Interest: {money(r.historical_interest || 0)}</Text>}
-        {r.edited_at && <Text style={styles.audit}>Edited on {r.edited_at.slice(0,10)}</Text>}
+        <Text style={styles.audit}>🔒 Saved record · READ ONLY{r.edited_at ? ` · Edited ${r.edited_at.slice(0,10)}` : ''}</Text>
         {!!r.source_notes && <Text style={styles.entryMeta}>{r.source_notes}</Text>}
-        {canAdmin && <View style={styles.actions}><TouchableOpacity onPress={() => beginEdit(r)} style={styles.editButton}><Text style={styles.actionIcon}>✏️</Text><Text style={styles.editText}>Edit</Text></TouchableOpacity><TouchableOpacity onPress={() => askDelete(r)} style={styles.deleteButton}><Text style={styles.actionIcon}>🗑️</Text><Text style={styles.deleteText}>Delete</Text></TouchableOpacity></View>}
+        {canAdmin && <View style={styles.actions}><TouchableOpacity onPress={() => beginEdit(r)} style={styles.editButton}><Text style={styles.actionIcon}>✏️</Text><Text style={styles.editText}>Unlock & Edit</Text></TouchableOpacity><TouchableOpacity onPress={() => askDelete(r)} style={styles.deleteButton}><Text style={styles.actionIcon}>🗑️</Text><Text style={styles.deleteText}>Delete</Text></TouchableOpacity></View>}
       </View>)}
       <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}><Text style={styles.backText}>⬅ Back</Text></TouchableOpacity>
     </ScrollView>
@@ -264,6 +289,8 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
     {m.photo_uri ? <Image source={{uri:m.photo_uri}} style={styles.memberPhoto}/> : <View style={styles.memberPhotoEmpty}><Text style={styles.photoEmoji}>👤</Text></View>}
     <Text style={styles.photoName} numberOfLines={2}>{m.full_name}</Text><Text style={styles.photoNumber}>{m.member_number}</Text>
   </TouchableOpacity>)}</View>{!visibleMembers.length&&<Text style={styles.help}>{members.length === 0 ? 'No members are registered yet.' : memberListTab === 'finished' ? 'No members have historical entries yet.' : 'All members have at least one historical entry.'}</Text>}</ScrollView><TouchableOpacity onPress={() => setMemberPickerVisible(false)} style={styles.noButton}><Text style={styles.noText}>Close</Text></TouchableOpacity></View></View></Modal>
+
+  <Modal visible={passcodeVisible} transparent animationType="fade" onRequestClose={() => setPasscodeVisible(false)}><View style={styles.modalShade}><View style={styles.deleteModal}><Text style={styles.modalTitle}>{passcodeSetup ? '🔐 Set edit passcode' : '🔐 Unlock historical record'}</Text><Text style={styles.help}>{passcodeSetup ? 'Create a passcode of at least 4 characters. You will need it to edit locked records on this phone.' : 'Historical records are read-only until the group passcode is entered.'}</Text><TextInput value={passcodeEntry} onChangeText={setPasscodeEntry} style={styles.input} placeholder="Enter passcode" secureTextEntry autoCapitalize="none" autoCorrect={false}/><TouchableOpacity onPress={() => void unlockEdit()} style={styles.saveButton}><Text style={styles.saveText}>{passcodeSetup ? 'Set passcode & edit' : 'Unlock & edit'}</Text></TouchableOpacity><TouchableOpacity onPress={() => {setPasscodeVisible(false);setPendingEdit(null);setPasscodeEntry('');}} style={styles.noButton}><Text style={styles.noText}>Cancel</Text></TouchableOpacity></View></View></Modal>
 
   <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}><View style={styles.modalShade}><View style={styles.deleteModal}><Text style={styles.deleteModalIcon}>🗑️</Text><Text style={styles.modalTitle}>Delete this?</Text><Text style={styles.deleteQuestion}>Delete this? {money(deleteTarget?.amount || 0)} {deleteTarget ? labelFor(deleteTarget.type) : 'entry'} for {deleteTarget?.member_name || deleteTarget?.lender_name || 'the group'}?</Text><Text style={styles.help}>The record will be marked deleted, not erased. Group totals will be recalculated.</Text><View style={styles.confirmRow}><TouchableOpacity onPress={() => setDeleteTarget(null)} style={styles.noButtonLarge}><Text style={styles.noTextLarge}>NO</Text></TouchableOpacity><TouchableOpacity onPress={() => void confirmDelete()} style={styles.yesButtonLarge}><Text style={styles.yesTextLarge}>YES, DELETE</Text></TouchableOpacity></View></View></View></Modal>
   </SafeAreaView>;
