@@ -231,7 +231,18 @@ export default function PreAppAuthorizationScreen({ navigation }: Props) {
             {getAuthText().instructions}
           </Text>
           {groups.length === 0 ? (
-            <Text style={styles.emptyText}>{getAuthText().noGroups}</Text>
+            <>
+              <Text style={styles.emptyText}>No groups on this phone YET. Your KYA data may still be saved online in Back4App. Restore your group before trying member authorization.</Text>
+              <Pressable style={styles.primaryButton} onPress={() => navigation.navigate('BackupRestore')}>
+                <Text style={styles.primaryButtonText}>RESTORE GROUP FROM CLOUD</Text>
+              </Pressable>
+              <Pressable style={styles.secondaryNavButton} onPress={() => navigation.navigate('CreateGroupStart')}>
+                <Text style={styles.secondaryNavButtonText}>Register New Group</Text>
+              </Pressable>
+              <Pressable style={styles.secondaryNavButton} onPress={() => navigation.navigate('Welcome')}>
+                <Text style={styles.secondaryNavButtonText}>Back to login options</Text>
+              </Pressable>
+            </>
           ) : groups.map((group) => (
             <Pressable
               key={group.id}
@@ -356,6 +367,8 @@ const styles = StyleSheet.create({
   card: { backgroundColor: '#fff', borderRadius: 18, padding: 18, borderWidth: 1, borderColor: '#dcfce7', elevation: 2 },
   title: { color: '#14532d', fontSize: 20, fontWeight: '800' },
   description: { color: '#475569', fontSize: 14, lineHeight: 20, marginTop: 8, marginBottom: 16 },
+  secondaryNavButton: { minHeight: 46, borderRadius: 10, borderWidth: 1, borderColor: '#16a34a', alignItems: 'center', justifyContent: 'center', padding: 12, marginTop: 10, backgroundColor: '#fff' },
+  secondaryNavButtonText: { color: '#166534', fontSize: 14, fontWeight: '800' },
   groupButton: { borderWidth: 1, borderColor: '#bbf7d0', borderRadius: 12, padding: 14, marginTop: 10, backgroundColor: '#f8fff9' },
   groupNumber: { color: '#16a34a', fontSize: 13, fontWeight: '800' },
   groupName: { color: '#14532d', fontSize: 17, fontWeight: '700', marginTop: 3 },
