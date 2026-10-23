@@ -1359,6 +1359,30 @@ status TEXT NOT NULL DEFAULT 'active',
     );
     CREATE INDEX IF NOT EXISTS idx_historical_extra_group_date ON historical_extra_entries(group_id, transaction_date, id);
 
+    -- Imported loan balances are snapshots of what a member still owes.
+    -- They are not loan-issuance or repayment cash transactions.
+    CREATE TABLE IF NOT EXISTS historical_member_loan_balances (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      member_id INTEGER NOT NULL,
+      balance REAL NOT NULL CHECK (balance >= 0),
+      transaction_date TEXT NOT NULL,
+      source_reference TEXT NOT NULL COLLATE NOCASE,
+      source_notes TEXT NOT NULL DEFAULT '',
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      edited_at TEXT,
+      edited_by_member_id INTEGER,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (member_id) REFERENCES members(id),
+      FOREIGN KEY (edited_by_member_id) REFERENCES members(id),
+      UNIQUE (group_id, source_reference)
+    );
+    CREATE INDEX IF NOT EXISTS idx_historical_loan_balances_member_date
+      ON historical_member_loan_balances(group_id, member_id, transaction_date DESC, id DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_historical_loan_balances_member_day_active
+      ON historical_member_loan_balances(group_id, member_id, transaction_date) WHERE is_deleted = 0;
+
     CREATE TABLE IF NOT EXISTS financial_transaction_reversals (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       original_transaction_id INTEGER NOT NULL UNIQUE,
@@ -2436,6 +2460,120 @@ async function requireHistoricalGroupAdmin(groupId: number, memberId: number): P
   }
 }
 
+export type HistoricalLoanBalanceRecord = {
+  id: number; group_id: number; member_id: number; member_name: string; member_number: string;
+  balance: number; transaction_date: string; source_reference: string; source_notes: string;
+  is_deleted: number; created_at: string; edited_at: string | null; edited_by_member_id: number | null;
+};
+
+export type HistoricalLoanBalanceInput = {
+  member_id: number; balance: number; transaction_date: string; source_reference?: string; source_notes?: string;
+};
+
+export async function getHistoricalLoanBalanceEntries(
+  groupId: number, limit = 10000,
+): Promise<HistoricalLoanBalanceRecord[]> {
+  const db = await getDatabase();
+  const safeLimit = Math.max(1, Math.min(10000, Math.floor(Number(limit) || 10000)));
+  return db.getAllAsync<HistoricalLoanBalanceRecord>(
+    `SELECT h.*, m.full_name AS member_name, m.member_number
+     FROM historical_member_loan_balances h
+     JOIN members m ON m.id = h.member_id
+     WHERE h.group_id = ? AND h.is_deleted = 0
+     ORDER BY h.transaction_date DESC, h.id DESC
+     LIMIT ?`,
+    groupId, safeLimit,
+  );
+}
+
+/** Save the exact outstanding loan balance as a snapshot; this is not a repayment. */
+export async function recordHistoricalLoanBalance(
+  groupId: number, input: HistoricalLoanBalanceInput,
+): Promise<number> {
+  const db = await getDatabase();
+  const memberId = Number(input.member_id);
+  const balance = Number(input.balance);
+  const date = normalizeText(input.transaction_date);
+  if (!Number.isInteger(groupId) || groupId <= 0) throw new Error('Select a valid group.');
+  if (!Number.isInteger(memberId) || memberId <= 0) throw new Error('Choose a member first.');
+  if (!Number.isFinite(balance) || balance < 0) throw new Error('Loan balance must be zero or greater.');
+  validateHistoricalDate(date);
+  const today = new Date();
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  if (date > todayIso) throw new Error('A historical balance date cannot be in the future.');
+  const member = await db.getFirstAsync<{ id: number }>(
+    'SELECT id FROM members WHERE id = ? AND group_id = ? LIMIT 1', memberId, groupId,
+  );
+  if (!member) throw new Error('The selected member does not belong to this group.');
+  const duplicate = await db.getFirstAsync<{ id: number }>(
+    'SELECT id FROM historical_member_loan_balances WHERE group_id = ? AND member_id = ? AND transaction_date = ? AND is_deleted = 0 LIMIT 1',
+    groupId, memberId, date,
+  );
+  if (duplicate) throw new Error('This member already has a historical loan balance recorded for this date. Search and edit the existing record instead.');
+  const reference = normalizeText(input.source_reference) || `AUTO-BALANCE-${groupId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  if (reference.length > 120) throw new Error('The internal reference must be 120 characters or fewer.');
+  const timestamp = now();
+  const result = await db.runAsync(
+    `INSERT INTO historical_member_loan_balances
+      (group_id, member_id, balance, transaction_date, source_reference, source_notes, is_deleted, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+    groupId, memberId, balance, date, reference, normalizeText(input.source_notes || ''), timestamp,
+  );
+  await db.runAsync('UPDATE groups SET last_activity_at = ? WHERE id = ?', timestamp, groupId);
+  return Number(result.lastInsertRowId);
+}
+
+export async function editHistoricalLoanBalanceEntry(
+  groupId: number, entryId: number, input: HistoricalLoanBalanceInput, editorMemberId: number,
+): Promise<void> {
+  await requireHistoricalGroupAdmin(groupId, editorMemberId);
+  const db = await getDatabase();
+  const memberId = Number(input.member_id);
+  const balance = Number(input.balance);
+  const date = normalizeText(input.transaction_date);
+  if (!Number.isFinite(balance) || balance < 0) throw new Error('Loan balance must be zero or greater.');
+  validateHistoricalDate(date);
+  const today = new Date();
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  if (date > todayIso) throw new Error('A historical balance date cannot be in the future.');
+  const member = await db.getFirstAsync<{ id: number }>(
+    'SELECT id FROM members WHERE id = ? AND group_id = ? LIMIT 1', memberId, groupId,
+  );
+  if (!member) throw new Error('The selected member does not belong to this group.');
+  const current = await db.getFirstAsync<any>(
+    'SELECT * FROM historical_member_loan_balances WHERE id = ? AND group_id = ? AND is_deleted = 0 LIMIT 1', entryId, groupId,
+  );
+  if (!current) throw new Error('This loan balance entry is no longer available. Refresh the list.');
+  const duplicate = await db.getFirstAsync<{ id: number }>(
+    'SELECT id FROM historical_member_loan_balances WHERE group_id = ? AND member_id = ? AND transaction_date = ? AND is_deleted = 0 AND id <> ? LIMIT 1',
+    groupId, memberId, date, entryId,
+  );
+  if (duplicate) throw new Error('This member already has a historical loan balance recorded for this date.');
+  const timestamp = now();
+  const audit = `Edited on ${timestamp.slice(0, 10)} by ${editorMemberId}; previous balance ${current.balance}; previous date ${current.transaction_date}.`;
+  const notes = [normalizeText(input.source_notes || current.source_notes || ''), audit].filter(Boolean).join(' | ');
+  await db.runAsync(
+    `UPDATE historical_member_loan_balances
+     SET member_id = ?, balance = ?, transaction_date = ?, source_notes = ?, edited_at = ?, edited_by_member_id = ?
+     WHERE id = ? AND group_id = ?`,
+    memberId, balance, date, notes, timestamp, editorMemberId, entryId, groupId,
+  );
+}
+
+export async function softDeleteHistoricalLoanBalanceEntry(
+  groupId: number, entryId: number, adminMemberId: number,
+): Promise<void> {
+  await requireHistoricalGroupAdmin(groupId, adminMemberId);
+  const db = await getDatabase();
+  const timestamp = now();
+  const result = await db.runAsync(
+    `UPDATE historical_member_loan_balances SET is_deleted = 1, edited_at = ?, edited_by_member_id = ?
+     WHERE id = ? AND group_id = ? AND is_deleted = 0`,
+    timestamp, adminMemberId, entryId, groupId,
+  );
+  if (Number(result.changes) === 0) throw new Error('This loan balance entry is already deleted or does not exist.');
+}
+
 export async function getHistoricalExtraEntries(groupId: number, limit = 100): Promise<HistoricalExtraRecord[]> {
   const db = await getDatabase();
   const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
@@ -2652,7 +2790,7 @@ const BACKUP_TABLES = [
   'member_auth_attempts', 'member_transaction_signatures', 'app_access_sessions',
   'app_access_authorizers', 'meeting_attendance', 'meeting_closures',
   'financial_accounts', 'financial_collections', 'financial_collection_items',
-  'financial_transactions', 'historical_transaction_imports', 'historical_extra_entries', 'financial_transaction_reversals', 'receipts',
+  'financial_transactions', 'historical_transaction_imports', 'historical_extra_entries', 'historical_member_loan_balances', 'financial_transaction_reversals', 'receipts',
   'notification_queue', 'notification_delivery', 'meeting_audit_records',
   'sync_queue', 'member_passbook_records', 'member_statement_records',
   'loan_interest_charges', 'meeting_loan_interest_charges', 'loan_policy_settings', 'loan_committee_members', 'loan_applications',
@@ -7609,6 +7747,59 @@ export async function getMemberLoanBalance(
 }> {
   const db = await getDatabase();
 
+  // A historical balance is the final amount owed on that date, not a repayment.
+  // It replaces all earlier/opening loan figures; only later digital-cycle activity
+  // is added to or deducted from that snapshot.
+  const snapshot = await db.getFirstAsync<{ balance: number; transaction_date: string }>(
+    `SELECT balance, transaction_date
+     FROM historical_member_loan_balances
+     WHERE group_id = ? AND member_id = ? AND is_deleted = 0
+     ORDER BY transaction_date DESC, id DESC
+     LIMIT 1`,
+    groupId, memberId,
+  );
+  if (snapshot) {
+    const snapshotDate = snapshot.transaction_date;
+    const issuedAfter = await db.getFirstAsync<{ total: number }>(
+      `SELECT COALESCE(SUM(ABS(amount)), 0) AS total
+       FROM financial_transactions
+       WHERE group_id = ? AND member_id = ? AND account_type = 'loan_fund'
+         AND transaction_type = 'loan_issued' AND reversed = 0
+         AND substr(created_at, 1, 10) > ?`,
+      groupId, memberId, snapshotDate,
+    );
+    const repaymentsAfter = await db.getFirstAsync<{ total: number }>(
+      `SELECT COALESCE(SUM(amount), 0) AS total
+       FROM financial_transactions
+       WHERE group_id = ? AND member_id = ? AND account_type = 'loan_repayment'
+         AND transaction_type = 'loan_repayment' AND reversed = 0
+         AND substr(created_at, 1, 10) > ?`,
+      groupId, memberId, snapshotDate,
+    );
+    const interestAfter = await db.getFirstAsync<{ total: number }>(
+      `SELECT
+         COALESCE((SELECT SUM(lic.interest_amount) FROM loan_interest_charges lic
+           WHERE lic.group_id = ? AND lic.member_id = ? AND substr(lic.created_at, 1, 10) > ?), 0)
+         + COALESCE((SELECT SUM(lr.total_interest) FROM loan_records lr
+           JOIN financial_transactions lft ON lft.id = lr.disbursement_transaction_id
+           WHERE lr.group_id = ? AND lr.member_id = ? AND lr.status != 'cancelled'
+             AND lft.reversed = 0 AND lr.issue_date > ?), 0)
+         + COALESCE((SELECT SUM(mlic.interest_amount) FROM meeting_loan_interest_charges mlic
+           WHERE mlic.group_id = ? AND mlic.member_id = ? AND mlic.charge_date > ?), 0)
+         + COALESCE((SELECT SUM(hi.historical_interest) FROM historical_transaction_imports hi
+           WHERE hi.group_id = ? AND hi.member_id = ? AND hi.historical_type = 'loan_disbursement'
+             AND COALESCE(hi.is_deleted, 0) = 0 AND hi.transaction_date > ?), 0) AS total`,
+      groupId, memberId, snapshotDate,
+      groupId, memberId, snapshotDate,
+      groupId, memberId, snapshotDate,
+      groupId, memberId, snapshotDate,
+    );
+    const principal = Number(snapshot.balance || 0) + Number(issuedAfter?.total || 0);
+    const interest = Number(interestAfter?.total || 0);
+    const paid = Number(repaymentsAfter?.total || 0);
+    return { principal, interest, balance: Math.max(0, principal + interest - paid) };
+  }
+
   const issued = await db.getFirstAsync<{ total: number }>(
     `SELECT COALESCE(SUM(ABS(amount)), 0) AS total
      FROM financial_transactions
@@ -10945,6 +11136,7 @@ export async function verifyMemberPasscode(
   memberId: number,
   groupId: number,
   passcode: string,
+  options: { requirePhone?: boolean } = {},
 ): Promise<MemberPasscodeVerificationResult> {
   if (!isValidPasscode(passcode)) {
     return { success: false, reason: 'invalid_passcode' };
@@ -10995,9 +11187,11 @@ export async function verifyMemberPasscode(
     return { success: false, reason: 'member_inactive' };
   }
 
-  const normalizedPhone = normalizeUgandanPhoneNumber(row.phone);
-  if (!normalizedPhone || Number(row.phone_eligible ?? 0) !== 1) {
-    return { success: false, reason: 'phone_required' };
+  if (options.requirePhone !== false) {
+    const normalizedPhone = normalizeUgandanPhoneNumber(row.phone);
+    if (!normalizedPhone || Number(row.phone_eligible ?? 0) !== 1) {
+      return { success: false, reason: 'phone_required' };
+    }
   }
 
   if (!row.salt || !row.passcode_hash) {
