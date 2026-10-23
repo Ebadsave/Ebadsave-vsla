@@ -33,6 +33,9 @@ import { initializeAutomaticBackupTask } from './src/services/backupBackground';
 export type RootStackParamList = {
   Onboarding: undefined;
   Welcome: undefined;
+  CreateGroupStart: undefined;
+  PersonalAccount: undefined;
+  PersonalLogin: undefined;
   ExistingGroupOnboarding: { groupId: number };
   HistoricalRecords: { groupId: number; executiveMemberId: number };
   ShareOutCalculation: { groupId: number; executiveMemberId: number };
@@ -143,23 +146,43 @@ function WelcomeScreen({ navigation }: { navigation: any }) {
       <Pressable style={welcomeStyles.primaryButton} onPress={() => navigation.navigate('PreAppAuthorization')}>
         <Text style={welcomeStyles.primaryText}>1. Group login</Text>
       </Pressable>
-      <Pressable style={welcomeStyles.primaryButton} onPress={() => navigation.navigate('Constitution')}>
+      <Pressable style={welcomeStyles.primaryButton} onPress={() => navigation.navigate('CreateGroupStart')}>
         <Text style={welcomeStyles.primaryText}>2. Create new group</Text>
       </Pressable>
-      <Pressable style={welcomeStyles.secondaryButton} onPress={() => Alert.alert(
-        'Personal account',
-        'Personal account creation is not connected in this project yet. Your group data and existing login rules have not been changed.'
-      )}>
+      <Pressable style={welcomeStyles.secondaryButton} onPress={() => navigation.navigate('PersonalAccount')}>
         <Text style={welcomeStyles.secondaryText}>3. Create personal account</Text>
       </Pressable>
-      <Pressable style={welcomeStyles.secondaryButton} onPress={() => Alert.alert(
-        'Personal login',
-        'Personal login is not connected in this project yet. We need to define and connect its authentication flow before it can safely sign you in.'
-      )}>
+      <Pressable style={welcomeStyles.secondaryButton} onPress={() => navigation.navigate('PersonalLogin')}>
         <Text style={welcomeStyles.secondaryText}>4. Personal login</Text>
       </Pressable>
 
       <Text style={welcomeStyles.note}>Group login continues to require the group's pre-app authorization.</Text>
+    </View>
+  );
+}
+
+
+function EntryFlowScreen({ route, navigation }: { route: any; navigation: any }) {
+  const config: Record<string, { title: string; description: string; action: string; next?: string }> = {
+    CreateGroupStart: { title: 'Create new group', description: 'Start group registration. The constitution opens only after you choose Continue.', action: 'CONTINUE TO GROUP REGISTRATION', next: 'Constitution' },
+    PersonalAccount: { title: 'Create personal account', description: 'Personal accounts require a separate account identity and secure sign-in. That authentication service is not yet configured in this project.', action: 'BACK TO OPTIONS' },
+    PersonalLogin: { title: 'Personal login', description: 'Personal sign-in is not yet connected to an account authentication service. Group login remains available separately.', action: 'BACK TO OPTIONS' },
+  };
+  const item = config[route.name] || config.CreateGroupStart;
+  return (
+    <View style={welcomeStyles.container}>
+      <View style={welcomeStyles.header}>
+        <Text style={welcomeStyles.title}>Ebadsave VSLA</Text>
+        <Text style={welcomeStyles.subtitle}>Save together, grow together</Text>
+      </View>
+      <Text style={welcomeStyles.heading}>{item.title}</Text>
+      <Text style={welcomeStyles.instruction}>{item.description}</Text>
+      <Pressable style={welcomeStyles.primaryButton} onPress={() => item.next ? navigation.navigate(item.next) : navigation.navigate('Welcome')}>
+        <Text style={welcomeStyles.primaryText}>{item.action}</Text>
+      </Pressable>
+      <Pressable style={welcomeStyles.secondaryButton} onPress={() => navigation.navigate('Welcome')}>
+        <Text style={welcomeStyles.secondaryText}>Back to options</Text>
+      </Pressable>
     </View>
   );
 }
@@ -199,6 +222,9 @@ export default function App() {
       >
         <Stack.Screen name="Onboarding" component={OnboardingScreen} />
         <Stack.Screen name="Welcome" component={WelcomeScreen} />
+        <Stack.Screen name="CreateGroupStart" component={EntryFlowScreen} />
+        <Stack.Screen name="PersonalAccount" component={EntryFlowScreen} />
+        <Stack.Screen name="PersonalLogin" component={EntryFlowScreen} />
         <Stack.Screen name="ExistingGroupOnboarding" component={ExistingGroupOnboardingScreen} />
         <Stack.Screen name="HistoricalRecords" component={HistoricalRecordsScreen} />
         <Stack.Screen name="ShareOutCalculation" component={ShareOutCalculationScreen} />
