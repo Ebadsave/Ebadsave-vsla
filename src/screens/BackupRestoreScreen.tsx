@@ -12,6 +12,8 @@ import * as DocumentPicker from 'expo-document-picker';
 import { useFocusEffect } from '@react-navigation/native';
 import { getAutomaticCloudBackupConsent, setAutomaticCloudBackupConsent, runAutomaticCloudBackup } from '../database/backup';
 import { registerAutomaticBackupTask, unregisterAutomaticBackupTask } from '../services/backupBackground';
+import { getAllGroups, type GroupRecord } from '../database/database';
+import { exportGroupDatabaseBackup, uploadGroupDatabaseBackupToCloud, listCloudGroupBackups, restoreCloudGroupDatabaseBackup, type CloudBackupFileInfo } from './backup';
 
 import {
 exportDatabaseBackup,
@@ -37,6 +39,12 @@ const [restoringFile, setRestoringFile] = useState<string | null>(null);
 const [cloudBackupConsent, setCloudBackupConsent] = useState<boolean | null>(null);
 const [changingConsent, setChangingConsent] = useState(false);
 const [cloudBackupStatus, setCloudBackupStatus] = useState('Checking automatic cloud backup status…');
+const [groups, setGroups] = useState<GroupRecord[]>([]);
+const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
+const [groupNumberInput, setGroupNumberInput] = useState('');
+const [recoveryPassphrase, setRecoveryPassphrase] = useState('');
+const [cloudGroupBackups, setCloudGroupBackups] = useState<CloudBackupFileInfo[]>([]);
+const [groupCloudBusy, setGroupCloudBusy] = useState(false);
 
 const loadConsent = useCallback(async () => {
   try {
@@ -55,6 +63,73 @@ const loadConsent = useCallback(async () => {
   }
 }, []);
 
+const loadGroups = useCallback(async () => {
+  try {
+    const result = await getAllGroups();
+    setGroups(result);
+    if (selectedGroupId === null && result.length) setSelectedGroupId(result[0].id);
+  } catch (error) {
+    console.error('Could not load groups for group backup:', error);
+  }
+}, [selectedGroupId]);
+
+const handleUploadGroupBackup = async () => {
+  if (selectedGroupId === null) {
+    Alert.alert('Select Group', 'Choose the registered group to back up.');
+    return;
+  }
+  if (recoveryPassphrase.trim().length < 12) {
+    Alert.alert('Passphrase Required', 'Use a passphrase of at least 12 characters and keep it safe. You need it on another phone to decrypt the backup.');
+    return;
+  }
+  try {
+    setGroupCloudBusy(true);
+    const local = await exportGroupDatabaseBackup(selectedGroupId);
+    if (!local.success) throw new Error(local.error || local.message);
+    const result = await uploadGroupDatabaseBackupToCloud(selectedGroupId, recoveryPassphrase);
+    if (!result.success) throw new Error(result.error || result.message);
+    Alert.alert('Group Backup Saved', result.message);
+  } catch (error) {
+    Alert.alert('Group Backup Failed', error instanceof Error ? error.message : 'Could not upload group backup.');
+  } finally { setGroupCloudBusy(false); }
+};
+
+const handleFindCloudGroupBackups = async () => {
+  if (!groupNumberInput.trim()) {
+    Alert.alert('Group Number Required', 'Enter the KYA group number, for example KYA2012.');
+    return;
+  }
+  if (recoveryPassphrase.trim().length < 12) {
+    Alert.alert('Passphrase Required', 'Enter the same cloud backup passphrase used when the backup was created.');
+    return;
+  }
+  try {
+    setGroupCloudBusy(true);
+    const result = await listCloudGroupBackups(recoveryPassphrase, groupNumberInput);
+    if (!result.success) throw new Error(result.error || result.message);
+    setCloudGroupBackups(result.backups);
+    if (!result.backups.length) Alert.alert('No Cloud Backups', result.message);
+  } catch (error) {
+    Alert.alert('Cloud Recovery', error instanceof Error ? error.message : 'Could not find backups.');
+  } finally { setGroupCloudBusy(false); }
+};
+
+const handleRestoreCloudGroup = (backup: CloudBackupFileInfo) => {
+  Alert.alert('Restore Group', `Restore ${groupNumberInput.trim()} from this encrypted cloud backup? The local database must be empty; existing local records will be protected.`, [
+    { text: 'Cancel', style: 'cancel' },
+    { text: 'Restore', onPress: async () => {
+      try {
+        setGroupCloudBusy(true);
+        const result = await restoreCloudGroupDatabaseBackup(backup, recoveryPassphrase, groupNumberInput);
+        if (!result.success) throw new Error(result.error || result.message);
+        Alert.alert('Group Restored', result.message);
+      } catch (error) {
+        Alert.alert('Restore Stopped', error instanceof Error ? error.message : 'Could not restore this group.');
+      } finally { setGroupCloudBusy(false); }
+    } },
+  ]);
+};
+
 const loadBackupFiles = useCallback(async () => {
 try {
 setLoading(true);
@@ -72,7 +147,7 @@ useFocusEffect(
 useCallback(() => {
 loadBackupFiles();
 loadConsent();
-}, [loadBackupFiles, loadConsent])
+}, [loadBackupFiles, loadConsent, loadGroups])
 );
 
 const handleCloudBackupConsent = async () => {
@@ -366,6 +441,30 @@ Data Backup & Restore
   </TouchableOpacity>
   <View style={styles.infoBox}><Text style={styles.infoText}>{cloudBackupConsent === null ? 'Checking saved automatic backup consent…' : cloudBackupConsent ? 'Consent enabled: automatic encrypted cloud backups are allowed.' : 'Consent disabled: automatic cloud backups are turned off.'}</Text></View>
   <Text style={styles.bodyText}>{cloudBackupStatus}</Text>
+</View>
+
+<View style={styles.section}>
+  <Text style={styles.sectionTitle}>Group Cloud Backup & Recovery</Text>
+  <Text style={styles.bodyText}>Create an encrypted backup for one group, or recover that group on another phone. Use a passphrase of at least 12 characters and keep it somewhere safe. The app cannot recover a forgotten passphrase.</Text>
+  {groups.length ? groups.map((group) => (
+    <TouchableOpacity key={group.id} onPress={() => setSelectedGroupId(group.id)} style={[styles.groupChoice, selectedGroupId === group.id && styles.groupChoiceSelected]}>
+      <Text style={styles.groupChoiceText}>{selectedGroupId === group.id ? '✓ ' : ''}KYA {group.group_number} — {group.group_name}</Text>
+    </TouchableOpacity>
+  )) : <Text style={styles.bodyText}>No locally registered groups found for creating a group backup.</Text>}
+  <TextInput value={recoveryPassphrase} onChangeText={setRecoveryPassphrase} placeholder="Cloud backup passphrase (12+ characters)" secureTextEntry autoCapitalize="none" style={styles.recoveryInput} />
+  <TouchableOpacity style={[styles.button, styles.primaryButton, groupCloudBusy && styles.disabledButton]} onPress={() => void handleUploadGroupBackup()} disabled={groupCloudBusy || selectedGroupId === null}>
+    {groupCloudBusy ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Create Encrypted Group Cloud Backup</Text>}
+  </TouchableOpacity>
+  <TextInput value={groupNumberInput} onChangeText={setGroupNumberInput} placeholder="Group number to restore (e.g. KYA2012)" autoCapitalize="characters" style={styles.recoveryInput} />
+  <TouchableOpacity style={[styles.button, styles.importButton, groupCloudBusy && styles.disabledButton]} onPress={() => void handleFindCloudGroupBackups()} disabled={groupCloudBusy}>
+    <Text style={styles.importButtonText}>Find Group Backups in Cloud</Text>
+  </TouchableOpacity>
+  {cloudGroupBackups.map((backup) => (
+    <View key={backup.objectId} style={styles.backupCard}>
+      <View style={styles.backupInfo}><Text style={styles.backupName}>{backup.name}</Text><Text style={styles.backupDetails}>{backup.backupCreatedAt || backup.createdAt}</Text></View>
+      <TouchableOpacity style={[styles.iconButton, styles.restoreButton, groupCloudBusy && styles.disabledButton]} onPress={() => handleRestoreCloudGroup(backup)} disabled={groupCloudBusy}><Text style={styles.buttonIcon}>↩️</Text></TouchableOpacity>
+    </View>
+  ))}
 </View>
 
 <View style={styles.section}>
@@ -669,6 +768,10 @@ section: {
 marginBottom: 24,
 },
 
+groupChoice: { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8, padding: 10, marginTop: 6, backgroundColor: '#fff' },
+groupChoiceSelected: { borderColor: '#16a34a', backgroundColor: '#f0fdf4' },
+groupChoiceText: { color: '#1f2937', fontSize: 13 },
+recoveryInput: { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#fff', marginTop: 10, color: '#111827' },
 sectionTitle: {
 fontSize: 16,
 fontWeight: '600',
