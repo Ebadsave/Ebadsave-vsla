@@ -730,6 +730,48 @@ export async function runAutomaticCloudBackup(force = false): Promise<{
   }
 }
 
+/**
+ * Create a cloud backup that can be recovered on another device.
+ * Unlike runAutomaticCloudBackup(), this uses a passphrase supplied by the
+ * group and does not rely on the device-only SecureStore secret.
+ *
+ * IMPORTANT: This is a full-database backup for the existing manual backup
+ * format. Do not use its restore path for group-only recovery until the
+ * group-scoped transactional restore is implemented and connected.
+ */
+export async function createRecoverableCloudBackup(
+  recoveryPassphrase: string,
+): Promise<{ success: boolean; message: string; error?: string }> {
+  try {
+    if (!(await hasInternetConnection())) {
+      throw new Error('Connect to the internet before creating a recovery backup.');
+    }
+
+    const passphrase = requirePassphrase(recoveryPassphrase);
+    const local = await exportDatabaseBackup();
+    if (!local.success || !local.filePath || !local.fileName) {
+      throw new Error(local.error || local.message || 'Could not create a verified local backup.');
+    }
+
+    const uploaded = await uploadDatabaseBackupToCloud(
+      local.filePath,
+      local.fileName,
+      passphrase,
+    );
+    if (!uploaded.success) {
+      throw new Error(uploaded.error || uploaded.message || 'Could not upload the recovery backup.');
+    }
+
+    return {
+      success: true,
+      message: 'Encrypted recovery backup uploaded. Keep the recovery passphrase safe; it is required on another device.',
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown recovery backup error.';
+    return { success: false, message: 'Could not create a recoverable cloud backup.', error: message };
+  }
+}
+
 /** Lists backups created by this device's automatic backup vault. */
 export async function listAutomaticCloudBackups(): Promise<{
   success: boolean;
