@@ -2808,6 +2808,208 @@ export async function createDatabaseBackup(): Promise<string> {
   return JSON.stringify({ version: 1, created_at: now(), tables } satisfies EbadsaveBackup);
 }
 
+/**
+ * Create a group-specific backup without changing local data.
+ * Rows are selected through the group's id and its member IDs. The output
+ * retains the source table schemas/columns but includes only this group's rows.
+ */
+export async function createGroupDatabaseBackup(groupId: number): Promise<string> {
+  if (!Number.isInteger(groupId) || groupId <= 0) {
+    throw new Error('A valid local group ID is required for group backup.');
+  }
+
+  const db = await getDatabase();
+  const group = await db.getFirstAsync<{ id: number; group_number: string | number }>(
+    'SELECT id, group_number FROM groups WHERE id = ? LIMIT 1',
+    groupId,
+  );
+  if (!group) throw new Error('The selected group does not exist on this device.');
+
+  const members = await db.getAllAsync<{ id: number }>(
+    'SELECT id FROM members WHERE group_id = ?',
+    groupId,
+  );
+  const memberIds = members.map((member) => Number(member.id));
+  const memberSet = new Set(memberIds);
+  const tables: Record<string, unknown[]> = {};
+
+  // Table-to-owner mappings are explicit. Unknown tables are included only if
+  // empty, so adding a table cannot accidentally leak other groups' data.
+  const groupTables = new Set([
+    'group_registration_attempts', 'group_rules', 'vsla_setup_rules',
+    'group_meetings', 'financial_accounts', 'financial_collections',
+    'financial_collection_items', 'financial_transactions',
+    'financial_transaction_reversals', 'receipts', 'notification_queue',
+    'notification_delivery', 'meeting_audit_records', 'sync_queue',
+    'member_passbook_records', 'member_statement_records',
+    'loan_interest_charges', 'meeting_loan_interest_charges',
+    'loan_policy_settings', 'loan_committee_members', 'loan_applications',
+    'loan_records', 'loan_repayment_schedule', 'loan_contract_interest_charges',
+    'loan_guarantors', 'loan_committee_approvals', 'loan_deductions',
+    'loan_emergency_freezes', 'loan_audit_log', 'member_opening_balances',
+    'onboarding_balance_audit', 'historical_transaction_imports',
+    'historical_extra_entries', 'historical_member_loan_balances',
+  ]);
+  const memberTables = new Set([
+    'deleted_member_numbers', 'member_next_of_kin', 'next_of_kin_change_history',
+    'next_of_kin_benefits', 'member_credentials', 'member_auth_attempts',
+    'member_transaction_signatures', 'app_access_sessions',
+    'app_access_authorizers', 'meeting_attendance', 'meeting_closures',
+  ]);
+
+  const schemaCache = new Map<string, Set<string>>();
+  for (const table of BACKUP_TABLES) {
+    const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info("${table}")`);
+    const columnNames = new Set(columns.map((column) => column.name));
+    schemaCache.set(table, columnNames);
+
+    if (table === 'groups') {
+      tables[table] = await db.getAllAsync('SELECT * FROM groups WHERE id = ?', groupId);
+      continue;
+    }
+    if (table === 'members') {
+      tables[table] = await db.getAllAsync('SELECT * FROM members WHERE group_id = ?', groupId);
+      continue;
+    }
+
+    if (groupTables.has(table) && columnNames.has('group_id')) {
+      tables[table] = await db.getAllAsync(`SELECT * FROM "${table}" WHERE group_id = ?`, groupId);
+      continue;
+    }
+    if (memberTables.has(table) && columnNames.has('member_id')) {
+      const allRows = await db.getAllAsync<Record<string, unknown>>(`SELECT * FROM "${table}"`);
+      tables[table] = allRows.filter((row) => memberSet.has(Number(row.member_id)));
+      continue;
+    }
+    if (memberTables.has(table) && columnNames.has('group_id')) {
+      tables[table] = await db.getAllAsync(`SELECT * FROM "${table}" WHERE group_id = ?`, groupId);
+      continue;
+    }
+
+    // A table without a recognized ownership column is unsafe to export in a
+    // group backup; use an empty array rather than exporting another group's rows.
+    tables[table] = [];
+  }
+
+  const payload = {
+    version: 1 as const,
+    created_at: now(),
+    group_number: String(group.group_number).replace(/^KYA\s*/i, ''),
+    group_id: groupId,
+    tables,
+  };
+  return JSON.stringify(payload);
+}
+
+/**
+ * Restore one validated group snapshot transactionally. It deletes/replaces
+ * only rows belonging to the target group/member IDs, never the whole DB.
+ */
+export async function restoreGroupDatabaseBackup(backup: string, expectedGroupNumber: string | number): Promise<void> {
+  const parsed = JSON.parse(backup) as EbadsaveBackup & {
+    group_number?: string | number;
+    group_id?: number;
+  };
+  const expected = String(expectedGroupNumber).replace(/^KYA\s*/i, '').trim();
+  const actual = String(parsed?.group_number ?? '').replace(/^KYA\s*/i, '').trim();
+  if (!parsed || parsed.version !== 1 || !parsed.tables || !actual || actual !== expected) {
+    throw new Error('Backup group identity does not match the requested KYA group. No local data was changed.');
+  }
+
+  for (const table of BACKUP_TABLES) {
+    if (!Array.isArray(parsed.tables[table])) {
+      throw new Error(`Group backup is missing table ${table}. No local data was changed.`);
+    }
+  }
+
+  const db = await getDatabase();
+  const existingGroup = await db.getFirstAsync<{ id: number }>(
+    'SELECT id FROM groups WHERE CAST(group_number AS TEXT) = ? OR CAST(group_number AS TEXT) = ? LIMIT 1',
+    expected,
+    `KYA ${expected}`,
+  );
+  const targetGroupId = existingGroup?.id ?? null;
+  const incomingMembers = parsed.tables.members as Record<string, unknown>[];
+  const incomingMemberNumbers = incomingMembers.map((row) => String(row.member_number ?? '')).filter(Boolean);
+  const existingMembers = targetGroupId === null ? [] : await db.getAllAsync<{ id: number; member_number: string }>(
+    'SELECT id, member_number FROM members WHERE group_id = ?',
+    targetGroupId,
+  );
+  const memberIds = new Set(existingMembers.map((row) => Number(row.id)));
+  const memberNumbers = new Set(existingMembers.map((row) => String(row.member_number)));
+  const incomingIds = new Set(incomingMemberNumbers);
+
+  const groupTables = new Set([
+    'group_registration_attempts', 'group_rules', 'vsla_setup_rules',
+    'group_meetings', 'financial_accounts', 'financial_collections',
+    'financial_collection_items', 'financial_transactions',
+    'financial_transaction_reversals', 'receipts', 'notification_queue',
+    'notification_delivery', 'meeting_audit_records', 'sync_queue',
+    'member_passbook_records', 'member_statement_records',
+    'loan_interest_charges', 'meeting_loan_interest_charges',
+    'loan_policy_settings', 'loan_committee_members', 'loan_applications',
+    'loan_records', 'loan_repayment_schedule', 'loan_contract_interest_charges',
+    'loan_guarantors', 'loan_committee_approvals', 'loan_deductions',
+    'loan_emergency_freezes', 'loan_audit_log', 'member_opening_balances',
+    'onboarding_balance_audit', 'historical_transaction_imports',
+    'historical_extra_entries', 'historical_member_loan_balances',
+  ]);
+  const memberTables = new Set([
+    'deleted_member_numbers', 'member_next_of_kin', 'next_of_kin_change_history',
+    'next_of_kin_benefits', 'member_credentials', 'member_auth_attempts',
+    'member_transaction_signatures', 'app_access_sessions',
+    'app_access_authorizers', 'meeting_attendance', 'meeting_closures',
+  ]);
+
+  await db.execAsync('BEGIN TRANSACTION;');
+  try {
+    if (targetGroupId !== null) {
+      for (const table of [...BACKUP_TABLES].reverse()) {
+        if (table === 'groups' || table === 'members') continue;
+        const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info("${table}")`);
+        const names = new Set(columns.map((column) => column.name));
+        if (groupTables.has(table) && names.has('group_id')) {
+          await db.runAsync(`DELETE FROM "${table}" WHERE group_id = ?`, targetGroupId);
+        } else if (memberTables.has(table) && names.has('member_id') && memberIds.size) {
+          const placeholders = [...memberIds].map(() => '?').join(',');
+          await db.runAsync(`DELETE FROM "${table}" WHERE member_id IN (${placeholders})`, ...[...memberIds]);
+        } else if (memberTables.has(table) && names.has('group_id')) {
+          await db.runAsync(`DELETE FROM "${table}" WHERE group_id = ?`, targetGroupId);
+        }
+      }
+      await db.runAsync('DELETE FROM members WHERE group_id = ?', targetGroupId);
+      await db.runAsync('DELETE FROM groups WHERE id = ?', targetGroupId);
+    }
+
+    for (const table of BACKUP_TABLES) {
+      const rows = parsed.tables[table] as Record<string, unknown>[];
+      for (const row of rows) {
+        const keys = Object.keys(row);
+        if (!keys.length) continue;
+        const placeholders = keys.map(() => '?').join(', ');
+        const values = keys.map((key) => row[key] as any);
+        await db.runAsync(
+          `INSERT INTO "${table}" (${keys.map((key) => `"${key}"`).join(', ')}) VALUES (${placeholders})`,
+          ...values,
+        );
+      }
+    }
+    await db.execAsync('COMMIT;');
+    const restoredGroup = await db.getFirstAsync<{ id: number }>(
+      'SELECT id FROM groups WHERE CAST(group_number AS TEXT) = ? OR CAST(group_number AS TEXT) = ? LIMIT 1',
+      expected,
+      `KYA ${expected}`,
+    );
+    if (restoredGroup) {
+      await ensureFinancialAccountsForAllGroups(db);
+      await recalculateFinancialAccountsForGroup(db, restoredGroup.id);
+    }
+  } catch (error) {
+    await db.execAsync('ROLLBACK;');
+    throw error;
+  }
+}
+
 export async function restoreDatabaseBackup(backup: string): Promise<void> {
   const parsed = JSON.parse(backup) as EbadsaveBackup;
   if (!parsed || parsed.version !== 1 || !parsed.tables) {
