@@ -684,3 +684,151 @@ Parse.Cloud.define(
     };
   }
 );
+
+/* ============================================================
+   RECOVERABLE CLOUD BACKUP DISCOVERY
+   ============================================================ */
+
+function ebadsaveValidateVaultId(value) {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
+}
+
+function ebadsaveValidateGroupNumber(value) {
+  const n = Number(value);
+
+  if (
+    !Number.isInteger(n) ||
+    n < EBADSAVE_KYA_MIN ||
+    n > EBADSAVE_KYA_MAX
+  ) {
+    throw new Error('Invalid KYA group number.');
+  }
+
+  return n;
+}
+
+/**
+ * List encrypted backup metadata for a recovery vault.
+ *
+ * This function does not decrypt a backup or return an encryption key.
+ * The mobile app must decrypt and validate the backup before restoring it.
+ */
+Parse.Cloud.define('listEbadsaveRecoveryBackups', async (request) => {
+  const params = request.params || {};
+  const vaultId = params.vaultId;
+
+  const requestedGroupNumber = params.groupNumber == null
+    ? null
+    : ebadsaveValidateGroupNumber(params.groupNumber);
+
+  if (!ebadsaveValidateVaultId(vaultId)) {
+    throw new Error('Invalid recovery credential or vault identifier.');
+  }
+
+  const query = new Parse.Query('EbadsaveCloudBackups');
+
+  query.equalTo('vaultId', vaultId);
+  query.equalTo('encrypted', true);
+  query.descending('backupCreatedAt');
+  query.addDescending('createdAt');
+  query.limit(20);
+
+  const records = await query.find({ useMasterKey: true });
+
+  const backups = records
+    .filter((record) => {
+      const savedGroupNumber = record.get('groupNumber');
+
+      if (requestedGroupNumber !== null) {
+        return Number(savedGroupNumber) === requestedGroupNumber;
+      }
+
+      return true;
+    })
+    .map((record) => {
+      const file = record.get('file');
+
+      return {
+        objectId: record.id,
+        backupCreatedAt:
+          record.get('backupCreatedAt') ||
+          (record.createdAt
+            ? record.createdAt.toISOString()
+            : null),
+        backupFileName:
+          record.get('backupFileName') ||
+          (file && file.name) ||
+          'Ebadsave encrypted backup',
+        fileUrl:
+          file && typeof file.url === 'function'
+            ? file.url()
+            : (file && file.url) || null,
+        groupNumber: record.get('groupNumber') || null,
+        encrypted: true,
+      };
+    })
+    .filter((item) => Boolean(item.fileUrl));
+
+  return {
+    backups,
+    count: backups.length,
+    groupFiltered: requestedGroupNumber !== null,
+    note: requestedGroupNumber === null
+      ? 'Verify the group identity inside the decrypted backup before restoring.'
+      : 'Only backups explicitly tagged with this KYA group number are returned. Legacy untagged backups are excluded.',
+  };
+});
+
+/**
+ * Tag an existing encrypted backup with a KYA group number.
+ *
+ * This changes backup metadata only. It does not change the backup file,
+ * delete other backups, alter group reservations, or modify local records.
+ */
+Parse.Cloud.define('tagEbadsaveRecoveryBackup', async (request) => {
+  const params = request.params || {};
+
+  const vaultId = params.vaultId;
+  const objectId = params.objectId;
+  const groupNumber = ebadsaveValidateGroupNumber(
+    params.groupNumber
+  );
+
+  if (!ebadsaveValidateVaultId(vaultId)) {
+    throw new Error('Invalid recovery credential or vault identifier.');
+  }
+
+  if (
+    typeof objectId !== 'string' ||
+    !/^[a-zA-Z0-9]{10}$/.test(objectId)
+  ) {
+    throw new Error('Invalid cloud backup identifier.');
+  }
+
+  const query = new Parse.Query('EbadsaveCloudBackups');
+
+  query.equalTo('objectId', objectId);
+  query.equalTo('vaultId', vaultId);
+  query.equalTo('encrypted', true);
+
+  const record = await query.first({ useMasterKey: true });
+
+  if (!record) {
+    throw new Error(
+      'Encrypted backup was not found for this recovery credential.'
+    );
+  }
+
+  record.set('groupNumber', groupNumber);
+  record.set('recoverySchemaVersion', 1);
+  record.set('recoveryTaggedAt', new Date().toISOString());
+
+  await record.save(null, { useMasterKey: true });
+
+  return {
+    objectId: record.id,
+    groupNumber,
+    encrypted: true,
+    tagged: true,
+  };
+});
