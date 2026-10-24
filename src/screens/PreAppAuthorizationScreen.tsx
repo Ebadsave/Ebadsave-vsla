@@ -232,16 +232,19 @@ export default function PreAppAuthorizationScreen({ navigation }: Props) {
           </Text>
           {groups.length === 0 ? (
             <>
-              <Text style={styles.emptyText}>No groups on this phone YET. Your KYA data may still be saved online in Back4App. Restore your group before trying member authorization.</Text>
-              <Pressable style={styles.primaryButton} onPress={() => navigation.navigate('BackupRestore')}>
-                <Text style={styles.primaryButtonText}>RESTORE GROUP FROM CLOUD</Text>
+              <Text style={styles.emptyText}>
+                No groups are stored on this phone yet. Your cloud backup may still be available.
+              </Text>
+              <Pressable
+                style={({ pressed }) => [styles.restoreCloudButton, pressed && styles.pressed]}
+                onPress={() => navigation.navigate('BackupRestore')}
+                disabled={working}
+              >
+                <Text style={styles.restoreCloudButtonText}>RESTORE GROUP FROM CLOUD</Text>
               </Pressable>
-              <Pressable style={styles.secondaryNavButton} onPress={() => navigation.navigate('CreateGroupStart')}>
-                <Text style={styles.secondaryNavButtonText}>Register New Group</Text>
-              </Pressable>
-              <Pressable style={styles.secondaryNavButton} onPress={() => navigation.navigate('Welcome')}>
-                <Text style={styles.secondaryNavButtonText}>Back to login options</Text>
-              </Pressable>
+              <Text style={styles.restoreHint}>
+                Restore your group first, then return here for three-member authorization.
+              </Text>
             </>
           ) : groups.map((group) => (
             <Pressable
@@ -367,8 +370,6 @@ const styles = StyleSheet.create({
   card: { backgroundColor: '#fff', borderRadius: 18, padding: 18, borderWidth: 1, borderColor: '#dcfce7', elevation: 2 },
   title: { color: '#14532d', fontSize: 20, fontWeight: '800' },
   description: { color: '#475569', fontSize: 14, lineHeight: 20, marginTop: 8, marginBottom: 16 },
-  secondaryNavButton: { minHeight: 46, borderRadius: 10, borderWidth: 1, borderColor: '#16a34a', alignItems: 'center', justifyContent: 'center', padding: 12, marginTop: 10, backgroundColor: '#fff' },
-  secondaryNavButtonText: { color: '#166534', fontSize: 14, fontWeight: '800' },
   groupButton: { borderWidth: 1, borderColor: '#bbf7d0', borderRadius: 12, padding: 14, marginTop: 10, backgroundColor: '#f8fff9' },
   groupNumber: { color: '#16a34a', fontSize: 13, fontWeight: '800' },
   groupName: { color: '#14532d', fontSize: 17, fontWeight: '700', marginTop: 3 },
@@ -398,6 +399,9 @@ const styles = StyleSheet.create({
   primaryButtonText: { color: '#fff', fontSize: 15, fontWeight: '800' },
   disabledButton: { opacity: 0.45 },
   successText: { color: '#166534', backgroundColor: '#dcfce7', borderRadius: 10, padding: 13, fontWeight: '700' },
+  restoreCloudButton: { backgroundColor: '#16a34a', borderRadius: 12, paddingVertical: 15, paddingHorizontal: 16, alignItems: 'center', marginTop: 16 },
+  restoreCloudButtonText: { color: '#ffffff', fontWeight: '800', fontSize: 14, letterSpacing: 0.3 },
+  restoreHint: { color: '#64748b', fontSize: 12, lineHeight: 17, marginTop: 10, textAlign: 'center' },
   footer: { textAlign: 'center', color: '#64748b', fontSize: 11, lineHeight: 16, marginTop: 18, paddingHorizontal: 12 },
   pressed: { opacity: 0.8 },
 });
