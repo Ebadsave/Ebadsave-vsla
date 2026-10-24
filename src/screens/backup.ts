@@ -6,6 +6,8 @@ import * as SecureStore from 'expo-secure-store';
 import * as Network from 'expo-network';
 import {
   createDatabaseBackup,
+  createGroupDatabaseBackup,
+  restoreGroupDatabaseBackup,
   restoreDatabaseBackup as restoreDatabaseBackupJson,
 } from '../database/database';
 import {
@@ -348,6 +350,132 @@ async function pruneCloudBackupsForVault(vaultId: string): Promise<void> {
     method: 'POST',
     body: JSON.stringify({ vaultId, keep: MAX_CLOUD_BACKUP_FILES }),
   });
+}
+
+/** Create and verify a group-only local backup. */
+export async function exportGroupDatabaseBackup(groupId: number): Promise<{
+  success: boolean;
+  message: string;
+  filePath?: string;
+  fileName?: string;
+  groupNumber?: string;
+  error?: string;
+}> {
+  try {
+    const json = await createGroupDatabaseBackup(groupId);
+    const parsed = JSON.parse(json) as BackupEnvelope & { group_number?: string | number };
+    parseAndValidateBackup(json);
+    if (!parsed.group_number) throw new Error('The group backup has no KYA group identity.');
+
+    const fileName = `ebadsave_group_${String(parsed.group_number).replace(/^KYA\s*/i, '')}_${makeTimestamp()}.json`;
+    const filePath = `${getDocumentsDirectory()}${fileName}`;
+    await FileSystem.writeAsStringAsync(filePath, json, { encoding: FileSystem.EncodingType.UTF8 });
+    const saved = await FileSystem.readAsStringAsync(filePath, { encoding: FileSystem.EncodingType.UTF8 });
+    const verified = JSON.parse(saved) as { group_number?: string | number; tables?: Record<string, unknown[]> };
+    parseAndValidateBackup(saved);
+    if (String(verified.group_number ?? '').replace(/^KYA\s*/i, '') !== String(parsed.group_number).replace(/^KYA\s*/i, '')) {
+      throw new Error('The saved backup group identity did not verify.');
+    }
+    return { success: true, message: 'Group-only backup created and verified.', filePath, fileName, groupNumber: String(parsed.group_number) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown group backup error.';
+    return { success: false, message: 'Group backup failed.', error: message };
+  }
+}
+
+/** Encrypt and upload a group-only snapshot. The passphrase is required to recover it on another device. */
+export async function uploadGroupDatabaseBackupToCloud(
+  groupId: number,
+  passphraseInput: string,
+): Promise<{ success: boolean; message: string; groupNumber?: string; error?: string }> {
+  try {
+    const passphrase = requirePassphrase(passphraseInput);
+    const contents = await createGroupDatabaseBackup(groupId);
+    const parsed = JSON.parse(contents) as BackupEnvelope & { group_number?: string | number };
+    parseAndValidateBackup(contents);
+    if (!parsed.group_number) throw new Error('The group backup has no KYA group identity.');
+    const groupNumber = String(parsed.group_number).replace(/^KYA\s*/i, '').trim();
+    const envelope = await encryptBackupForCloud(contents, passphrase);
+    const cloudFileName = `ebadsave_group_${groupNumber}_encrypted_${Date.now()}.json`;
+    const uploadedFile = await parseApiRequest<{ name: string; url: string }>(`/files/${encodeURIComponent(cloudFileName)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(envelope),
+    });
+    if (!uploadedFile?.name || !uploadedFile?.url) throw new Error('Back4App did not confirm the encrypted group backup upload.');
+    await parseApiRequest<{ objectId: string }>(`/classes/${BACK4APP_BACKUP_CLASS}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        file: { __type: 'File', name: uploadedFile.name, url: uploadedFile.url },
+        backupFileName: cloudFileName,
+        backupCreatedAt: parsed.created_at,
+        vaultId: vaultIdForPassphrase(passphrase),
+        groupNumber,
+        recoverySchemaVersion: 1,
+        encrypted: true,
+        ACL: { '*': { read: true, write: false } },
+      }),
+    });
+    return { success: true, message: `Encrypted cloud backup saved for KYA ${groupNumber}. Keep the passphrase safe.`, groupNumber };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown group cloud backup error.';
+    return { success: false, message: 'Group cloud backup failed.', error: message };
+  }
+}
+
+/** List only encrypted group backups for the requested group and passphrase vault. */
+export async function listCloudGroupBackups(
+  passphraseInput: string,
+  groupNumberInput: string | number,
+): Promise<{ success: boolean; backups: CloudBackupFileInfo[]; message: string; error?: string }> {
+  try {
+    requirePassphrase(passphraseInput);
+    const groupNumber = String(groupNumberInput).replace(/^KYA\s*/i, '').trim();
+    if (!groupNumber) throw new Error('Enter a valid KYA group number.');
+    const where = encodeURIComponent(JSON.stringify({ vaultId: vaultIdForPassphrase(passphraseInput), encrypted: true, groupNumber }));
+    const result = await parseApiRequest<{ results?: Array<{ objectId: string; createdAt: string; backupCreatedAt?: string; backupFileName?: string; vaultId: string; file?: { url?: string; name?: string } }> }>(
+      `/classes/${BACK4APP_BACKUP_CLASS}?where=${where}&order=-createdAt&limit=100`,
+    );
+    const backups = (result.results || []).filter((item) => Boolean(item.objectId && item.file?.url)).map((item) => ({
+      objectId: item.objectId, name: item.backupFileName || item.file?.name || `KYA ${groupNumber} backup`,
+      createdAt: item.createdAt || '', backupCreatedAt: item.backupCreatedAt || item.createdAt || '',
+      fileUrl: item.file!.url!, vaultId: item.vaultId,
+    }));
+    return { success: true, backups, message: `Found ${backups.length} cloud backup(s) for KYA ${groupNumber}.` };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown group backup lookup error.';
+    return { success: false, backups: [], message: 'Could not load group cloud backups.', error: message };
+  }
+}
+
+/** Restore one matching group backup. The database layer refuses non-empty databases safely. */
+export async function restoreCloudGroupDatabaseBackup(
+  cloudBackup: CloudBackupFileInfo,
+  passphraseInput: string,
+  expectedGroupNumber: string | number,
+): Promise<{ success: boolean; message: string; error?: string; localFilePath?: string; localFileName?: string }> {
+  try {
+    requirePassphrase(passphraseInput);
+    const expected = String(expectedGroupNumber).replace(/^KYA\s*/i, '').trim();
+    if (!expected) throw new Error('Enter the KYA group number to restore.');
+    if (cloudBackup.vaultId !== vaultIdForPassphrase(passphraseInput)) throw new Error('The selected backup does not belong to this passphrase vault.');
+    const response = await fetch(cloudBackup.fileUrl);
+    if (!response.ok) throw new Error(`Could not download group backup (${response.status}).`);
+    const decrypted = decryptCloudBackup(await response.text(), passphraseInput);
+    const parsed = JSON.parse(decrypted) as { group_number?: string | number };
+    parseAndValidateBackup(decrypted);
+    const actual = String(parsed.group_number ?? '').replace(/^KYA\s*/i, '').trim();
+    if (actual !== expected) throw new Error(`Backup is for KYA ${actual || 'unknown'}, not KYA ${expected}. No data was changed.`);
+
+    const localFileName = `ebadsave_group_${expected}_recovery_${makeTimestamp()}.json`;
+    const localFilePath = `${getDocumentsDirectory()}${localFileName}`;
+    await FileSystem.writeAsStringAsync(localFilePath, decrypted, { encoding: FileSystem.EncodingType.UTF8 });
+    const saved = await FileSystem.readAsStringAsync(localFilePath, { encoding: FileSystem.EncodingType.UTF8 });
+    parseAndValidateBackup(saved);
+    await restoreGroupDatabaseBackup(saved, expected);
+    return { success: true, message: `KYA ${expected} restored. A verified local recovery copy was retained.`, localFilePath, localFileName };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown group restore error.';
+    return { success: false, message: 'Group cloud restore failed.', error: message };
+  }
 }
 
 /** Create a local JSON backup, verify it, and leave the file stored on the device. */
@@ -727,48 +855,6 @@ export async function runAutomaticCloudBackup(force = false): Promise<{
     return { success: false, message: 'Automatic backup did not complete.', error: message };
   } finally {
     automaticBackupInProgress = false;
-  }
-}
-
-/**
- * Create a cloud backup that can be recovered on another device.
- * Unlike runAutomaticCloudBackup(), this uses a passphrase supplied by the
- * group and does not rely on the device-only SecureStore secret.
- *
- * IMPORTANT: This is a full-database backup for the existing manual backup
- * format. Do not use its restore path for group-only recovery until the
- * group-scoped transactional restore is implemented and connected.
- */
-export async function createRecoverableCloudBackup(
-  recoveryPassphrase: string,
-): Promise<{ success: boolean; message: string; error?: string }> {
-  try {
-    if (!(await hasInternetConnection())) {
-      throw new Error('Connect to the internet before creating a recovery backup.');
-    }
-
-    const passphrase = requirePassphrase(recoveryPassphrase);
-    const local = await exportDatabaseBackup();
-    if (!local.success || !local.filePath || !local.fileName) {
-      throw new Error(local.error || local.message || 'Could not create a verified local backup.');
-    }
-
-    const uploaded = await uploadDatabaseBackupToCloud(
-      local.filePath,
-      local.fileName,
-      passphrase,
-    );
-    if (!uploaded.success) {
-      throw new Error(uploaded.error || uploaded.message || 'Could not upload the recovery backup.');
-    }
-
-    return {
-      success: true,
-      message: 'Encrypted recovery backup uploaded. Keep the recovery passphrase safe; it is required on another device.',
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown recovery backup error.';
-    return { success: false, message: 'Could not create a recoverable cloud backup.', error: message };
   }
 }
 
