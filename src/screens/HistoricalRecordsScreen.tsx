@@ -40,7 +40,7 @@ const toIsoDate = (display: string) => {
 };
 const labels: Record<EntryType, { title: string; icon: string; color: string; bg: string }> = {
   savings: { title: 'Savings', icon: '🪙', color: '#166534', bg: '#dcfce7' },
-  loan_balance: { title: 'Loan Balance', icon: '🤲', color: '#9a3412', bg: '#ffedd5' },
+  loan_balance: { title: 'Previous Loan', icon: '🤲', color: '#9a3412', bg: '#ffedd5' },
   loan_disbursement: { title: 'Loan Issued', icon: '💸', color: '#92400e', bg: '#fef3c7' },
   fine: { title: 'Fine', icon: '⚠️', color: '#b91c1c', bg: '#fee2e2' },
   insurance: { title: 'Insurance', icon: '🛡️', color: '#1d4ed8', bg: '#dbeafe' },
@@ -61,7 +61,7 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
   const [memberListTab, setMemberListTab] = useState<'current' | 'finished'>('current');
   const [canAdmin, setCanAdmin] = useState(false);
   const [type, setType] = useState<EntryType>('savings');
-  const [date, setDate] = useState(displayDate(isoToday()));
+  const [date, setDate] = useState('');
   const [amount, setAmount] = useState('');
   const [shareCount, setShareCount] = useState('1');
   const [shareValue, setShareValue] = useState('1000');
@@ -139,27 +139,27 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
   const totalIncome = summary.savings + summary.fines + summary.insurance + summary.externalLoans + summary.loanDisbursements + summary.loanBalances;
   const filteredRecords = useMemo(() => { const q = recordSearch.trim().toLocaleLowerCase(); if (!q) return records; return records.filter(r => [r.member_name, r.member_number, r.lender_name, r.source_reference, r.source_notes, labelFor(r.type), displayDate(r.date), String(r.amount)].some(v => String(v || '').toLocaleLowerCase().includes(q))); }, [records, recordSearch]);
 
-  const chooseType = (next: EntryType) => { setType(next); if (!editing) { setAmount(''); setDate(next === 'loan_balance' || next === 'loan_disbursement' ? '' : displayDate(isoToday())); setDueDate(''); setInterest('0'); setLenderName(''); setReference(''); setNotes(''); } };
+  const chooseType = (next: EntryType) => { setType(next); if (!editing) { setAmount(''); setDate(''); setDueDate(''); setInterest('0'); setLenderName(''); setReference(''); setNotes(''); } };
   const chooseMember = async (member: MemberOption) => {
     setSelectedMemberId(member.id); setMemberPickerVisible(false);
     try { const balance = await getMemberLoanBalance(groupId, member.id); setPreviousBalance(balance.balance); }
     catch { setPreviousBalance(0); }
   };
-  const resetForm = () => { setEditing(null); setAmount(''); setDate(type === 'loan_balance' || type === 'loan_disbursement' ? '' : displayDate(isoToday())); setDueDate(''); setInterest('0'); setLenderName(''); setReference(''); setNotes(''); setShareCount('1'); setFineReason('late'); };
+  const resetForm = () => { setEditing(null); setAmount(''); setDate(''); setDueDate(''); setInterest('0'); setLenderName(''); setReference(''); setNotes(''); setShareCount('1'); setFineReason('late'); };
 
   const save = async () => {
     if (type !== 'external_loan' && !selectedMemberId) { Alert.alert('Choose a member', 'Tap a member photo first.'); return; }
     const iso = toIsoDate(date);
-    if (!iso) { Alert.alert(type === 'loan_balance' || type === 'loan_disbursement' ? 'Loan issue date is not correct' : 'Date is not correct', type === 'loan_balance' || type === 'loan_disbursement' ? 'Enter the actual loan issue date as DD-MM-YYYY.' : 'Enter date as DD-MM-YYYY, for example 17-04-2025.'); return; }
+    if (!iso) { Alert.alert('Date is not correct', 'Enter date as DD-MM-YYYY, for example 17-04-2025.'); return; }
     const dueIso = dueDate.trim() ? toIsoDate(dueDate) : '';
     if (dueDate.trim() && !dueIso) { Alert.alert('Due date is not correct', 'Enter due date as DD-MM-YYYY.'); return; }
     let saveAmount = amountValue(amount);
     if (type === 'savings' && !editing) saveAmount = savingsAmount;
     if (type === 'loan_balance' && !editing) {
-      const newBalance = amountValue(amount);
-      if (newBalance < 0 || newBalance > previousBalance) { Alert.alert('Check loan balance', `Previous balance is ${money(previousBalance)}. New balance cannot be greater than the previous balance.`); return; }
-      saveAmount = previousBalance - newBalance;
-      if (saveAmount <= 0) { Alert.alert('No repayment recorded', 'Enter a lower balance to record the amount repaid.'); return; }
+      // Historical Previous Loan records the balance copied from the old book.
+      // It is not a repayment calculation and must work when the current balance is zero.
+      saveAmount = amountValue(amount);
+      if (saveAmount <= 0) { Alert.alert('Enter previous loan balance', 'Enter the outstanding balance shown in the historical loan book.'); return; }
     }
     if (!Number.isFinite(saveAmount) || saveAmount <= 0) { Alert.alert('Enter an amount', 'The amount must be greater than zero.'); return; }
     if (type === 'external_loan' && !lenderName.trim()) { Alert.alert('Lender required', 'Enter the name of the person or institution lending to the group.'); return; }
@@ -177,11 +177,11 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
         }, executiveMemberId);
         // Keep editing responsive; the updated entry is shown after refresh.
       } else if (type === 'savings' || type === 'loan_disbursement' || type === 'loan_balance') {
-        const standardType = type === 'loan_balance' ? 'loan_repayment' : type;
+        const standardType = type === 'loan_balance' ? 'loan_disbursement' : type;
         const ref = reference.trim() || `AUTO-${groupId}-${Date.now()}`;
         await recordHistoricalFinancialTransaction(groupId, {
           member_id: selectedMemberId!, historical_type: standardType as 'savings' | 'loan_disbursement' | 'loan_repayment',
-          amount: saveAmount, transaction_date: iso, source_reference: ref, source_notes: notes || (type === 'loan_balance' && !editing ? `New balance entered: ${amountValue(amount)}` : ''),
+          amount: saveAmount, transaction_date: iso, source_reference: ref, source_notes: notes || (type === 'loan_balance' && !editing ? `Historical Previous Loan balance: ${amountValue(amount)}` : ''),
           share_count: type === 'savings' ? Number(shareCount) : null, share_value: type === 'savings' ? amountValue(shareValue) : null,
           loan_due_date: (type === 'loan_disbursement' || type === 'loan_balance') ? (dueIso || null) : null,
           historical_interest: type === 'loan_disbursement' ? amountValue(interest) : 0,
@@ -251,19 +251,19 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
       <Text style={styles.sectionTitle}>{editing ? '✏️ Edit entry' : '➕ Add historical entry'}</Text>
       <View style={styles.formCard}>
         <View style={styles.typeGrid}>
-          {(['savings','loan_balance','fine','insurance','external_loan','loan_disbursement'] as EntryType[]).map(t => <TouchableOpacity key={t} disabled={!!editing && t !== editing.type} onPress={() => chooseType(t)} style={[styles.typeButton,{backgroundColor: type === t ? labels[t].color : labels[t].bg, borderColor: labels[t].color, opacity: !!editing && t !== editing.type ? 0.35 : 1}]} activeOpacity={0.85}><Text style={styles.typeIcon}>{labels[t].icon}</Text><Text style={[styles.typeText,{color:type===t?'#fff':labels[t].color}]}>{labels[t].title}</Text></TouchableOpacity>)}
+          {(['savings','loan_balance','fine','insurance','external_loan'] as EntryType[]).map(t => <TouchableOpacity key={t} disabled={!!editing && t !== editing.type} onPress={() => chooseType(t)} style={[styles.typeButton,{backgroundColor: type === t ? labels[t].color : labels[t].bg, borderColor: labels[t].color, opacity: !!editing && t !== editing.type ? 0.35 : 1}]} activeOpacity={0.85}><Text style={styles.typeIcon}>{labels[t].icon}</Text><Text style={[styles.typeText,{color:type===t?'#fff':labels[t].color}]}>{labels[t].title}</Text></TouchableOpacity>)}
         </View>
         {type !== 'external_loan' && <><Text style={styles.label}>👤 Member — tap photo</Text><TouchableOpacity style={styles.memberSelect} onPress={() => {setMemberPickerVisible(true);}} activeOpacity={0.85}>
           {selectedMember?.photo_uri ? <Image source={{uri:selectedMember.photo_uri}} style={styles.selectedPhoto}/> : <View style={styles.selectedPhotoPlaceholder}><Text style={styles.photoEmoji}>👤</Text></View>}
           <View style={{flex:1}}><Text style={styles.memberName}>{selectedMember?.full_name || 'Choose member'}</Text><Text style={styles.memberNumber}>{selectedMember?.member_number || 'Tap to select'}</Text></View><Text style={styles.pickArrow}>▦</Text>
         </TouchableOpacity></>}
         {type === 'savings' && <><Text style={styles.label}>🪙 Number of shares</Text><TextInput value={shareCount} onChangeText={setShareCount} keyboardType="numeric" style={styles.input} placeholder="Number of shares"/><Text style={styles.label}>Value of one share (UGX)</Text><TextInput value={shareValue} onChangeText={setShareValue} keyboardType="numeric" style={styles.input} placeholder="Share value"/><View style={styles.calculated}><Text style={styles.calculatedLabel}>TOTAL SAVINGS</Text><Text style={styles.calculatedValue}>{money(savingsAmount)}</Text></View></>}
-        {type === 'loan_balance' && <>{!editing && <View style={styles.balanceBox}><Text style={styles.balanceLabel}>🤲 PREVIOUS LOAN BALANCE</Text><Text style={styles.balanceValue}>{money(previousBalance)}</Text><Text style={styles.help}>Enter how much the member still owes after the historical repayment.</Text></View>}<Text style={styles.label}>{editing ? 'Amount repaid to correct (UGX)' : 'New loan balance — still owe? (UGX)'}</Text><TextInput value={amount} onChangeText={setAmount} keyboardType="numeric" style={styles.input} placeholder={editing ? 'Repayment amount' : 'Balance still owed'}/><Text style={styles.label}>📅 Loan issue date (DD-MM-YYYY)</Text><TextInput value={date} onChangeText={setDate} style={styles.input} placeholder="Actual loan issue date" keyboardType="numbers-and-punctuation"/><Text style={styles.label}>📅 Loan due date (DD-MM-YYYY)</Text><TextInput value={dueDate} onChangeText={setDueDate} style={styles.input} placeholder="Loan due date" keyboardType="numbers-and-punctuation"/>{!editing && <View style={styles.calculated}><Text style={styles.calculatedLabel}>REPAYMENT AMOUNT</Text><Text style={styles.calculatedValue}>{money(Math.max(0,previousBalance-amountValue(amount)))}</Text></View>}</>}
-        {(type === 'loan_disbursement' || type === 'external_loan') && <><Text style={styles.label}>💰 Amount (UGX)</Text><TextInput value={amount} onChangeText={setAmount} keyboardType="numeric" style={styles.input} placeholder="Enter amount"/><Text style={styles.label}>Interest (UGX)</Text><TextInput value={interest} onChangeText={setInterest} keyboardType="numeric" style={styles.input} placeholder="Interest amount"/><Text style={styles.label}>{type === 'external_loan' ? '🏦 Lender name' : '📅 Loan issue date (DD-MM-YYYY)'}</Text>{type === 'external_loan' ? <TextInput value={lenderName} onChangeText={setLenderName} style={styles.input} placeholder="Bank / lender / person"/> : <TextInput value={date} onChangeText={setDate} style={styles.input} placeholder="Actual loan issue date" keyboardType="numbers-and-punctuation"/>}{type === 'loan_disbursement' ? <><Text style={styles.label}>📅 Loan due date (DD-MM-YYYY)</Text><TextInput value={dueDate} onChangeText={setDueDate} style={styles.input} placeholder="Loan due date" keyboardType="numbers-and-punctuation"/></> : null}{type === 'external_loan' && <><Text style={styles.label}>Due date (DD-MM-YYYY)</Text><TextInput value={dueDate} onChangeText={setDueDate} style={styles.input} placeholder="DD-MM-YYYY" keyboardType="numbers-and-punctuation"/></>}</>}
+        {type === 'loan_balance' && <>{!editing && <View style={styles.balanceBox}><Text style={styles.balanceLabel}>🤲 PREVIOUS LOAN BALANCE</Text><Text style={styles.balanceValue}>{money(previousBalance)}</Text><Text style={styles.help}>Enter the member’s previous outstanding loan balance.</Text></View>}<Text style={styles.label}>{editing ? 'Previous loan amount (UGX)' : 'Previous loan balance (UGX)'}</Text><TextInput value={amount} onChangeText={setAmount} keyboardType="numeric" style={styles.input} placeholder={editing ? 'Previous loan amount' : 'Previous loan balance'}/><Text style={styles.label}>📅 Loan due date (DD-MM-YYYY)</Text><TextInput value={dueDate} onChangeText={setDueDate} style={styles.input} placeholder="DD-MM-YYYY" keyboardType="numbers-and-punctuation"/></>}
+        {(type === 'loan_disbursement' || type === 'external_loan') && <><Text style={styles.label}>💰 Amount (UGX)</Text><TextInput value={amount} onChangeText={setAmount} keyboardType="numeric" style={styles.input} placeholder="Enter amount"/><Text style={styles.label}>Interest (UGX)</Text><TextInput value={interest} onChangeText={setInterest} keyboardType="numeric" style={styles.input} placeholder="Interest amount"/><Text style={styles.label}>{type === 'external_loan' ? '🏦 Lender name' : 'Due date (DD-MM-YYYY)'}</Text>{type === 'external_loan' ? <TextInput value={lenderName} onChangeText={setLenderName} style={styles.input} placeholder="Bank / lender / person"/> : null}{type === 'loan_disbursement' ? <TextInput value={dueDate} onChangeText={setDueDate} style={styles.input} placeholder="DD-MM-YYYY" keyboardType="numbers-and-punctuation"/> : null}{type === 'external_loan' && <><Text style={styles.label}>Due date (DD-MM-YYYY)</Text><TextInput value={dueDate} onChangeText={setDueDate} style={styles.input} placeholder="DD-MM-YYYY" keyboardType="numbers-and-punctuation"/></>}</>}
         {(type === 'fine' || type === 'insurance') && <><Text style={styles.label}>💰 Amount (UGX)</Text><TextInput value={amount} onChangeText={setAmount} keyboardType="numeric" style={styles.input} placeholder="Enter amount"/></>}
         {type === 'fine' && <><Text style={styles.label}>⚠️ Reason — tap icon</Text><View style={styles.reasonRow}>{([['late','⏰','Late'],['absent','🚫','Absent'],['other','❗','Other']] as const).map(([value,icon,label]) => <TouchableOpacity key={value} onPress={() => {setFineReason(value);}} style={[styles.reasonButton,fineReason===value&&styles.reasonButtonActive]}><Text style={styles.reasonIcon}>{icon}</Text><Text style={styles.reasonText}>{label}</Text></TouchableOpacity>)}</View></>}
         {type === 'insurance' && <View style={styles.balanceBox}><Text style={styles.balanceLabel}>🛡️ INSURANCE / WELFARE FUND</Text><Text style={styles.help}>This contribution is recorded separately from savings.</Text></View>}
-        {type !== 'loan_balance' && type !== 'loan_disbursement' && <><Text style={styles.label}>📅 Date (DD-MM-YYYY)</Text><TextInput value={date} onChangeText={setDate} style={styles.input} placeholder="DD-MM-YYYY" keyboardType="numbers-and-punctuation"/></>}
+        <Text style={styles.label}>📅 Date (DD-MM-YYYY)</Text><TextInput value={date} onChangeText={setDate} style={styles.input} placeholder="DD-MM-YYYY" keyboardType="numbers-and-punctuation"/>
         <Text style={styles.label}>Notes (optional)</Text><TextInput value={notes} onChangeText={setNotes} style={[styles.input,styles.notes]} placeholder="Optional note" multiline/>
         <TouchableOpacity onPress={save} disabled={saving} style={[styles.saveButton,{backgroundColor:labels[type].color},saving&&styles.disabled]}><Text style={styles.saveIcon}>{saving?'⏳':'💾'}</Text><Text style={styles.saveText}>{saving?'Saving…':editing?'Save Changes':'Save Entry'}</Text></TouchableOpacity>
         {editing && <TouchableOpacity onPress={resetForm} style={styles.cancelEdit}><Text style={styles.cancelEditText}>Cancel edit</Text></TouchableOpacity>}
@@ -274,7 +274,7 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
       {!filteredRecords.length ? <View style={styles.empty}><Text style={styles.emptyTitle}>{records.length ? 'No matching records' : 'No entries yet'}</Text><Text style={styles.help}>{records.length ? 'Try another name, number, type, date, or reference.' : 'Start entering records from the physical passbooks.'}</Text></View> : filteredRecords.map((r) => <View key={`${r.kind}-${r.id}`} style={styles.entryCard}>
         <View style={styles.entryTop}><View style={[styles.entryTypePill,{backgroundColor:labels[r.type].bg}]}><Text style={{fontSize:17}}>{labels[r.type].icon}</Text><Text style={[styles.entryTypeText,{color:labels[r.type].color}]}>{labelFor(r.type)}</Text></View><Text style={styles.entryAmount}>{money(r.amount)}</Text></View>
         <Text style={styles.entryMember}>{r.member_name || r.lender_name || 'Group liability'} {r.member_number ? `· ${r.member_number}` : ''}</Text>
-        <Text style={styles.entryMeta}>{r.type === 'loan_disbursement' || r.type === 'loan_balance' ? 'Loan issue date' : 'Date'}: {displayDate(r.date)}</Text>
+        <Text style={styles.entryMeta}>Date: {displayDate(r.date)}</Text>
         {r.type==='fine' && <Text style={styles.entryMeta}>Reason: {r.fine_reason || 'Other'}</Text>}
         {r.type==='external_loan' && <Text style={styles.entryMeta}>Lender: {r.lender_name} · Interest: {money(r.interest_amount || 0)} · Due: {r.due_date ? displayDate(r.due_date) : 'Not recorded'}</Text>}
         {(r.type==='loan_disbursement' || r.type==='loan_balance') && <Text style={styles.entryMeta}>Due date: {r.loan_due_date ? displayDate(r.loan_due_date) : 'Not recorded'}{r.type==='loan_disbursement' ? ` · Interest: ${money(r.historical_interest || 0)}` : ''}</Text>}
