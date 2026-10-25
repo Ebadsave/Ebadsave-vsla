@@ -22,7 +22,7 @@ import {
   type GroupRecord,
   type MemberRecord,
 } from '../database/database';
-import Parse from 'parse/react-native';
+import Parse from 'parse';
 import {
   BACK4APP_APPLICATION_ID,
   BACK4APP_JAVASCRIPT_KEY,
