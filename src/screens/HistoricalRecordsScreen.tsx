@@ -136,7 +136,7 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
     ? completedHistoricalMemberIds.has(member.id)
     : !completedHistoricalMemberIds.has(member.id)), [members, memberListTab, completedHistoricalMemberIds]);
   const savingsAmount = amountValue(shareCount) * amountValue(shareValue);
-  const totalIncome = summary.savings + summary.fines + summary.insurance + summary.externalLoans + summary.loanDisbursements + summary.loanBalances;
+  const totalIncome = summary.savings + summary.fines + summary.insurance;
   const filteredRecords = useMemo(() => { const q = recordSearch.trim().toLocaleLowerCase(); if (!q) return records; return records.filter(r => [r.member_name, r.member_number, r.lender_name, r.source_reference, r.source_notes, labelFor(r.type), displayDate(r.date), String(r.amount)].some(v => String(v || '').toLocaleLowerCase().includes(q))); }, [records, recordSearch]);
 
   const chooseType = (next: EntryType) => { setType(next); if (!editing) { setAmount(''); setDate(''); setDueDate(''); setInterest('0'); setLenderName(''); setReference(''); setNotes(''); } };
