@@ -22,17 +22,46 @@ import {
   type GroupRecord,
   type MemberRecord,
 } from '../database/database';
-import Parse from 'parse';
 import {
   BACK4APP_APPLICATION_ID,
   BACK4APP_JAVASCRIPT_KEY,
   BACK4APP_SERVER_URL,
 } from '../config/back4appConfig';
 
-// Init Parse once
-if (!Parse.applicationId) {
-  Parse.initialize(BACK4APP_APPLICATION_ID, BACK4APP_JAVASCRIPT_KEY);
-  Parse.serverURL = BACK4APP_SERVER_URL;
+/**
+ * Calls a Back4App Cloud Code function through the Parse REST API.
+ * This avoids requiring the separate `parse` npm package in the app.
+ */
+async function runBack4AppCloudFunction<T>(
+  functionName: string,
+  params: Record<string, unknown>,
+): Promise<T> {
+  const baseUrl = BACK4APP_SERVER_URL.replace(/\/+$/, '');
+  const response = await fetch(`${baseUrl}/functions/${functionName}`, {
+    method: 'POST',
+    headers: {
+      'X-Parse-Application-Id': BACK4APP_APPLICATION_ID,
+      'X-Parse-Javascript-Key': BACK4APP_JAVASCRIPT_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(params),
+  });
+
+  const payload = await response.json().catch(() => ({} as any));
+
+  if (!response.ok || payload?.error) {
+    const message =
+      typeof payload?.error === 'string'
+        ? payload.error
+        : payload?.error?.message ??
+          payload?.message ??
+          `Back4App request failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  return (payload && Object.prototype.hasOwnProperty.call(payload, 'result')
+    ? payload.result
+    : payload) as T;
 }
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PreAppAuthorization'>;
@@ -206,10 +235,16 @@ export default function PreAppAuthorizationScreen({ navigation }: Props) {
         }
         setServerVerifying(true);
         try {
-          const serverResult = await Parse.Cloud.run('verifyThreeMembersAndRestore', {
+          const serverResult = await runBack4AppCloudFunction<{
+            verified?: boolean;
+            verifiedMembers: Array<{ fullName?: string }>;
+          }>('verifyThreeMembersAndRestore', {
             groupNumber: selectedGroup.group_number,
             recoveryCredential: recoveryCredential.trim(),
-            authorizations: nextDetails.map(d => ({ memberNumber: d.memberNumber, passcode: d.passcode }))
+            authorizations: nextDetails.map((d) => ({
+              memberNumber: d.memberNumber,
+              passcode: d.passcode,
+            })),
           });
 
           if (!serverResult?.verified) {
