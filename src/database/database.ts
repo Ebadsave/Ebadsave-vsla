@@ -6911,7 +6911,7 @@ async function addLoanAudit(
 export async function disburseApprovedLoanApplication(
   applicationId: number,
   executiveMemberId: number,
-): Promise<{ loanId: number; transactionId: number; dueDate: string; totalInterest: number; totalDue: number }> {
+): Promise<{ loanId: number; transactionId: number; issueDate: string; dueDate: string; totalInterest: number; totalDue: number }> {
   const db = await getDatabase();
   let application = await db.getFirstAsync<{
     id: number; group_id: number; member_id: number; meeting_id: number | null;
@@ -7087,7 +7087,14 @@ export async function disburseApprovedLoanApplication(
     });
     await db.runAsync('UPDATE groups SET status = \'active\', last_activity_at = ? WHERE id = ?', timestamp, application.group_id);
     await db.execAsync('COMMIT;');
-    return { loanId, transactionId, dueDate, totalInterest, totalDue: Number(application.requested_amount) + totalInterest };
+    return {
+      loanId,
+      transactionId,
+      issueDate: formatLocalDate(issueDate),
+      dueDate,
+      totalInterest,
+      totalDue: Number(application.requested_amount) + totalInterest,
+    };
   } catch (error) {
     await db.execAsync('ROLLBACK;');
     throw error;
@@ -7900,6 +7907,57 @@ export async function recordLoanRepayment(
  * Returns the final repayment due date for a member's current active/frozen
  * loan contract. Legacy loans without a loan_records entry return null.
  */
+/**
+ * Returns the issue date of the member's most recent loan.
+ * Uses the loan contract first, then imported historical disbursements,
+ * and finally the original ledger transaction timestamp for legacy loans.
+ */
+export async function getMemberLoanIssueDate(
+  groupId: number,
+  memberId: number,
+): Promise<string | null> {
+  const db = await getDatabase();
+
+  const contract = await db.getFirstAsync<{ issue_date: string | null }>(
+    `SELECT issue_date
+     FROM loan_records
+     WHERE group_id = ? AND member_id = ?
+       AND status IN ('active', 'frozen', 'paid')
+     ORDER BY issue_date DESC, id DESC
+     LIMIT 1`,
+    groupId,
+    memberId,
+  );
+  if (contract?.issue_date) return dateOnly(contract.issue_date) ?? contract.issue_date;
+
+  const historical = await db.getFirstAsync<{ transaction_date: string | null }>(
+    `SELECT transaction_date
+     FROM historical_transaction_imports
+     WHERE group_id = ? AND member_id = ?
+       AND historical_type = 'loan_disbursement'
+       AND COALESCE(is_deleted, 0) = 0
+     ORDER BY transaction_date DESC, id DESC
+     LIMIT 1`,
+    groupId,
+    memberId,
+  );
+  if (historical?.transaction_date) return dateOnly(historical.transaction_date) ?? historical.transaction_date;
+
+  const ledger = await db.getFirstAsync<{ created_at: string | null }>(
+    `SELECT created_at
+     FROM financial_transactions
+     WHERE group_id = ? AND member_id = ?
+       AND transaction_type = 'loan_issued'
+       AND reversed = 0
+     ORDER BY created_at DESC, id DESC
+     LIMIT 1`,
+    groupId,
+    memberId,
+  );
+  if (!ledger?.created_at) return null;
+  return dateOnly(ledger.created_at) ?? ledger.created_at;
+}
+
 export async function getMemberLoanDueDate(
   groupId: number,
   memberId: number,
