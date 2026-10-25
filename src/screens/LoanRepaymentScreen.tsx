@@ -15,6 +15,7 @@ import {
   recordLoanRepayment,
   getMemberLoanBalance,
   getMemberLoanDueDate,
+  getMemberLoanIssueDate,
 } from '../database/database';
 
 type Props = {
@@ -73,6 +74,7 @@ export default function LoanRepaymentScreen({
 
   const [loanBalance, setLoanBalance] = useState(0);
   const [loanDueDate, setLoanDueDate] = useState<string | null>(null);
+  const [loanIssueDate, setLoanIssueDate] = useState<string | null>(null);
   const [loadingBalance, setLoadingBalance] = useState(false);
 
   const [amount, setAmount] = useState('');
@@ -83,7 +85,8 @@ export default function LoanRepaymentScreen({
   const selectedMember = members.find(
     (member) => member.id === selectedMemberId,
   );
-  const isLoanOverdue = Boolean(loanDueDate && loanDueDate < localDateString());
+  const isLoanOverdue = loanBalance > 0 && Boolean(loanDueDate && loanDueDate < localDateString());
+  const loanStatus = loadingBalance ? 'LOADING' : loanBalance <= 0 ? 'PAID' : isLoanOverdue ? 'OVERDUE' : 'ACTIVE';
 
   /*
    * Load all active members belonging to this group.
@@ -127,13 +130,15 @@ export default function LoanRepaymentScreen({
       throw new Error('Group was not found.');
     }
 
-    const [result, dueDate] = await Promise.all([
+    const [result, dueDate, issueDate] = await Promise.all([
       getMemberLoanBalance(groupId, memberId),
       getMemberLoanDueDate(groupId, memberId),
+      getMemberLoanIssueDate(groupId, memberId),
     ]);
     const balance = Math.max(0, Number(result?.balance ?? 0));
     setLoanBalance(balance);
     setLoanDueDate(dueDate);
+    setLoanIssueDate(issueDate);
     return balance;
   };
 
@@ -154,6 +159,7 @@ export default function LoanRepaymentScreen({
     setAmount('');
     setLoanBalance(0);
     setLoanDueDate(null);
+    setLoanIssueDate(null);
     setLoadingBalance(true);
 
     try {
@@ -161,6 +167,7 @@ export default function LoanRepaymentScreen({
     } catch (error) {
       setLoanBalance(0);
       setLoanDueDate(null);
+      setLoanIssueDate(null);
       Alert.alert(
         'Loan Balance',
         error instanceof Error ? error.message : 'Unable to load this member’s loan balance.',
@@ -281,12 +288,14 @@ export default function LoanRepaymentScreen({
 
       // Refresh before writing so an outdated screen balance cannot authorize
       // a payment that exceeds the current amount due.
-      const [currentBalance, latestDueDate] = await Promise.all([
+      const [currentBalance, latestDueDate, latestIssueDate] = await Promise.all([
         getMemberLoanBalance(groupId, memberId),
         getMemberLoanDueDate(groupId, memberId),
+        getMemberLoanIssueDate(groupId, memberId),
       ]);
       const latestDue = Math.max(0, Number(currentBalance?.balance ?? 0));
       setLoanDueDate(latestDueDate);
+      setLoanIssueDate(latestIssueDate);
 
       if (latestDue <= 0) {
         setLoanBalance(0);
@@ -313,9 +322,15 @@ export default function LoanRepaymentScreen({
 
       // Use the database result after recording, rather than calculating
       // from a potentially stale React state value.
-      const updatedBalance = await getMemberLoanBalance(groupId, memberId);
+      const [updatedBalance, updatedDueDate, updatedIssueDate] = await Promise.all([
+        getMemberLoanBalance(groupId, memberId),
+        getMemberLoanDueDate(groupId, memberId),
+        getMemberLoanIssueDate(groupId, memberId),
+      ]);
       const remaining = Math.max(0, Number(updatedBalance?.balance ?? 0));
       setLoanBalance(remaining);
+      setLoanDueDate(updatedDueDate);
+      setLoanIssueDate(updatedIssueDate);
 
       Alert.alert(
         'Success',
@@ -436,11 +451,21 @@ export default function LoanRepaymentScreen({
             <Text style={styles.memberText}>
               {selectedMember.full_name}
             </Text>
+            {loanIssueDate && (
+              <Text style={styles.memberText}>
+                Loan issued: {displayDate(loanIssueDate)}
+              </Text>
+            )}
             {loanDueDate && (
               <Text style={[styles.memberText, isLoanOverdue && styles.overdueText]}>
                 Final repayment due: {displayDate(loanDueDate)}
               </Text>
             )}
+            <View style={[styles.statusBadge, loanStatus === 'OVERDUE' ? styles.statusOverdue : loanStatus === 'PAID' ? styles.statusPaid : styles.statusActive]}>
+              <Text style={[styles.statusText, loanStatus === 'OVERDUE' ? styles.statusTextOverdue : styles.statusTextNormal]}>
+                {loanStatus}
+              </Text>
+            </View>
             {isLoanOverdue && loanDueDate && (
               <View style={styles.overdueNotice} accessibilityRole="alert">
                 <Text style={styles.overdueTitle}>OVERDUE</Text>
@@ -604,6 +629,19 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
+  statusBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: 7,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    marginTop: 9,
+  },
+  statusOverdue: { backgroundColor: '#fee2e2', borderWidth: 1, borderColor: '#fecaca' },
+  statusActive: { backgroundColor: '#dcfce7', borderWidth: 1, borderColor: '#bbf7d0' },
+  statusPaid: { backgroundColor: '#dcfce7', borderWidth: 1, borderColor: '#bbf7d0' },
+  statusText: { fontSize: 12, fontWeight: '800' },
+  statusTextOverdue: { color: '#b91c1c' },
+  statusTextNormal: { color: '#166534' },
   overdueText: {
     color: '#b91c1c',
     fontWeight: '800',

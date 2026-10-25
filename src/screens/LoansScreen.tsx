@@ -15,9 +15,27 @@ import {
   getAllGroups,
   getMembersByGroupId,
   recordLoanRepayment,
+  getMemberLoanBalance,
+  getMemberLoanDueDate,
+  getMemberLoanIssueDate,
   type GroupRecord,
   type MemberRecord,
 } from '../database/database';
+
+const localDateString = (date = new Date()): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const displayDate = (value: string): string => {
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) return value;
+  return new Date(year, month - 1, day).toLocaleDateString(undefined, {
+    day: 'numeric', month: 'long', year: 'numeric',
+  });
+};
 
 export default function LoanRepaymentActionScreen() {
   const [groups, setGroups] = useState<GroupRecord[]>([]);
@@ -31,6 +49,12 @@ export default function LoanRepaymentActionScreen() {
 
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
+  const [loanBalance, setLoanBalance] = useState(0);
+  const [loanIssueDate, setLoanIssueDate] = useState<string | null>(null);
+  const [loanDueDate, setLoanDueDate] = useState<string | null>(null);
+  const [loadingLoanDetails, setLoadingLoanDetails] = useState(false);
+  const isLoanOverdue = loanBalance > 0 && Boolean(loanDueDate && loanDueDate < localDateString());
+  const loanStatus = loanBalance <= 0 ? 'PAID' : isLoanOverdue ? 'OVERDUE' : 'ACTIVE';
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -77,6 +101,9 @@ export default function LoanRepaymentActionScreen() {
     setMembers([]);
     setAmount('');
     setReason('');
+    setLoanBalance(0);
+    setLoanIssueDate(null);
+    setLoanDueDate(null);
 
     try {
       const result = await getMembersByGroupId(group.id);
@@ -104,7 +131,7 @@ export default function LoanRepaymentActionScreen() {
     }
   }
 
-  function selectMember(member: MemberRecord) {
+  async function selectMember(member: MemberRecord) {
     // Do not allow a stale or mismatched member to be assigned to this group.
     if (Number(member.group_id) !== Number(selectedGroup?.id)) return;
     setSelectedMember(member);
@@ -112,6 +139,26 @@ export default function LoanRepaymentActionScreen() {
     setMemberSearch('');
     setAmount('');
     setReason('');
+    setLoanBalance(0);
+    setLoanIssueDate(null);
+    setLoanDueDate(null);
+    setLoadingLoanDetails(true);
+    try {
+      const [balance, issueDate, dueDate] = await Promise.all([
+        getMemberLoanBalance(selectedGroup!.id, member.id),
+        getMemberLoanIssueDate(selectedGroup!.id, member.id),
+        getMemberLoanDueDate(selectedGroup!.id, member.id),
+      ]);
+      // Avoid showing details if the selected member changed during the request.
+      setLoanBalance(Math.max(0, Number(balance?.balance ?? 0)));
+      setLoanIssueDate(issueDate);
+      setLoanDueDate(dueDate);
+    } catch (error) {
+      console.error(error);
+      Alert.alert('Loan Details', error instanceof Error ? error.message : 'Unable to load the member loan details.');
+    } finally {
+      setLoadingLoanDetails(false);
+    }
   }
 
   const filteredMembers = members.filter((member) => {
@@ -162,6 +209,15 @@ export default function LoanRepaymentActionScreen() {
         undefined,
         reason.trim() || undefined,
       );
+
+      const [updatedBalance, updatedIssueDate, updatedDueDate] = await Promise.all([
+        getMemberLoanBalance(selectedGroup.id, selectedMember.id),
+        getMemberLoanIssueDate(selectedGroup.id, selectedMember.id),
+        getMemberLoanDueDate(selectedGroup.id, selectedMember.id),
+      ]);
+      setLoanBalance(Math.max(0, Number(updatedBalance?.balance ?? 0)));
+      setLoanIssueDate(updatedIssueDate);
+      setLoanDueDate(updatedDueDate);
 
       Alert.alert(
         'Repayment Recorded',
@@ -338,6 +394,36 @@ export default function LoanRepaymentActionScreen() {
       </Modal>
 
       {selectedMember && (
+        <View style={styles.loanStatusCard}>
+          <Text style={styles.statusCardTitle}>Loan Status</Text>
+          <Text style={styles.statusCardText}>Member: {selectedMember.full_name}</Text>
+          {loadingLoanDetails ? (
+            <Text style={styles.statusCardText}>Loading loan details…</Text>
+          ) : (
+            <>
+              <Text style={styles.statusCardText}>Outstanding balance: UGX {loanBalance.toLocaleString()}</Text>
+              {loanIssueDate && <Text style={styles.statusCardText}>Loan issued: {displayDate(loanIssueDate)}</Text>}
+              {loanDueDate && (
+                <Text style={[styles.statusCardText, isLoanOverdue && styles.overdueText]}>
+                  Final repayment due: {displayDate(loanDueDate)}
+                </Text>
+              )}
+              <View style={[styles.statusBadge, isLoanOverdue ? styles.statusOverdue : styles.statusGreen]}>
+                <Text style={[styles.statusBadgeText, isLoanOverdue ? styles.statusBadgeTextOverdue : styles.statusBadgeTextGreen]}>
+                  {loanStatus}
+                </Text>
+              </View>
+              {isLoanOverdue && loanDueDate && (
+                <Text style={styles.overdueNoticeText}>
+                  The due date has passed and a balance remains outstanding.
+                </Text>
+              )}
+            </>
+          )}
+        </View>
+      )}
+
+      {selectedMember && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>
             3. Repayment Details
@@ -397,7 +483,7 @@ export default function LoanRepaymentActionScreen() {
               saving && styles.disabledButton,
             ]}
             onPress={handleRepayment}
-            disabled={saving}
+            disabled={saving || loadingLoanDetails}
           >
             {saving ? (
               <ActivityIndicator color="#ffffff" />
@@ -647,6 +733,24 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
 
+  loanStatusCard: {
+    borderWidth: 1,
+    borderColor: '#d1fae5',
+    borderRadius: 12,
+    padding: 15,
+    marginBottom: 20,
+    backgroundColor: '#f0fdf4',
+  },
+  statusCardTitle: { fontSize: 17, fontWeight: '800', color: '#166534', marginBottom: 8 },
+  statusCardText: { fontSize: 14, color: '#374151', marginTop: 4 },
+  statusBadge: { alignSelf: 'flex-start', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 5, marginTop: 10 },
+  statusOverdue: { backgroundColor: '#fee2e2', borderWidth: 1, borderColor: '#fecaca' },
+  statusGreen: { backgroundColor: '#dcfce7', borderWidth: 1, borderColor: '#bbf7d0' },
+  statusBadgeText: { fontSize: 12, fontWeight: '800' },
+  statusBadgeTextOverdue: { color: '#b91c1c' },
+  statusBadgeTextGreen: { color: '#166534' },
+  overdueText: { color: '#b91c1c', fontWeight: '800' },
+  overdueNoticeText: { color: '#991b1b', backgroundColor: '#fef2f2', borderColor: '#fecaca', borderWidth: 1, borderRadius: 8, padding: 9, marginTop: 8, fontSize: 12 },
   button: {
     backgroundColor: '#16a34a',
     borderRadius: 10,

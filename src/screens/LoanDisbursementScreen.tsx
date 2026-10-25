@@ -404,7 +404,7 @@ export default function LoanDisbursementScreen() {
         const result = await disburseApprovedLoanApplication(signatureFlow.applicationId, executiveMemberId as number);
         Alert.alert(
           'Loan Disbursed',
-          `Loan issued to ${signatureFlow.borrowerName}.\nPrincipal: ${money(signatureFlow.requestedAmount, currency)}\nInterest charged initially: ${money(result.totalInterest, currency)}\nCurrent balance after initial interest: ${money(result.totalDue, currency)}\nDue date: ${result.dueDate}`,
+          `Loan issued to ${signatureFlow.borrowerName}.\nIssue date: ${result.issueDate}\nPrincipal: ${money(signatureFlow.requestedAmount, currency)}\nInterest charged initially: ${money(result.totalInterest, currency)}\nCurrent balance after initial interest: ${money(result.totalDue, currency)}\nDue date: ${result.dueDate}`,
         );
       } else if (decision === 'rejected') {
         Alert.alert('Loan Rejected', `Loan application #${signatureFlow.applicationId} was rejected.`);
