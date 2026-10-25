@@ -22,6 +22,18 @@ import {
   type GroupRecord,
   type MemberRecord,
 } from '../database/database';
+import Parse from 'parse/react-native';
+import {
+  BACK4APP_APPLICATION_ID,
+  BACK4APP_JAVASCRIPT_KEY,
+  BACK4APP_SERVER_URL,
+} from '../config/back4appConfig';
+
+// Init Parse once
+if (!Parse.applicationId) {
+  Parse.initialize(BACK4APP_APPLICATION_ID, BACK4APP_JAVASCRIPT_KEY);
+  Parse.serverURL = BACK4APP_SERVER_URL;
+}
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PreAppAuthorization'>;
 type RequiredRole = 'executive' | 'ordinary';
@@ -41,11 +53,9 @@ const EXECUTIVE_POSTS = [
 
 function isExecutive(member: MemberRecord): boolean {
   if (Number(member.is_super_user ?? 0) === 1) return true;
-
   const role = (member.role ?? '').trim().toLowerCase();
   if (role === 'executive' || role === 'admin') return true;
   if (EXECUTIVE_POSTS.includes(role)) return true;
-
   return (member.assigned_roles ?? '')
     .split(',')
     .some((item) => EXECUTIVE_POSTS.includes(item.trim().toLowerCase()));
@@ -58,12 +68,12 @@ const STEPS: { role: RequiredRole }[] = [
 ];
 
 const AUTH_TEXT = {
-  en: { loading: 'Loading registered groups…', tagline: 'Three-member authorization', selectGroup: 'Select your registered group', instructions: 'Two different executive members and one ordinary member must authorize access.', noGroups: 'No active registered groups were found on this device.', selectedGroup: 'SELECTED GROUP', change: 'Change', stepExecutive1: 'Executive member 1 of 2', stepExecutive2: 'Executive member 2 of 2', stepOrdinary: 'Ordinary member 1 of 1', executiveRole: 'Executive', ordinaryRole: 'Ordinary member', progress: (total: number, exec: number, ordinary: number) => `${total} of 3 members authorized · ${exec}/2 executives · ${ordinary}/1 ordinary member`, chooseMember: 'Choose an active member with a registered phone number. Each member can authorize only once.', noEligibleExecutive: 'No eligible executive members with registered phone numbers are available for this step. Register or activate an eligible member, then select the group again.', noEligibleOrdinary: 'No eligible ordinary members with registered phone numbers are available for this step. Register or activate an eligible member, then select the group again.', passcodeFor: (name: string) => `Passcode for ${name}`, passcodePlaceholder: 'Enter 4-character passcode', verify: 'Verify passcode', allAuthorized: 'All three required members have authorized this group.', footer: 'Your saved group and member records are not deleted by this authorization step.', chooseMemberTitle: 'Choose a member', chooseMemberMessage: 'Select the member who is authorizing this step.', invalidPasscode: 'Invalid passcode', invalidPasscodeMessage: 'Enter the member’s exact four-character passcode.', authSuccess: 'Authorization successful', authSuccessMessage: 'Three different members have authorized this group. Ebadsave VSLA will now open.', continue: 'Continue', authFailed: 'Authorization failed', loadFailed: 'Unable to load groups', selectFailed: 'Could not select group', unexpected: 'An unexpected error occurred. Please try again.' },
-  nyn: { loading: 'Abagwiire ebibiina ebihandiikire…', tagline: 'Okukiriza kw’abantu bashatu', selectGroup: 'Toorana ekibiina kyawe ekihandiikire', instructions: 'Abakuru b’ekibiina babiri abatari bamwe hamwe n’omunyamuryango owa bulijjo omu bashemereire kukiriza okutaaha.', noGroups: 'Tihariho bibiina ebikora ebihandiikire aha simu egi.', selectedGroup: 'EKIBIINA EKITOORANIIWE', change: 'Hindura', stepExecutive1: 'Omukuru w’ekibiina 1 aha 2', stepExecutive2: 'Omukuru w’ekibiina 2 aha 2', stepOrdinary: 'Omunyamuryango owa bulijjo 1 aha 1', executiveRole: 'Omukuru', ordinaryRole: 'Omunyamuryango owa bulijjo', progress: (total: number, exec: number, ordinary: number) => `${total} aha banyamuryango 3 bakiziire · abakuru ${exec}/2 · owa bulijjo ${ordinary}/1`, chooseMember: 'Toorana omunyamuryango akora kandi aine namba ya simu ehairwe. Buri munyamuryango naikiriza rimwe ryonka.', noEligibleExecutive: 'Tihariho mukuru w’ekibiina oshemeire aine namba ya simu aha mutendera ogu. Handiika nari korera omunyamuryango, reero otore ekibiina bundi.', noEligibleOrdinary: 'Tihariho muny amuryango owa bulijjo oshemeire aine namba ya simu aha mutendera ogu. Handiika nari korera omunyamuryango, reero otore ekibiina bundi.', passcodeFor: (name: string) => 'Koodi ya ' + name, passcodePlaceholder: 'Taamu koodi y’ennukuta 4', verify: 'Kakasa koodi', allAuthorized: 'Abanyamuryango bashatu bashemereire bakiziire ekibiina eki.', footer: 'Ebi ebihandiikire by’ekibiina n’abanyamuryango tibirikusibwa omutendera ogu.', chooseMemberTitle: 'Toorana omunyamuryango', chooseMemberMessage: 'Toorana omunyamuryango orikwikiriza omutendera ogu.', invalidPasscode: 'Koodi egwire', invalidPasscodeMessage: 'Taamu koodi y’omunyamuryango nk’oku eri, ennukuta 4.', authSuccess: 'Okukiriza kwahwa gye', authSuccessMessage: 'Abanyamuryango bashatu abatari bamwe bakiziire ekibiina eki. Ebadsave VSLA n’eyija kwoha.', continue: 'Gyenda omumaisho', authFailed: 'Okukiriza tikwahwe gye', loadFailed: 'Tihasobokire kutunga ebibiina', selectFailed: 'Tihasobokire kutoorana ekibiina', unexpected: 'Ekintu kitashemereire kibaireho. Yongera ogezemu.' },
-  lg: { loading: 'Okutikka ebibiina ebiri muwandiise…', tagline: 'Okukkiriza kw’ab members abasatu', selectGroup: 'Londa ekibiina kyo ekiwandiisiddwa', instructions: 'Abakulembeze babiri ab’enjawulo n’om member omu owa bulijjo balina okukkiriza okuyingira.', noGroups: 'Tewali bibiina bikola ebiri muwandiise ku kyuma kino.', selectedGroup: 'EKIBIINA EKILONDIDDWA', change: 'Kyusa', stepExecutive1: 'Omukulembeze 1 ku 2', stepExecutive2: 'Omukulembeze 2 ku 2', stepOrdinary: 'Omukulembeze', executiveRole: 'Omukulembeze', ordinaryRole: 'Om member owa bulijjo', progress: (total: number, exec: number, ordinary: number) => `${total} ku members 3 bakkirizza · abakulembeze ${exec}/2 · owa bulijjo ${ordinary}/1`, chooseMember: 'Londa om member akola alina ennamba ya ssimu ewandiisiddwa. Buli member akkiriza omulundi gumu gwokka.', noEligibleExecutive: 'Tewali mukulembeze atuukiridde alina ennamba ya ssimu ku mutendera guno. Wandiisa oba kozesa om member atuukiridde, olonde ekibiina nate.', noEligibleOrdinary: 'Tewali member wa bulijjo atuukiridde alina ennamba ya ssimu ku mutendera guno. Wandiisa oba kozesa om member atuukiridde, olonde ekibiina nate.', passcodeFor: (name: string) => `Koodi ya ${name}`, passcodePlaceholder: 'Yingiza koodi ya nnukuta 4', verify: 'Kakasa koodi', allAuthorized: 'Ab members bonna abasatu beetaagisa bakkirizza ekibiina kino.', footer: 'Ebiwandiiko by’ekibiina n’ab members byo tebisuulibwaawo mu mutendera guno.', chooseMemberTitle: 'Londa om member', chooseMemberMessage: 'Londa om member akkiriza omutendera guno.', invalidPasscode: 'Koodi si ntuufu', invalidPasscodeMessage: 'Yingiza koodi y’om member entuufu ey’ennukuta nnya.', authSuccess: 'Okukkiriza kuwedde bulungi', authSuccessMessage: 'Ab members abasatu ab’enjawulo bakkirizza ekibiina kino. Ebadsave VSLA ejja kugguka kati.', continue: 'Weyongereyo', authFailed: 'Okukkiriza kulemye', loadFailed: 'Tekisobose kutikka bibiina', selectFailed: 'Tekisobose kulonda kibiina', unexpected: 'Waliwo ekikyamu. Ddamu ogezeeko.' },
-  sw: { loading: 'Inapakia vikundi vilivyosajiliwa…', tagline: 'Uidhinishaji wa wanachama watatu', selectGroup: 'Chagua kikundi chako kilichosajiliwa', instructions: 'Viongozi wawili tofauti na mwanachama mmoja wa kawaida lazima waidhinishe ufikiaji.', noGroups: 'Hakuna vikundi hai vilivyosajiliwa vilivyopatikana kwenye kifaa hiki.', selectedGroup: 'KIKUNDI KILICHOCHAGULIWA', change: 'Badilisha', stepExecutive1: 'Kiongozi wa 1 kati ya 2', stepExecutive2: 'Kiongozi wa 2 kati ya 2', stepOrdinary: 'Mwanachama wa kawaida 1 kati ya 1', executiveRole: 'Kiongozi', ordinaryRole: 'Mwanachama wa kawaida', progress: (total: number, exec: number, ordinary: number) => `Wanachama ${total} kati ya 3 wameidhinisha · viongozi ${exec}/2 · mwanachama wa kawaida ${ordinary}/1`, chooseMember: 'Chagua mwanachama hai mwenye nambari ya simu iliyosajiliwa. Kila mwanachama anaweza kuidhinisha mara moja tu.', noEligibleExecutive: 'Hakuna kiongozi anayestahili mwenye nambari ya simu iliyosajiliwa kwa hatua hii. Sajili au washa mwanachama anayestahili, kisha chagua kikundi tena.', noEligibleOrdinary: 'Hakuna mwanachama wa kawaida anayestahili mwenye nambari ya simu iliyosajiliwa kwa hatua hii. Sajili au washa mwanachama anayestahili, kisha chagua kikundi tena.', passcodeFor: (name: string) => `Nenosiri la ${name}`, passcodePlaceholder: 'Ingiza nenosiri la herufi 4', verify: 'Thibitisha nenosiri', allAuthorized: 'Wanachama wote watatu wanaohitajika wameidhinisha kikundi hiki.', footer: 'Rekodi zako zilizohifadhiwa za kikundi na wanachama hazifutwi katika hatua hii ya uidhinishaji.', chooseMemberTitle: 'Chagua mwanachama', chooseMemberMessage: 'Chagua mwanachama anayeidhinisha hatua hii.', invalidPasscode: 'Nenosiri si sahihi', invalidPasscodeMessage: 'Ingiza nenosiri halisi la mwanachama lenye herufi nne.', authSuccess: 'Uidhinishaji umefanikiwa', authSuccessMessage: 'Wanachama watatu tofauti wameidhinisha kikundi hiki. Ebadsave VSLA itafunguka sasa.', continue: 'Endelea', authFailed: 'Uidhinishaji umeshindwa', loadFailed: 'Imeshindwa kupakia vikundi', selectFailed: 'Imeshindwa kuchagua kikundi', unexpected: 'Hitilafu isiyotarajiwa imetokea. Tafadhali jaribu tena.' },
-  fr: { loading: 'Chargement des groupes enregistrés…', tagline: 'Autorisation par trois membres', selectGroup: 'Sélectionnez votre groupe enregistré', instructions: 'Deux responsables différents et un membre ordinaire doivent autoriser l’accès.', noGroups: 'Aucun groupe actif enregistré n’a été trouvé sur cet appareil.', selectedGroup: 'GROUPE SÉLECTIONNÉ', change: 'Changer', stepExecutive1: 'Responsable 1 sur 2', stepExecutive2: 'Responsable 2 sur 2', stepOrdinary: 'Membre ordinaire 1 sur 1', executiveRole: 'Responsable', ordinaryRole: 'Membre ordinaire', progress: (total: number, exec: number, ordinary: number) => `${total} membre(s) sur 3 ont autorisé · responsables ${exec}/2 · membre ordinaire ${ordinary}/1`, chooseMember: 'Choisissez un membre actif avec un numéro de téléphone enregistré. Chaque membre ne peut autoriser qu’une seule fois.', noEligibleExecutive: 'Aucun responsable admissible avec un numéro enregistré n’est disponible pour cette étape. Enregistrez ou activez un responsable admissible, puis sélectionnez à nouveau le groupe.', noEligibleOrdinary: 'Aucun membre ordinaire admissible avec un numéro enregistré n’est disponible pour cette étape. Enregistrez ou activez un membre admissible, puis sélectionnez à nouveau le groupe.', passcodeFor: (name: string) => `Code de ${name}`, passcodePlaceholder: 'Saisissez le code de 4 caractères', verify: 'Vérifier le code', allAuthorized: 'Les trois membres requis ont autorisé ce groupe.', footer: 'Les données enregistrées du groupe et des membres ne sont pas supprimées à cette étape.', chooseMemberTitle: 'Choisir un membre', chooseMemberMessage: 'Sélectionnez le membre qui autorise cette étape.', invalidPasscode: 'Code invalide', invalidPasscodeMessage: 'Saisissez le code exact de quatre caractères du membre.', authSuccess: 'Autorisation réussie', authSuccessMessage: 'Trois membres différents ont autorisé ce groupe. Ebadsave VSLA va maintenant s’ouvrir.', continue: 'Continuer', authFailed: 'Échec de l’autorisation', loadFailed: 'Impossible de charger les groupes', selectFailed: 'Impossible de sélectionner le groupe', unexpected: 'Une erreur inattendue est survenue. Veuillez réessayer.' },
-  rw: { loading: 'Turimo gufungura amatsinda yanditswe…', tagline: 'Kwemeza n’abanyamuryango batatu', selectGroup: 'Hitamo itsinda ryawe ryanditswe', instructions: 'Abayobozi babiri batandukanye n’umunyamuryango umwe usanzwe bagomba kwemeza kwinjira.', noGroups: 'Nta matsinda akora yanditswe yabonetse kuri iki gikoresho.', selectedGroup: 'ITSINDA RYATORANYIJWE', change: 'Hindura', stepExecutive1: 'Umuyobozi wa 1 kuri 2', stepExecutive2: 'Umuyobozi wa 2 kuri 2', stepOrdinary: 'Umunyamuryango usanzwe 1 kuri 1', executiveRole: 'Umuyobozi', ordinaryRole: 'Umunyamuryango usanzwe', progress: (total: number, exec: number, ordinary: number) => `Abanyamuryango ${total} kuri 3 baremeje · abayobozi ${exec}/2 · usanzwe ${ordinary}/1`, chooseMember: 'Hitamo umunyamuryango ukora ufite nimero ya telefoni yanditswe. Buri munyamuryango yemerewe kwemeza rimwe gusa.', noEligibleExecutive: 'Nta muyobozi wujuje ibisabwa ufite nimero ya telefoni yanditswe kuri iyi ntambwe. Andikisha cyangwa ufungure umuyobozi wujuje ibisabwa, hanyuma wongere uhitemo itsinda.', noEligibleOrdinary: 'Nta munyamuryango usanzwe wujuje ibisabwa ufite nimero ya telefoni yanditswe kuri iyi ntambwe. Andikisha cyangwa ufungure umunyamuryango wujuje ibisabwa, hanyuma wongere uhitemo itsinda.', passcodeFor: (name: string) => `Kode ya ${name}`, passcodePlaceholder: 'Andika kode y’inyuguti 4', verify: 'Emeza kode', allAuthorized: 'Abanyamuryango batatu basabwa bemeje iri tsinda.', footer: 'Amakuru y’itsinda n’abanyamuryango yabitswe ntasibwa muri iyi ntambwe.', chooseMemberTitle: 'Hitamo umunyamuryango', chooseMemberMessage: 'Hitamo umunyamuryango wemeza iyi ntambwe.', invalidPasscode: 'Kode si yo', invalidPasscodeMessage: 'Andika kode nyayo y’inyuguti enye y’umunyamuryango.', authSuccess: 'Kwemeza byagenze neza', authSuccessMessage: 'Abanyamuryango batatu batandukanye bemeje iri tsinda. Ebadsave VSLA irafunguka ubu.', continue: 'Komeza', authFailed: 'Kwemeza byanze', loadFailed: 'Ntibishobotse gufungura amatsinda', selectFailed: 'Ntibishobotse guhitamo itsinda', unexpected: 'Habaye ikibazo kitari cyitezwe. Ongera ugerageze.' },
+  en: { loading: 'Loading registered groups…', tagline: 'Three-member authorization', selectGroup: 'Select your registered group', instructions: 'Two different executive members and one ordinary member must authorize access. Identity is verified on server.', noGroups: 'No active registered groups were found on this device.', selectedGroup: 'SELECTED GROUP', change: 'Change', stepExecutive1: 'Executive member 1 of 2', stepExecutive2: 'Executive member 2 of 2', stepOrdinary: 'Ordinary member 1 of 1', executiveRole: 'Executive', ordinaryRole: 'Ordinary member', progress: (total: number, exec: number, ordinary: number) => `${total} of 3 members authorized · ${exec}/2 executives · ${ordinary}/1 ordinary member`, chooseMember: 'Choose an active member with a registered phone number. Each member can authorize only once.', noEligibleExecutive: 'No eligible executive members with registered phone numbers are available for this step. Register or activate an eligible member, then select the group again.', noEligibleOrdinary: 'No eligible ordinary members with registered phone numbers are available for this step. Register or activate an eligible member, then select the group again.', passcodeFor: (name: string) => `Passcode for ${name}`, passcodePlaceholder: 'Enter 4-character passcode', verify: 'Verify passcode', allAuthorized: 'All three required members have authorized this group.', footer: 'Your saved group and member records are not deleted by this authorization step.', chooseMemberTitle: 'Choose a member', chooseMemberMessage: 'Select the member who is authorizing this step.', invalidPasscode: 'Invalid passcode', invalidPasscodeMessage: 'Enter the member’s exact four-character passcode.', authSuccess: 'Authorization successful', authSuccessMessage: 'Three different members have authorized this group. Ebadsave VSLA will now open.', continue: 'Continue', authFailed: 'Authorization failed', loadFailed: 'Unable to load groups', selectFailed: 'Could not select group', unexpected: 'An unexpected error occurred. Please try again.', serverVerifying: 'Verifying identities on server…', serverFailed: 'Server verification failed', recoveryLabel: 'Group recovery credential', recoveryPlaceholder: 'Enter group recovery code' },
+  nyn: { loading: 'Abagwiire ebibiina ebihandiikire…', tagline: 'Okukiriza kw’abantu bashatu', selectGroup: 'Toorana ekibiina kyawe ekihandiikire', instructions: 'Abakuru b’ekibiina babiri abatari bamwe hamwe n’omunyamuryango owa bulijjo omu bashemereire kukiriza okutaaha.', noGroups: 'Tihariho bibiina ebikora ebihandiikire aha simu egi.', selectedGroup: 'EKIBIINA EKITOORANIIWE', change: 'Hindura', stepExecutive1: 'Omukuru w’ekibiina 1 aha 2', stepExecutive2: 'Omukuru w’ekibiina 2 aha 2', stepOrdinary: 'Omunyamuryango owa bulijjo 1 aha 1', executiveRole: 'Omukuru', ordinaryRole: 'Omunyamuryango owa bulijjo', progress: (total: number, exec: number, ordinary: number) => `${total} aha banyamuryango 3 bakiziire · abakuru ${exec}/2 · owa bulijjo ${ordinary}/1`, chooseMember: 'Toorana omunyamuryango akora kandi aine namba ya simu ehairwe. Buri munyamuryango naikiriza rimwe ryonka.', noEligibleExecutive: 'Tihariho mukuru w’ekibiina oshemeire aine namba ya simu aha mutendera ogu. Handiika nari korera omunyamuryango, reero otore ekibiina bundi.', noEligibleOrdinary: 'Tihariho muny amuryango owa bulijjo oshemeire aine namba ya simu aha mutendera ogu. Handiika nari korera omunyamuryango, reero otore ekibiina bundi.', passcodeFor: (name: string) => 'Koodi ya ' + name, passcodePlaceholder: 'Taamu koodi y’ennukuta 4', verify: 'Kakasa koodi', allAuthorized: 'Abanyamuryango bashatu bashemereire bakiziire ekibiina eki.', footer: 'Ebi ebihandiikire by’ekibiina n’abanyamuryango tibirikusibwa omutendera ogu.', chooseMemberTitle: 'Toorana omunyamuryango', chooseMemberMessage: 'Toorana omunyamuryango orikwikiriza omutendera ogu.', invalidPasscode: 'Koodi egwire', invalidPasscodeMessage: 'Taamu koodi y’omunyamuryango nk’oku eri, ennukuta 4.', authSuccess: 'Okukiriza kwahwa gye', authSuccessMessage: 'Abanyamuryango bashatu abatari bamwe bakiziire ekibiina eki. Ebadsave VSLA n’eyija kwoha.', continue: 'Gyenda omumaisho', authFailed: 'Okukiriza tikwahwe gye', loadFailed: 'Tihasobokire kutunga ebibiina', selectFailed: 'Tihasobokire kutoorana ekibiina', unexpected: 'Ekintu kitashemereire kibaireho. Yongera ogezemu.', serverVerifying: 'Niturimo kukakasa aha server…', serverFailed: 'Okukakasa aha server tikwahwe gye', recoveryLabel: 'Koodi y’okugarura ekibiina', recoveryPlaceholder: 'Taamu koodi y’ekibiina' },
+  lg: { loading: 'Okutikka ebibiina ebiri muwandiise…', tagline: 'Okukkiriza kw’ab members abasatu', selectGroup: 'Londa ekibiina kyo ekiwandiisiddwa', instructions: 'Abakulembeze babiri ab’enjawulo n’om member omu owa bulijjo balina okukkiriza okuyingira.', noGroups: 'Tewali bibiina bikola ebiri muwandiise ku kyuma kino.', selectedGroup: 'EKIBIINA EKILONDIDDWA', change: 'Kyusa', stepExecutive1: 'Omukulembeze 1 ku 2', stepExecutive2: 'Omukulembeze 2 ku 2', stepOrdinary: 'Omukulembeze', executiveRole: 'Omukulembeze', ordinaryRole: 'Om member owa bulijjo', progress: (total: number, exec: number, ordinary: number) => `${total} ku members 3 bakkirizza · abakulembeze ${exec}/2 · owa bulijjo ${ordinary}/1`, chooseMember: 'Londa om member akola alina ennamba ya ssimu ewandiisiddwa. Buli member akkiriza omulundi gumu gwokka.', noEligibleExecutive: 'Tewali mukulembeze atuukiridde alina ennamba ya ssimu ku mutendera guno. Wandiisa oba kozesa om member atuukiridde, olonde ekibiina nate.', noEligibleOrdinary: 'Tewali member wa bulijjo atuukiridde alina ennamba ya ssimu ku mutendera guno. Wandiisa oba kozesa om member atuukiridde, olonde ekibiina nate.', passcodeFor: (name: string) => `Koodi ya ${name}`, passcodePlaceholder: 'Yingiza koodi ya nnukuta 4', verify: 'Kakasa koodi', allAuthorized: 'Ab members bonna abasatu beetaagisa bakkirizza ekibiina kino.', footer: 'Ebiwandiiko by’ekibiina n’ab members byo tebisuulibwaawo mu mutendera guno.', chooseMemberTitle: 'Londa om member', chooseMemberMessage: 'Londa om member akkiriza omutendera guno.', invalidPasscode: 'Koodi si ntuufu', invalidPasscodeMessage: 'Yingiza koodi y’om member entuufu ey’ennukuta nnya.', authSuccess: 'Okukkiriza kuwedde bulungi', authSuccessMessage: 'Ab members abasatu ab’enjawulo bakkirizza ekibiina kino. Ebadsave VSLA ejja kugguka kati.', continue: 'Weyongereyo', authFailed: 'Okukkiriza kulemye', loadFailed: 'Tekisobose kutikka bibiina', selectFailed: 'Tekisobose kulonda kibiina', unexpected: 'Waliwo ekikyamu. Ddamu ogezeeko.', serverVerifying: 'Tukakasa identities ku server…', serverFailed: 'Okukakasa ku server kulemye', recoveryLabel: 'Koodi y’okuzzaawo ekibiina', recoveryPlaceholder: 'Yingiza koodi y’ekibiina' },
+  sw: { loading: 'Inapakia vikundi vilivyosajiliwa…', tagline: 'Uidhinishaji wa wanachama watatu', selectGroup: 'Chagua kikundi chako kilichosajiliwa', instructions: 'Viongozi wawili tofauti na mwanachama mmoja wa kawaida lazima waidhinishe ufikiaji. Uthibitisho unafanyika kwenye server.', noGroups: 'Hakuna vikundi hai vilivyosajiliwa vilivyopatikana kwenye kifaa hiki.', selectedGroup: 'KIKUNDI KILICHOCHAGULIWA', change: 'Badilisha', stepExecutive1: 'Kiongozi wa 1 kati ya 2', stepExecutive2: 'Kiongozi wa 2 kati ya 2', stepOrdinary: 'Mwanachama wa kawaida 1 kati ya 1', executiveRole: 'Kiongozi', ordinaryRole: 'Mwanachama wa kawaida', progress: (total: number, exec: number, ordinary: number) => `Wanachama ${total} kati ya 3 wameidhinisha · viongozi ${exec}/2 · mwanachama wa kawaida ${ordinary}/1`, chooseMember: 'Chagua mwanachama hai mwenye nambari ya simu iliyosajiliwa. Kila mwanachama anaweza kuidhinisha mara moja tu.', noEligibleExecutive: 'Hakuna kiongozi anayestahili mwenye nambari ya simu iliyosajiliwa kwa hatua hii. Sajili au washa mwanachama anayestahili, kisha chagua kikundi tena.', noEligibleOrdinary: 'Hakuna mwanachama wa kawaida anayestahili mwenye nambari ya simu iliyosajiliwa kwa hatua hii. Sajili au washa mwanachama anayestahili, kisha chagua kikundi tena.', passcodeFor: (name: string) => `Nenosiri la ${name}`, passcodePlaceholder: 'Ingiza nenosiri la herufi 4', verify: 'Thibitisha nenosiri', allAuthorized: 'Wanachama wote watatu wanaohitajika wameidhinisha kikundi hiki.', footer: 'Rekodi zako zilizohifadhiwa za kikundi na wanachama hazifutwi katika hatua hii ya uidhinishaji.', chooseMemberTitle: 'Chagua mwanachama', chooseMemberMessage: 'Chagua mwanachama anayeidhinisha hatua hii.', invalidPasscode: 'Nenosiri si sahihi', invalidPasscodeMessage: 'Ingiza nenosiri halisi la mwanachama lenye herufi nne.', authSuccess: 'Uidhinishaji umefanikiwa', authSuccessMessage: 'Wanachama watatu tofauti wameidhinisha kikundi hiki. Ebadsave VSLA itafunguka sasa.', continue: 'Endelea', authFailed: 'Uidhinishaji umeshindwa', loadFailed: 'Imeshindwa kupakia vikundi', selectFailed: 'Imeshindwa kuchagua kikundi', unexpected: 'Hitilafu isiyotarajiwa imetokea. Tafadhali jaribu tena.', serverVerifying: 'Inathibitisha vitambulisho kwenye server…', serverFailed: 'Uthibitishaji wa server umeshindwa', recoveryLabel: 'Msimbo wa kurejesha kikundi', recoveryPlaceholder: 'Ingiza msimbo wa kikundi' },
+  fr: { loading: 'Chargement des groupes enregistrés…', tagline: 'Autorisation par trois membres', selectGroup: 'Sélectionnez votre groupe enregistré', instructions: 'Deux responsables différents et un membre ordinaire doivent autoriser l’accès. Vérification sur serveur.', noGroups: 'Aucun groupe actif enregistré n’a été trouvé sur cet appareil.', selectedGroup: 'GROUPE SÉLECTIONNÉ', change: 'Changer', stepExecutive1: 'Responsable 1 sur 2', stepExecutive2: 'Responsable 2 sur 2', stepOrdinary: 'Membre ordinaire 1 sur 1', executiveRole: 'Responsable', ordinaryRole: 'Membre ordinaire', progress: (total: number, exec: number, ordinary: number) => `${total} membre(s) sur 3 ont autorisé · responsables ${exec}/2 · membre ordinaire ${ordinary}/1`, chooseMember: 'Choisissez un membre actif avec un numéro de téléphone enregistré. Chaque membre ne peut autoriser qu’une seule fois.', noEligibleExecutive: 'Aucun responsable admissible avec un numéro enregistré n’est disponible pour cette étape. Enregistrez ou activez un responsable admissible, puis sélectionnez à nouveau le groupe.', noEligibleOrdinary: 'Aucun membre ordinaire admissible avec un numéro enregistré n’est disponible pour cette étape. Enregistrez ou activez un membre admissible, puis sélectionnez à nouveau le groupe.', passcodeFor: (name: string) => `Code de ${name}`, passcodePlaceholder: 'Saisissez le code de 4 caractères', verify: 'Vérifier le code', allAuthorized: 'Les trois membres requis ont autorisé ce groupe.', footer: 'Les données enregistrées du groupe et des membres ne sont pas supprimées à cette étape.', chooseMemberTitle: 'Choisir un membre', chooseMemberMessage: 'Sélectionnez le membre qui autorise cette étape.', invalidPasscode: 'Code invalide', invalidPasscodeMessage: 'Saisissez le code exact de quatre caractères du membre.', authSuccess: 'Autorisation réussie', authSuccessMessage: 'Trois membres différents ont autorisé ce groupe. Ebadsave VSLA va maintenant s’ouvrir.', continue: 'Continuer', authFailed: 'Échec de l’autorisation', loadFailed: 'Impossible de charger les groupes', selectFailed: 'Impossible de sélectionner le groupe', unexpected: 'Une erreur inattendue est survenue. Veuillez réessayer.', serverVerifying: 'Vérification des identités sur le serveur…', serverFailed: 'Échec de la vérification serveur', recoveryLabel: 'Code de récupération du groupe', recoveryPlaceholder: 'Entrez le code de récupération' },
+  rw: { loading: 'Turimo gufungura amatsinda yanditswe…', tagline: 'Kwemeza n’abanyamuryango batatu', selectGroup: 'Hitamo itsinda ryawe ryanditswe', instructions: 'Abayobozi babiri batandukanye n’umunyamuryango umwe usanzwe bagomba kwemeza kwinjira. Kwemeza bikorwa kuri server.', noGroups: 'Nta matsinda akora yanditswe yabonetse kuri iki gikoresho.', selectedGroup: 'ITSINDA RYATORANYIJWE', change: 'Hindura', stepExecutive1: 'Umuyobozi wa 1 kuri 2', stepExecutive2: 'Umuyobozi wa 2 kuri 2', stepOrdinary: 'Umunyamuryango usanzwe 1 kuri 1', executiveRole: 'Umuyobozi', ordinaryRole: 'Umunyamuryango usanzwe', progress: (total: number, exec: number, ordinary: number) => `Abanyamuryango ${total} kuri 3 baremeje · abayobozi ${exec}/2 · usanzwe ${ordinary}/1`, chooseMember: 'Hitamo umunyamuryango ukora ufite nimero ya telefoni yanditswe. Buri munyamuryango yemerewe kwemeza rimwe gusa.', noEligibleExecutive: 'Nta muyobozi wujuje ibisabwa ufite nimero ya telefoni yanditswe kuri iyi ntambwe. Andikisha cyangwa ufungure umuyobozi wujuje ibisabwa, hanyuma wongere uhitemo itsinda.', noEligibleOrdinary: 'Nta munyamuryango usanzwe wujuje ibisabwa ufite nimero ya telefoni yanditswe kuri iyi ntambwe. Andikisha cyangwa ufungure umunyamuryango wujuje ibisabwa, hanyuma wongere uhitemo itsinda.', passcodeFor: (name: string) => `Kode ya ${name}`, passcodePlaceholder: 'Andika kode y’inyuguti 4', verify: 'Emeza kode', allAuthorized: 'Abanyamuryango batatu basabwa bemeje iri tsinda.', footer: 'Amakuru y’itsinda n’abanyamuryango yabitswe ntasibwa muri iyi ntambwe.', chooseMemberTitle: 'Hitamo umunyamuryango', chooseMemberMessage: 'Hitamo umunyamuryango wemeza iyi ntambwe.', invalidPasscode: 'Kode si yo', invalidPasscodeMessage: 'Andika kode nyayo y’inyuguti enye y’umunyamuryango.', authSuccess: 'Kwemeza byagenze neza', authSuccessMessage: 'Abanyamuryango batatu batandukanye bemeje iri tsinda. Ebadsave VSLA irafunguka ubu.', continue: 'Komeza', authFailed: 'Kwemeza byanze', loadFailed: 'Ntibishobotse gufungura amatsinda', selectFailed: 'Ntibishobotse guhitamo itsinda', unexpected: 'Habaye ikibazo kitari cyitezwe. Ongera ugerageze.', serverVerifying: 'Turimo kwemeza indangamuntu kuri server…', serverFailed: 'Kwemeza kuri server byanze', recoveryLabel: 'Kode yo kugarura itsinda', recoveryPlaceholder: 'Andika kode y’itsinda' },
 } as const;
 
 function getAuthText() {
@@ -80,9 +90,12 @@ export default function PreAppAuthorizationScreen({ navigation }: Props) {
   const [selectedMember, setSelectedMember] = useState<MemberRecord | null>(null);
   const [passcode, setPasscode] = useState('');
   const [authorizedMemberIds, setAuthorizedMemberIds] = useState<number[]>([]);
+  const [authorizedDetails, setAuthorizedDetails] = useState<{ memberNumber: string; passcode: string; id: number }[]>([]);
   const [progress, setProgress] = useState<AppAccessProgress | null>(null);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
+  const [recoveryCredential, setRecoveryCredential] = useState('');
+  const [serverVerifying, setServerVerifying] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -129,6 +142,7 @@ export default function PreAppAuthorizationScreen({ navigation }: Props) {
       setSelectedMember(null);
       setPasscode('');
       setAuthorizedMemberIds([]);
+      setAuthorizedDetails([]);
       setProgress({
         sessionId: newSessionId,
         groupId: group.id,
@@ -151,6 +165,7 @@ export default function PreAppAuthorizationScreen({ navigation }: Props) {
     setSelectedMember(null);
     setPasscode('');
     setAuthorizedMemberIds([]);
+    setAuthorizedDetails([]);
     setStepIndex(0);
     setProgress(null);
   }
@@ -168,36 +183,68 @@ export default function PreAppAuthorizationScreen({ navigation }: Props) {
     const authorizedGroupId = selectedGroup.id;
     setWorking(true);
     try {
+      // 1. Local SQLite check (keeps offline UX)
       const nextProgress = await authorizeMemberForAppAccess(
         sessionId,
         selectedMember.id,
         passcode,
       );
       const nextAuthorizedIds = [...authorizedMemberIds, selectedMember.id];
+      const nextDetails = [...authorizedDetails, { memberNumber: selectedMember.member_number, passcode: passcode, id: selectedMember.id }];
       setAuthorizedMemberIds(nextAuthorizedIds);
+      setAuthorizedDetails(nextDetails);
       setProgress(nextProgress);
       setPasscode('');
       setSelectedMember(null);
 
       if (nextProgress.authorized) {
-        // Preserve the group the members just authorized. HomeScreen uses this
-        // ID to show totals and transactions for the same group.
-        try {
-          await AsyncStorage.setItem('@ebadsave/activeGroupId', String(authorizedGroupId));
-        } catch (storageError) {
-          console.warn('Could not persist the authorized group selection:', storageError);
+        // 2. SERVER-VERIFIED IDENTITY - critical security fix
+        if (!recoveryCredential || recoveryCredential.trim().length < 3) {
+          Alert.alert(getAuthText().serverFailed, getAuthText().recoveryLabel + ' required for server verification');
+          setWorking(false);
+          return;
         }
+        setServerVerifying(true);
+        try {
+          const serverResult = await Parse.Cloud.run('verifyThreeMembersAndRestore', {
+            groupNumber: selectedGroup.group_number,
+            recoveryCredential: recoveryCredential.trim(),
+            authorizations: nextDetails.map(d => ({ memberNumber: d.memberNumber, passcode: d.passcode }))
+          });
 
-        Alert.alert(
-          getAuthText().authSuccess,
-          getAuthText().authSuccessMessage,
-          [{
-            text: getAuthText().continue,
-            onPress: () => navigation.reset({ index: 0, routes: [{ name: 'Home' }] }),
-          }],
-          { cancelable: false },
-        );
-        return;
+          if (!serverResult?.verified) {
+            throw new Error('Server did not verify identities');
+          }
+
+          try {
+            await AsyncStorage.setItem('@ebadsave/activeGroupId', String(authorizedGroupId));
+            await AsyncStorage.setItem('@ebadsave/serverVerified', JSON.stringify(serverResult.verifiedMembers));
+          } catch (storageError) {
+            console.warn('Could not persist the authorized group selection:', storageError);
+          }
+
+          Alert.alert(
+            getAuthText().authSuccess,
+            `${getAuthText().authSuccessMessage}\n\nServer verified: ${serverResult.verifiedMembers.map((m:any)=>m.fullName).join(', ')}`,
+            [{
+              text: getAuthText().continue,
+              onPress: () => navigation.reset({ index: 0, routes: [{ name: 'Home' }] }),
+            }],
+            { cancelable: false },
+          );
+          return;
+        } catch (serverError: any) {
+          // Rollback local authorization if server fails - prevents bypass
+          Alert.alert(getAuthText().serverFailed, getErrorMessage(serverError) + '\n\nLocal authorization was rolled back. Each member must be verified on server (groupNumber + recoveryCredential + 3 distinct member PINs).');
+          // Reset to force re-auth
+          setAuthorizedMemberIds([]);
+          setAuthorizedDetails([]);
+          setStepIndex(0);
+          setProgress({ sessionId, groupId: selectedGroup.id, executiveCount: 0, ordinaryCount: 0, totalCount: 0, authorized: false });
+          return;
+        } finally {
+          setServerVerifying(false);
+        }
       }
 
       setStepIndex((previous) => previous + 1);
@@ -279,6 +326,21 @@ export default function PreAppAuthorizationScreen({ navigation }: Props) {
             {getAuthText().progress(progress?.totalCount ?? 0, progress?.executiveCount ?? 0, progress?.ordinaryCount ?? 0)}
           </Text>
 
+          <View style={styles.recoveryPanel}>
+            <Text style={styles.passcodeLabel}>{getAuthText().recoveryLabel}</Text>
+            <TextInput
+              value={recoveryCredential}
+              onChangeText={setRecoveryCredential}
+              placeholder={getAuthText().recoveryPlaceholder}
+              placeholderTextColor="#64748b"
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={styles.passcodeInput}
+              editable={!working}
+            />
+            <Text style={styles.restoreHint}>Required for server verification: groupNumber + recoveryCredential + 3 member PINs</Text>
+          </View>
+
           {currentStep ? (
             <>
               <Text style={styles.stepTitle}>{stepIndex === 0 ? getAuthText().stepExecutive1 : stepIndex === 1 ? getAuthText().stepExecutive2 : getAuthText().stepOrdinary}</Text>
@@ -341,7 +403,7 @@ export default function PreAppAuthorizationScreen({ navigation }: Props) {
                       pressed && !working && styles.pressed,
                     ]}
                   >
-                    {working ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>{getAuthText().verify}</Text>}
+                    {working || serverVerifying ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>{serverVerifying ? getAuthText().serverVerifying : getAuthText().verify}</Text>}
                   </Pressable>
                 </View>
               )}
@@ -357,7 +419,14 @@ export default function PreAppAuthorizationScreen({ navigation }: Props) {
 }
 
 function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'An unexpected error occurred. Please try again.';
+  if (error instanceof Error) {
+    // Parse errors have message in error.message
+    return error.message;
+  }
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    return String((error as any).message);
+  }
+  return 'An unexpected error occurred. Please try again.';
 }
 
 const styles = StyleSheet.create({
@@ -393,8 +462,9 @@ const styles = StyleSheet.create({
   memberMeta: { color: '#64748b', fontSize: 11, marginTop: 3 },
   radioMark: { color: '#16a34a', fontSize: 19, marginLeft: 8 },
   passcodePanel: { backgroundColor: '#f8fafc', borderRadius: 12, padding: 13, marginTop: 16 },
+  recoveryPanel: { backgroundColor: '#fffbeb', borderRadius: 12, padding: 13, marginBottom: 16, borderWidth: 1, borderColor: '#fde68a' },
   passcodeLabel: { color: '#334155', fontWeight: '700', marginBottom: 8 },
-  passcodeInput: { borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, color: '#0f172a', backgroundColor: '#fff', fontSize: 18, letterSpacing: 5 },
+  passcodeInput: { borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, color: '#0f172a', backgroundColor: '#fff', fontSize: 16, letterSpacing: 1 },
   primaryButton: { minHeight: 48, borderRadius: 10, backgroundColor: '#16a34a', alignItems: 'center', justifyContent: 'center', marginTop: 12, padding: 12 },
   primaryButtonText: { color: '#fff', fontSize: 15, fontWeight: '800' },
   disabledButton: { opacity: 0.45 },
