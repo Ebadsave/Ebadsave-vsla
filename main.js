@@ -832,3 +832,145 @@ Parse.Cloud.define('tagEbadsaveRecoveryBackup', async (request) => {
     tagged: true,
   };
 });
+
+/* ============================================================
+   EBADSAVE ENCRYPTED CLOUD BACKUP UPLOAD
+   ============================================================ */
+
+Parse.Cloud.define('uploadEbadsaveBackup', async (request) => {
+  const params = request.params || {};
+
+  const vaultId = params.vaultId;
+  const cloudFileName = params.cloudFileName;
+  const encryptedEnvelope = params.encryptedEnvelope;
+  const backupFileName = params.backupFileName;
+  const backupCreatedAt = params.backupCreatedAt;
+
+  if (!ebadsaveValidateVaultId(vaultId)) {
+    throw new Error('Invalid backup vault identifier.');
+  }
+
+  if (params.encrypted !== true) {
+    throw new Error('Only encrypted backups are accepted.');
+  }
+
+  if (
+    !encryptedEnvelope ||
+    encryptedEnvelope.format !==
+      'EBADSAVE_ENCRYPTED_CLOUD_BACKUP' ||
+    encryptedEnvelope.version !== 1 ||
+    typeof encryptedEnvelope.created_at !== 'string' ||
+    typeof encryptedEnvelope.salt !== 'string' ||
+    !/^[a-f0-9]{32}$/i.test(encryptedEnvelope.salt) ||
+    typeof encryptedEnvelope.iv !== 'string' ||
+    !/^[a-f0-9]{32}$/i.test(encryptedEnvelope.iv) ||
+    typeof encryptedEnvelope.ciphertext !== 'string' ||
+    typeof encryptedEnvelope.mac !== 'string' ||
+    !/^[a-f0-9]{64}$/i.test(encryptedEnvelope.mac)
+  ) {
+    throw new Error('Invalid encrypted backup data.');
+  }
+
+  if (
+    typeof cloudFileName !== 'string' ||
+    cloudFileName.length > 200 ||
+    !/^ebadsave_[a-zA-Z0-9_-]+\.json$/.test(
+      cloudFileName
+    )
+  ) {
+    throw new Error('Invalid cloud backup filename.');
+  }
+
+  if (
+    typeof backupFileName !== 'string' ||
+    !backupFileName.trim() ||
+    backupFileName.length > 200
+  ) {
+    throw new Error('Invalid backup filename.');
+  }
+
+  const createdAtMs = new Date(backupCreatedAt).getTime();
+
+  if (!Number.isFinite(createdAtMs)) {
+    throw new Error('Invalid backup creation date.');
+  }
+
+  let groupNumber = null;
+
+  if (
+    params.groupNumber !== undefined &&
+    params.groupNumber !== null
+  ) {
+    groupNumber = ebadsaveValidateGroupNumber(
+      params.groupNumber
+    );
+  }
+
+  const envelopeJson = JSON.stringify(encryptedEnvelope);
+
+  if (
+    Buffer.byteLength(envelopeJson, 'utf8') >
+    10 * 1024 * 1024
+  ) {
+    throw new Error('Encrypted backup exceeds 10 MB.');
+  }
+
+  // Create and upload the encrypted file server-side.
+  const base64 = Buffer.from(
+    envelopeJson,
+    'utf8'
+  ).toString('base64');
+
+  const file = new Parse.File(
+    cloudFileName,
+    { base64: base64 },
+    'application/json'
+  );
+
+  await file.save(null, {
+    useMasterKey: true
+  });
+
+  // Save backup metadata.
+  const record = new Parse.Object(
+    'EbadsaveCloudBackups'
+  );
+
+  record.set('vaultId', vaultId);
+  record.set('file', file);
+  record.set('backupFileName', backupFileName);
+  record.set(
+    'backupCreatedAt',
+    new Date(createdAtMs).toISOString()
+  );
+  record.set('encrypted', true);
+  record.set('recoverySchemaVersion', 1);
+
+  if (groupNumber !== null) {
+    record.set('groupNumber', groupNumber);
+  }
+
+  try {
+    await record.save(null, {
+      useMasterKey: true
+    });
+  } catch (error) {
+    try {
+      await file.destroy({
+        useMasterKey: true
+      });
+    } catch (_) {
+      // Preserve the original error.
+    }
+
+    throw error;
+  }
+
+  return {
+    objectId: record.id,
+    backupFileName: backupFileName,
+    backupCreatedAt: record.get('backupCreatedAt'),
+    encrypted: true,
+    uploaded: true
+  };
+});
