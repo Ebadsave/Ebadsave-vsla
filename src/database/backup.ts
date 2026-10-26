@@ -768,24 +768,6 @@ export function formatFileSize(bytes: number): string {
 // Automatic backups use a device-generated key stored in Android/iOS secure storage.
 // The key is never sent to Back4App; it is used locally to encrypt/decrypt the backup.
 const AUTO_BACKUP_SECRET_KEY = 'ebadsave.back4app.autoBackupSecret.v1';
-const AUTO_BACKUP_CONSENT_KEY = 'ebadsave.back4app.autoBackupConsent.v1';
-
-/**
- * Saves the user's explicit choice about automatic cloud backups.
- * Consent is stored locally on this device.
- */
-export async function setAutomaticCloudBackupConsent(consent: boolean): Promise<void> {
-  await SecureStore.setItemAsync(AUTO_BACKUP_CONSENT_KEY, consent ? 'true' : 'false');
-}
-
-/**
- * Returns true only after the user has explicitly enabled automatic cloud backups.
- * Missing consent defaults to false.
- */
-export async function getAutomaticCloudBackupConsent(): Promise<boolean> {
-  const consent = await SecureStore.getItemAsync(AUTO_BACKUP_CONSENT_KEY);
-  return consent === 'true';
-}
 const AUTO_BACKUP_LAST_SUCCESS_KEY = 'ebadsave.back4app.autoBackupLastSuccess.v1';
 const AUTO_BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const MAX_LOCAL_BACKUP_FILES = 2;
@@ -831,15 +813,6 @@ export async function runAutomaticCloudBackup(force = false): Promise<{
 
   automaticBackupInProgress = true;
   try {
-    // Do not upload automatically until the user has explicitly opted in.
-    if (!(await getAutomaticCloudBackupConsent())) {
-      return {
-        success: true,
-        skipped: true,
-        message: 'Automatic cloud backup is disabled until you give consent.',
-      };
-    }
-
     if (!(await hasInternetConnection())) {
       return { success: false, skipped: true, message: 'Automatic backup is waiting for an internet connection.' };
     }
