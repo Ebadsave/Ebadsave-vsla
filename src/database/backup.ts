@@ -6,6 +6,8 @@ import * as SecureStore from 'expo-secure-store';
 import * as Network from 'expo-network';
 import {
   createDatabaseBackup,
+  createGroupDatabaseBackup,
+  restoreGroupDatabaseBackup,
   restoreDatabaseBackup as restoreDatabaseBackupJson,
 } from '../database/database';
 import {
@@ -350,6 +352,130 @@ async function pruneCloudBackupsForVault(vaultId: string): Promise<void> {
   });
 }
 
+/** Create and verify a group-only local backup. */
+export async function exportGroupDatabaseBackup(groupId: number): Promise<{
+  success: boolean;
+  message: string;
+  filePath?: string;
+  fileName?: string;
+  groupNumber?: string;
+  error?: string;
+}> {
+  try {
+    const json = await createGroupDatabaseBackup(groupId);
+    const parsed = JSON.parse(json) as BackupEnvelope & { group_number?: string | number };
+    parseAndValidateBackup(json);
+    if (!parsed.group_number) throw new Error('The group backup has no KYA group identity.');
+
+    const fileName = `ebadsave_group_${String(parsed.group_number).replace(/^KYA\s*/i, '')}_${makeTimestamp()}.json`;
+    const filePath = `${getDocumentsDirectory()}${fileName}`;
+    await FileSystem.writeAsStringAsync(filePath, json, { encoding: FileSystem.EncodingType.UTF8 });
+    const saved = await FileSystem.readAsStringAsync(filePath, { encoding: FileSystem.EncodingType.UTF8 });
+    const verified = JSON.parse(saved) as { group_number?: string | number; tables?: Record<string, unknown[]> };
+    parseAndValidateBackup(saved);
+    if (String(verified.group_number ?? '').replace(/^KYA\s*/i, '') !== String(parsed.group_number).replace(/^KYA\s*/i, '')) {
+      throw new Error('The saved backup group identity did not verify.');
+    }
+    return { success: true, message: 'Group-only backup created and verified.', filePath, fileName, groupNumber: String(parsed.group_number) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown group backup error.';
+    return { success: false, message: 'Group backup failed.', error: message };
+  }
+}
+
+/** Encrypt and upload a group-only snapshot. The passphrase is required to recover it on another device. */
+export async function uploadGroupDatabaseBackupToCloud(
+  groupId: number,
+  passphraseInput: string,
+): Promise<{ success: boolean; message: string; groupNumber?: string; error?: string }> {
+  try {
+    const passphrase = requirePassphrase(passphraseInput);
+    const contents = await createGroupDatabaseBackup(groupId);
+    const parsed = JSON.parse(contents) as BackupEnvelope & { group_number?: string | number };
+    parseAndValidateBackup(contents);
+    if (!parsed.group_number) throw new Error('The group backup has no KYA group identity.');
+    const groupNumber = String(parsed.group_number).replace(/^KYA\s*/i, '').trim();
+    const envelope = await encryptBackupForCloud(contents, passphrase);
+    const cloudFileName = `ebadsave_group_${groupNumber}_encrypted_${Date.now()}.json`;
+    // Upload through Cloud Code. Direct /files uploads are rejected when
+    // Back4App disables unauthenticated/public file uploads.
+    await parseApiRequest<{ result?: { objectId?: string } }>('/functions/uploadEbadsaveBackup', {
+      method: 'POST',
+      body: JSON.stringify({
+        cloudFileName,
+        encryptedEnvelope: envelope,
+        backupFileName: cloudFileName,
+        backupCreatedAt: parsed.created_at,
+        vaultId: vaultIdForPassphrase(passphrase),
+        groupNumber,
+        recoverySchemaVersion: 1,
+        encrypted: true,
+      }),
+    });
+    return { success: true, message: `Encrypted cloud backup saved for KYA ${groupNumber}. Keep the passphrase safe.`, groupNumber };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown group cloud backup error.';
+    return { success: false, message: 'Group cloud backup failed.', error: message };
+  }
+}
+
+/** List only encrypted group backups for the requested group and passphrase vault. */
+export async function listCloudGroupBackups(
+  passphraseInput: string,
+  groupNumberInput: string | number,
+): Promise<{ success: boolean; backups: CloudBackupFileInfo[]; message: string; error?: string }> {
+  try {
+    requirePassphrase(passphraseInput);
+    const groupNumber = String(groupNumberInput).replace(/^KYA\s*/i, '').trim();
+    if (!groupNumber) throw new Error('Enter a valid KYA group number.');
+    const where = encodeURIComponent(JSON.stringify({ vaultId: vaultIdForPassphrase(passphraseInput), encrypted: true, groupNumber }));
+    const result = await parseApiRequest<{ results?: Array<{ objectId: string; createdAt: string; backupCreatedAt?: string; backupFileName?: string; vaultId: string; file?: { url?: string; name?: string } }> }>(
+      `/classes/${BACK4APP_BACKUP_CLASS}?where=${where}&order=-createdAt&limit=100`,
+    );
+    const backups = (result.results || []).filter((item) => Boolean(item.objectId && item.file?.url)).map((item) => ({
+      objectId: item.objectId, name: item.backupFileName || item.file?.name || `KYA ${groupNumber} backup`,
+      createdAt: item.createdAt || '', backupCreatedAt: item.backupCreatedAt || item.createdAt || '',
+      fileUrl: item.file!.url!, vaultId: item.vaultId,
+    }));
+    return { success: true, backups, message: `Found ${backups.length} cloud backup(s) for KYA ${groupNumber}.` };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown group backup lookup error.';
+    return { success: false, backups: [], message: 'Could not load group cloud backups.', error: message };
+  }
+}
+
+/** Restore one matching group backup. The database layer refuses non-empty databases safely. */
+export async function restoreCloudGroupDatabaseBackup(
+  cloudBackup: CloudBackupFileInfo,
+  passphraseInput: string,
+  expectedGroupNumber: string | number,
+): Promise<{ success: boolean; message: string; error?: string; localFilePath?: string; localFileName?: string }> {
+  try {
+    requirePassphrase(passphraseInput);
+    const expected = String(expectedGroupNumber).replace(/^KYA\s*/i, '').trim();
+    if (!expected) throw new Error('Enter the KYA group number to restore.');
+    if (cloudBackup.vaultId !== vaultIdForPassphrase(passphraseInput)) throw new Error('The selected backup does not belong to this passphrase vault.');
+    const response = await fetch(cloudBackup.fileUrl);
+    if (!response.ok) throw new Error(`Could not download group backup (${response.status}).`);
+    const decrypted = decryptCloudBackup(await response.text(), passphraseInput);
+    const parsed = JSON.parse(decrypted) as { group_number?: string | number };
+    parseAndValidateBackup(decrypted);
+    const actual = String(parsed.group_number ?? '').replace(/^KYA\s*/i, '').trim();
+    if (actual !== expected) throw new Error(`Backup is for KYA ${actual || 'unknown'}, not KYA ${expected}. No data was changed.`);
+
+    const localFileName = `ebadsave_group_${expected}_recovery_${makeTimestamp()}.json`;
+    const localFilePath = `${getDocumentsDirectory()}${localFileName}`;
+    await FileSystem.writeAsStringAsync(localFilePath, decrypted, { encoding: FileSystem.EncodingType.UTF8 });
+    const saved = await FileSystem.readAsStringAsync(localFilePath, { encoding: FileSystem.EncodingType.UTF8 });
+    parseAndValidateBackup(saved);
+    await restoreGroupDatabaseBackup(saved, expected);
+    return { success: true, message: `KYA ${expected} restored. A verified local recovery copy was retained.`, localFilePath, localFileName };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown group restore error.';
+    return { success: false, message: 'Group cloud restore failed.', error: message };
+  }
+}
+
 /** Create a local JSON backup, verify it, and leave the file stored on the device. */
 export async function exportDatabaseBackup(): Promise<{
   success: boolean;
@@ -417,29 +543,17 @@ export async function uploadDatabaseBackupToCloud(
     const encryptedEnvelope = await encryptBackupForCloud(JSON.stringify(validated), passphrase);
     const cloudFileName = `${fileName.replace(/\.json$/i, '')}_encrypted_${Date.now()}.json`;
 
-    const uploadedFile = await parseApiRequest<{ name: string; url: string }>(
-      `/files/${encodeURIComponent(cloudFileName)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(encryptedEnvelope),
-      },
-    );
-
-    if (!uploadedFile?.name || !uploadedFile?.url) {
-      throw new Error('Back4App did not confirm that the encrypted file was uploaded.');
-    }
-
-    await parseApiRequest<{ objectId: string }>(`/classes/${BACK4APP_BACKUP_CLASS}`, {
+    // Use trusted Cloud Code to create the Parse.File and backup record.
+    // Never put the Back4App Master Key in this mobile app.
+    await parseApiRequest<{ result?: { objectId?: string } }>('/functions/uploadEbadsaveBackup', {
       method: 'POST',
       body: JSON.stringify({
-        file: { __type: 'File', name: uploadedFile.name, url: uploadedFile.url },
+        cloudFileName,
+        encryptedEnvelope,
         backupFileName: fileName,
         backupCreatedAt: validated.created_at,
         vaultId: vaultIdForPassphrase(passphrase),
         encrypted: true,
-        // Cloud records can be read but cannot be changed/deleted through a public client key.
-        ACL: { '*': { read: true, write: false } },
       }),
     });
 
@@ -655,7 +769,6 @@ export function formatFileSize(bytes: number): string {
 // The key is never sent to Back4App; it is used locally to encrypt/decrypt the backup.
 const AUTO_BACKUP_SECRET_KEY = 'ebadsave.back4app.autoBackupSecret.v1';
 const AUTO_BACKUP_LAST_SUCCESS_KEY = 'ebadsave.back4app.autoBackupLastSuccess.v1';
-const AUTO_BACKUP_CONSENT_KEY = 'ebadsave.back4app.autoBackupConsent.v1';
 const AUTO_BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const MAX_LOCAL_BACKUP_FILES = 2;
 const MAX_CLOUD_BACKUP_FILES = 2;
@@ -683,50 +796,10 @@ async function hasInternetConnection(): Promise<boolean> {
   }
 }
 
-/** Read whether the user has explicitly enabled automatic Back4App backups. */
-export async function getAutomaticCloudBackupConsent(): Promise<boolean> {
-  try {
-    return (await SecureStore.getItemAsync(AUTO_BACKUP_CONSENT_KEY)) === 'true';
-  } catch {
-    // Fail closed: a storage error must never silently enable cloud uploads.
-    return false;
-  }
-}
-
 /**
- * Save the user's consent choice. Call this from the consent/enable button.
- * Revoking consent immediately disables future automatic cloud uploads.
- */
-export async function setAutomaticCloudBackupConsent(consented: boolean): Promise<{
-  success: boolean;
-  consented: boolean;
-  message: string;
-  error?: string;
-}> {
-  try {
-    await SecureStore.setItemAsync(AUTO_BACKUP_CONSENT_KEY, consented ? 'true' : 'false');
-    if (!consented) {
-      // Do not leave a stale success timestamp that surprises the user after re-enabling.
-      await SecureStore.deleteItemAsync(AUTO_BACKUP_LAST_SUCCESS_KEY);
-    }
-    return {
-      success: true,
-      consented,
-      message: consented
-        ? 'Automatic encrypted Back4App backups are enabled.'
-        : 'Automatic Back4App uploads are disabled. Local backups remain available.',
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Could not save the consent choice.';
-    return { success: false, consented: false, message: 'Could not update backup consent.', error: message };
-  }
-}
-
-/**
- * Creates a verified local backup and uploads an encrypted copy to Back4App
- * only after the user has explicitly enabled automatic-backup consent.
- * Call on app launch/foreground; the six-hour interval prevents frequent uploads.
- * Consent is never bypassed by force=true.
+ * Creates an encrypted Back4App backup automatically when internet is available.
+ * It runs at most once every six hours unless force=true. A failed upload is retried
+ * on a later app start/network opportunity. Local backups remain on the device.
  */
 export async function runAutomaticCloudBackup(force = false): Promise<{
   success: boolean;
@@ -734,14 +807,6 @@ export async function runAutomaticCloudBackup(force = false): Promise<{
   message: string;
   error?: string;
 }> {
-  if (!(await getAutomaticCloudBackupConsent())) {
-    return {
-      success: true,
-      skipped: true,
-      message: 'Automatic cloud backup is paused until you enable it using the consent button.',
-    };
-  }
-
   if (automaticBackupInProgress) {
     return { success: true, skipped: true, message: 'An automatic backup is already running.' };
   }
@@ -770,7 +835,7 @@ export async function runAutomaticCloudBackup(force = false): Promise<{
     }
 
     await SecureStore.setItemAsync(AUTO_BACKUP_LAST_SUCCESS_KEY, String(Date.now()));
-    return { success: true, message: 'Automatic encrypted backup completed. The two newest local backups are retained.' };
+    return { success: true, message: 'Automatic encrypted backup completed.' };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown automatic backup error.';
     return { success: false, message: 'Automatic backup did not complete.', error: message };
