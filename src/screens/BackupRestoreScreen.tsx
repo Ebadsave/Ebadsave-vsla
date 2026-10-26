@@ -1,1786 +1,1008 @@
 import React, { useCallback, useState } from 'react';
 import {
-  Alert,
-  ActivityIndicator,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+Alert,
+ActivityIndicator,
+ScrollView,
+StyleSheet,
+Text,
+TextInput,
+TouchableOpacity,
+View,
 } from 'react-native';
-
 import * as DocumentPicker from 'expo-document-picker';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { getAutomaticCloudBackupConsent, setAutomaticCloudBackupConsent, runAutomaticCloudBackup } from '../database/backup';
+import { registerAutomaticBackupTask, unregisterAutomaticBackupTask } from '../services/backupBackground';
+import { getAllGroups, type GroupRecord } from '../database/database';
+import { exportGroupDatabaseBackup, uploadGroupDatabaseBackupToCloud, listCloudGroupBackups, restoreCloudGroupDatabaseBackup, type CloudBackupFileInfo } from './backup';
 
 import {
-  getAutomaticCloudBackupConsent,
-  setAutomaticCloudBackupConsent,
-  runAutomaticCloudBackup,
-  exportDatabaseBackup,
-  emailBackupFile,
-  listBackupFiles,
-  restoreDatabaseBackup,
-  deleteBackupFile,
-  formatFileSize,
+exportDatabaseBackup,
+emailBackupFile,
+listBackupFiles,
+restoreDatabaseBackup,
+deleteBackupFile,
+formatFileSize,
 } from '../database/backup';
 
-import {
-  registerAutomaticBackupTask,
-  unregisterAutomaticBackupTask,
-} from '../services/backupBackground';
-
-import {
-  getAllGroups,
-  type GroupRecord,
-} from '../database/database';
-
-import {
-  exportGroupDatabaseBackup,
-  uploadGroupDatabaseBackupToCloud,
-  listCloudGroupBackups,
-  restoreCloudGroupDatabaseBackup,
-  type CloudBackupFileInfo,
-} from './backup';
-
 interface BackupFile {
-  name: string;
-  path: string;
-  size: number;
-  timestamp: string;
+name: string;
+path: string;
+size: number;
+timestamp: string;
 }
 
 export default function BackupRestoreScreen() {
-  const navigation = useNavigation<any>();
+const navigation = useNavigation<any>();
+const [backupFiles, setBackupFiles] = useState<BackupFile[]>([]);
+const [loading, setLoading] = useState(false);
+const [exporting, setExporting] = useState(false);
+const [restoringFile, setRestoringFile] = useState<string | null>(null);
+const [cloudBackupConsent, setCloudBackupConsent] = useState<boolean | null>(null);
+const [changingConsent, setChangingConsent] = useState(false);
+const [cloudBackupStatus, setCloudBackupStatus] = useState('Checking automatic cloud backup status…');
+const [groups, setGroups] = useState<GroupRecord[]>([]);
+const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
+const [groupNumberInput, setGroupNumberInput] = useState('');
+const [recoveryPassphrase, setRecoveryPassphrase] = useState('');
+const [cloudGroupBackups, setCloudGroupBackups] = useState<CloudBackupFileInfo[]>([]);
+const [groupCloudBusy, setGroupCloudBusy] = useState(false);
 
-  const [backupFiles, setBackupFiles] = useState<BackupFile[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [exporting, setExporting] = useState(false);
-  const [restoringFile, setRestoringFile] = useState<string | null>(null);
-
-  const [cloudBackupConsent, setCloudBackupConsent] =
-    useState<boolean | null>(null);
-
-  const [changingConsent, setChangingConsent] = useState(false);
-
-  const [cloudBackupStatus, setCloudBackupStatus] = useState(
-    'Checking automatic cloud backup status...',
-  );
-
-  const [groups, setGroups] = useState<GroupRecord[]>([]);
-  const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
-
-  const [groupNumberInput, setGroupNumberInput] = useState('');
-  const [recoveryPassphrase, setRecoveryPassphrase] = useState('');
-
-  const [cloudGroupBackups, setCloudGroupBackups] =
-    useState<CloudBackupFileInfo[]>([]);
-
-  const [groupCloudBusy, setGroupCloudBusy] = useState(false);
-
-  // ---------------------------------------------------------
-  // BACK BUTTON
-  // ---------------------------------------------------------
-
-  const handleGoBack = () => {
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-      return;
-    }
-
-    Alert.alert(
-      'Navigation',
-      'There is no previous screen in the navigation history.',
+const loadConsent = useCallback(async () => {
+  try {
+    const enabled = await getAutomaticCloudBackupConsent();
+    setCloudBackupConsent(enabled);
+    setCloudBackupStatus(
+      enabled
+        ? 'Consent is enabled. Automatic encrypted cloud uploads are allowed; backups may run approximately every 6 hours when Android/iOS allows them.'
+        : 'Automatic cloud backup is off because consent is disabled. Local backups remain available.',
     );
-  };
+  } catch (error) {
+    console.error('Could not load automatic cloud backup setting:', error);
+    setCloudBackupStatus(
+      'Unable to verify the automatic cloud backup setting. Please reopen this screen.',
+    );
+  }
+}, []);
 
-  // ---------------------------------------------------------
-  // LOAD AUTOMATIC BACKUP CONSENT
-  // ---------------------------------------------------------
-
-  const loadConsent = useCallback(async () => {
-    try {
-      const enabled = await getAutomaticCloudBackupConsent();
-
-      setCloudBackupConsent(enabled);
-
-      setCloudBackupStatus(
-        enabled
-          ? 'Automatic encrypted cloud backups are enabled. Backups may run approximately every 6 hours when Android or iOS allows them.'
-          : 'Automatic cloud backup is disabled. Local backups remain available.',
+const loadGroups = useCallback(async () => {
+  try {
+    const result = await getAllGroups();
+    setGroups(result);
+    if (result.length) {
+      setSelectedGroupId((current) =>
+        current !== null && result.some((group) => group.id === current)
+          ? current
+          : result[0].id,
       );
-    } catch (error) {
-      console.error(
-        'Could not load automatic cloud backup setting:',
-        error,
-      );
-
-      setCloudBackupStatus(
-        'Unable to verify automatic cloud backup settings.',
-      );
-    }
-  }, []);
-
-  // ---------------------------------------------------------
-  // LOAD REGISTERED GROUPS
-  // ---------------------------------------------------------
-
-  const loadGroups = useCallback(async () => {
-    try {
-      const result = await getAllGroups();
-
-      setGroups(result);
-
-      setSelectedGroupId((currentId) => {
-        if (
-          currentId !== null &&
-          result.some((group) => group.id === currentId)
-        ) {
-          return currentId;
-        }
-
-        return result.length > 0 ? result[0].id : null;
-      });
-    } catch (error) {
-      console.error(
-        'Could not load registered groups:',
-        error,
-      );
-
-      setGroups([]);
+    } else {
       setSelectedGroupId(null);
     }
-  }, []);
+  } catch (error) {
+    console.error('Could not load groups for group backup:', error);
+  }
+}, [selectedGroupId]);
 
-  // ---------------------------------------------------------
-  // LOAD LOCAL BACKUP FILES
-  // ---------------------------------------------------------
+const handleUploadGroupBackup = async () => {
+  if (selectedGroupId === null) {
+    Alert.alert('Select Group', 'Choose the registered group to back up.');
+    return;
+  }
+  if (recoveryPassphrase.trim().length < 12) {
+    Alert.alert('Passphrase Required', 'Use a passphrase of at least 12 characters and keep it safe. You need it on another phone to decrypt the backup.');
+    return;
+  }
+  try {
+    setGroupCloudBusy(true);
+    const local = await exportGroupDatabaseBackup(selectedGroupId);
+    if (!local.success) throw new Error(local.error || local.message);
+    const result = await uploadGroupDatabaseBackupToCloud(selectedGroupId, recoveryPassphrase);
+    if (!result.success) throw new Error(result.error || result.message);
+    Alert.alert('Group Backup Saved', result.message);
+  } catch (error) {
+    Alert.alert('Group Backup Failed', error instanceof Error ? error.message : 'Could not upload group backup.');
+  } finally { setGroupCloudBusy(false); }
+};
 
-  const loadBackupFiles = useCallback(async () => {
-    try {
-      setLoading(true);
+const handleFindCloudGroupBackups = async () => {
+  if (!groupNumberInput.trim()) {
+    Alert.alert('Group Number Required', 'Enter the KYA group number, for example KYA2012.');
+    return;
+  }
+  if (recoveryPassphrase.trim().length < 12) {
+    Alert.alert('Passphrase Required', 'Enter the same cloud backup passphrase used when the backup was created.');
+    return;
+  }
+  try {
+    setGroupCloudBusy(true);
+    const result = await listCloudGroupBackups(recoveryPassphrase, groupNumberInput);
+    if (!result.success) throw new Error(result.error || result.message);
+    setCloudGroupBackups(result.backups);
+    if (!result.backups.length) Alert.alert('No Cloud Backups', result.message);
+  } catch (error) {
+    Alert.alert('Cloud Recovery', error instanceof Error ? error.message : 'Could not find backups.');
+  } finally { setGroupCloudBusy(false); }
+};
 
-      const files = await listBackupFiles();
+const handleRestoreCloudGroup = (backup: CloudBackupFileInfo) => {
+  Alert.alert('Restore Group', `Restore ${groupNumberInput.trim()} from this encrypted cloud backup? The local database must be empty; existing local records will be protected.`, [
+    { text: 'Cancel', style: 'cancel' },
+    { text: 'Restore', onPress: async () => {
+      try {
+        setGroupCloudBusy(true);
+        const result = await restoreCloudGroupDatabaseBackup(backup, recoveryPassphrase, groupNumberInput);
+        if (!result.success) throw new Error(result.error || result.message);
+        Alert.alert('Group Restored', result.message);
+      } catch (error) {
+        Alert.alert('Restore Stopped', error instanceof Error ? error.message : 'Could not restore this group.');
+      } finally { setGroupCloudBusy(false); }
+    } },
+  ]);
+};
 
-      setBackupFiles(files);
-    } catch (error) {
-      console.error('Error loading backups:', error);
+const loadBackupFiles = useCallback(async () => {
+try {
+setLoading(true);
+const files = await listBackupFiles();
+setBackupFiles(files);
+} catch (error) {
+console.error('Error loading backups:', error);
+Alert.alert('Error', 'Could not load backup files');
+} finally {
+setLoading(false);
+}
+}, []);
 
-      Alert.alert(
-        'Backup Files',
-        'Could not load local backup files.',
-      );
-    } finally {
-      setLoading(false);
+useFocusEffect(
+useCallback(() => {
+  void loadBackupFiles();
+  void loadConsent();
+  void loadGroups();
+}, [loadBackupFiles, loadConsent, loadGroups])
+);
+
+const handleCloudBackupConsent = async () => {
+  if (cloudBackupConsent === null) return;
+  const nextValue = !cloudBackupConsent;
+  try {
+    setChangingConsent(true);
+    const saved = await setAutomaticCloudBackupConsent(nextValue);
+    if (!saved.success) throw new Error(saved.error || saved.message);
+    if (nextValue) {
+      setCloudBackupConsent(true);
+      await registerAutomaticBackupTask();
+      setCloudBackupStatus('Consent enabled. Starting the first encrypted cloud backup.');
+      const result = await runAutomaticCloudBackup(true);
+      setCloudBackupStatus(result.message);
+      if (!result.success && !result.skipped) Alert.alert('Cloud Backup Pending', result.error || result.message);
+    } else {
+      await unregisterAutomaticBackupTask();
+      setCloudBackupConsent(false);
+      setCloudBackupStatus('Automatic cloud uploads are disabled. Local backups remain available.');
     }
-  }, []);
+  } catch (error) {
+    setCloudBackupStatus('Could not update the automatic backup setting.');
+    Alert.alert('Automatic Backup', error instanceof Error ? error.message : 'Could not update setting.');
+  } finally { setChangingConsent(false); }
+};
 
-  // ---------------------------------------------------------
-  // REFRESH SCREEN WHEN IT BECOMES ACTIVE
-  // ---------------------------------------------------------
+const handleExportBackup = async () => {
+try {
+setExporting(true);
 
-  useFocusEffect(
-    useCallback(() => {
-      void loadBackupFiles();
-      void loadConsent();
-      void loadGroups();
-    }, [loadBackupFiles, loadConsent, loadGroups]),
-  );
+  const result = await exportDatabaseBackup();
 
-  // ---------------------------------------------------------
-  // ENABLE OR DISABLE AUTOMATIC CLOUD BACKUP
-  // ---------------------------------------------------------
+  if (!result.success) {
+    Alert.alert('Backup Failed', result.error || result.message);
+    return;
+  }
 
-  const handleCloudBackupConsent = async () => {
-    if (cloudBackupConsent === null || changingConsent) {
-      return;
-    }
-
-    const nextValue = !cloudBackupConsent;
-
-    try {
-      setChangingConsent(true);
-
-      const saved = await setAutomaticCloudBackupConsent(nextValue);
-
-      if (!saved.success) {
-        throw new Error(
-          saved.error || saved.message || 'Could not save consent.',
-        );
-      }
-
-      if (nextValue) {
-        setCloudBackupConsent(true);
-
-        await registerAutomaticBackupTask();
-
-        setCloudBackupStatus(
-          'Consent enabled. Starting the first encrypted cloud backup.',
-        );
-
-        const result = await runAutomaticCloudBackup(true);
-
-        setCloudBackupStatus(result.message);
-
-        if (!result.success && !result.skipped) {
-          Alert.alert(
-            'Cloud Backup',
-            result.error || result.message,
-          );
+  Alert.alert('Backup Created', result.message, [
+    {
+      text: 'Send via Email',
+      onPress: () => {
+        if (result.filePath && result.fileName) {
+          handleEmailBackup(result.filePath, result.fileName);
         }
-      } else {
-        await unregisterAutomaticBackupTask();
-
-        setCloudBackupConsent(false);
-
-        setCloudBackupStatus(
-          'Automatic cloud uploads are disabled. Local backups remain available.',
-        );
-      }
-    } catch (error) {
-      setCloudBackupStatus(
-        'Could not update the automatic cloud backup setting.',
-      );
-
-      Alert.alert(
-        'Automatic Backup',
-        error instanceof Error
-          ? error.message
-          : 'Could not update the automatic backup setting.',
-      );
-    } finally {
-      setChangingConsent(false);
-    }
-  };
-
-  // ---------------------------------------------------------
-  // CREATE ENCRYPTED GROUP CLOUD BACKUP
-  // ---------------------------------------------------------
-
-  const handleUploadGroupBackup = async () => {
-    if (groupCloudBusy) {
-      return;
-    }
-
-    if (selectedGroupId === null) {
-      Alert.alert(
-        'Select Group',
-        'No locally registered group is available to back up. To recover a group from another phone, enter its group number below and use Find Group Backups in Cloud.',
-      );
-
-      return;
-    }
-
-    if (recoveryPassphrase.trim().length < 12) {
-      Alert.alert(
-        'Passphrase Required',
-        'Enter a passphrase containing at least 12 characters. Keep it safe because you will need the same passphrase to recover the backup.',
-      );
-
-      return;
-    }
-
-    try {
-      setGroupCloudBusy(true);
-
-      // Create the encrypted group backup.
-      const localResult = await exportGroupDatabaseBackup(
-        selectedGroupId,
-      );
-
-      if (!localResult.success) {
-        throw new Error(
-          localResult.error ||
-            localResult.message ||
-            'Could not create the group backup.',
-        );
-      }
-
-      // Upload the group backup to the cloud.
-      const uploadResult = await uploadGroupDatabaseBackupToCloud(
-        selectedGroupId,
-        recoveryPassphrase,
-      );
-
-      if (!uploadResult.success) {
-        throw new Error(
-          uploadResult.error ||
-            uploadResult.message ||
-            'The group backup could not be uploaded.',
-        );
-      }
-
-      Alert.alert(
-        'Group Backup Saved',
-        uploadResult.message ||
-          'The encrypted group backup was uploaded successfully.',
-      );
-    } catch (error) {
-      Alert.alert(
-        'Group Backup Failed',
-        error instanceof Error
-          ? error.message
-          : 'Could not upload the encrypted group backup.',
-      );
-    } finally {
-      setGroupCloudBusy(false);
-    }
-  };
-
-  // ---------------------------------------------------------
-  // FIND ENCRYPTED GROUP BACKUPS IN BACK4APP
-  // ---------------------------------------------------------
-
-  const handleFindCloudGroupBackups = async () => {
-    if (groupCloudBusy) {
-      return;
-    }
-
-    const normalizedGroupNumber = groupNumberInput
-      .trim()
-      .toUpperCase()
-      .replace(/\s+/g, '');
-
-    if (!normalizedGroupNumber) {
-      Alert.alert(
-        'Group Number Required',
-        'Enter the group number you want to recover, for example KYA2012.',
-      );
-
-      return;
-    }
-
-    if (!/^KYA\d+$/.test(normalizedGroupNumber)) {
-      Alert.alert(
-        'Invalid Group Number',
-        'Enter a valid group number, for example KYA2012 or KYA 2012.',
-      );
-
-      return;
-    }
-
-    if (recoveryPassphrase.trim().length < 12) {
-      Alert.alert(
-        'Passphrase Required',
-        'Enter the same passphrase that was used when the encrypted cloud backup was created.',
-      );
-
-      return;
-    }
-
-    try {
-      setGroupCloudBusy(true);
-
-      // Clear previous search results before searching again.
-      setCloudGroupBackups([]);
-
-      const result = await listCloudGroupBackups(
-        recoveryPassphrase,
-        normalizedGroupNumber,
-      );
-
-      if (!result.success) {
-        throw new Error(
-          result.error ||
-            result.message ||
-            'Could not search for cloud backups.',
-        );
-      }
-
-      setCloudGroupBackups(result.backups || []);
-
-      setGroupNumberInput(normalizedGroupNumber);
-
-      if (!result.backups || result.backups.length === 0) {
-        Alert.alert(
-          'No Cloud Backups Found',
-          result.message ||
-            `No backups were found for ${normalizedGroupNumber}. Check the group number, passphrase, and Back4App connection.`,
-        );
-
-        return;
-      }
-
-      Alert.alert(
-        'Cloud Backups Found',
-        `Found ${result.backups.length} backup(s) for ${normalizedGroupNumber}. Select a backup below to begin recovery.`,
-      );
-    } catch (error) {
-      Alert.alert(
-        'Cloud Recovery',
-        error instanceof Error
-          ? error.message
-          : 'Could not find group backups in the cloud.',
-      );
-    } finally {
-      setGroupCloudBusy(false);
-    }
-  };
-
-  // ---------------------------------------------------------
-  // RESTORE A GROUP FROM AN ENCRYPTED CLOUD BACKUP
-  // ---------------------------------------------------------
-
-  const handleRestoreCloudGroup = (
-    backup: CloudBackupFileInfo,
-  ) => {
-    if (groupCloudBusy) {
-      return;
-    }
-
-    if (!recoveryPassphrase.trim()) {
-      Alert.alert(
-        'Passphrase Required',
-        'Enter the backup passphrase before restoring this group.',
-      );
-
-      return;
-    }
-
-    Alert.alert(
-      'Restore Group',
-      `Restore ${groupNumberInput.trim()} from this encrypted cloud backup?\n\nThe recovery service must validate the backup and protect existing local records.`,
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Restore',
-          onPress: async () => {
-            try {
-              setGroupCloudBusy(true);
-
-              const result = await restoreCloudGroupDatabaseBackup(
-                backup,
-                recoveryPassphrase,
-                groupNumberInput.trim().toUpperCase().replace(/\s+/g, ''),
-              );
-
-              if (!result.success) {
-                throw new Error(
-                  result.error ||
-                    result.message ||
-                    'Could not restore the group.',
-                );
-              }
-
-              Alert.alert(
-                'Group Restored',
-                result.message ||
-                  'The group recovery operation completed successfully.',
-                [
-                  {
-                    text: 'OK',
-                    onPress: () => {
-                      void loadGroups();
-                      void loadBackupFiles();
-                    },
-                  },
-                ],
-              );
-            } catch (error) {
-              Alert.alert(
-                'Restore Stopped',
-                error instanceof Error
-                  ? error.message
-                  : 'Could not restore this group.',
-              );
-            } finally {
-              setGroupCloudBusy(false);
-            }
-          },
-        },
-      ],
-    );
-  };
-
-  // ---------------------------------------------------------
-  // CREATE LOCAL DATABASE BACKUP
-  // ---------------------------------------------------------
-
-  const handleExportBackup = async () => {
-    if (exporting) {
-      return;
-    }
-
-    try {
-      setExporting(true);
-
-      const result = await exportDatabaseBackup();
-
-      if (!result.success) {
-        Alert.alert(
-          'Backup Failed',
-          result.error || result.message,
-        );
-
-        return;
-      }
-
-      Alert.alert(
-        'Backup Created',
-        result.message,
-        [
-          {
-            text: 'Send via Email',
-            onPress: () => {
-              if (result.filePath && result.fileName) {
-                void handleEmailBackup(
-                  result.filePath,
-                  result.fileName,
-                );
-              }
-            },
-          },
-          {
-            text: 'Done',
-            style: 'cancel',
-            onPress: () => {
-              void loadBackupFiles();
-            },
-          },
-        ],
-      );
-    } catch (error) {
-      Alert.alert(
-        'Backup Error',
-        error instanceof Error
-          ? error.message
-          : 'Could not create the database backup.',
-      );
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  // ---------------------------------------------------------
-  // EMAIL BACKUP FILE
-  // ---------------------------------------------------------
-
-  const handleEmailBackup = async (
-    filePath: string,
-    fileName: string,
-  ) => {
-    try {
-      const result = await emailBackupFile(
-        filePath,
-        fileName,
-      );
-
-      if (!result.success) {
-        Alert.alert(
-          'Email Failed',
-          result.error || result.message,
-        );
-
-        return;
-      }
-
-      Alert.alert(
-        'Email Backup',
-        result.message,
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              void loadBackupFiles();
-            },
-          },
-        ],
-      );
-    } catch (error) {
-      Alert.alert(
-        'Email Backup',
-        error instanceof Error
-          ? error.message
-          : 'Could not email the backup file.',
-      );
-    }
-  };
-
-  // ---------------------------------------------------------
-  // RESTORE LOCAL BACKUP
-  // ---------------------------------------------------------
-
-  const handleRestoreBackup = (filePath: string) => {
-    Alert.alert(
-      'Restore Backup',
-      'Restoring this backup may overwrite current application data. Make sure you have a recent backup before continuing.',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Restore',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setRestoringFile(filePath);
-
-              const result = await restoreDatabaseBackup(
-                filePath,
-              );
-
-              if (!result.success) {
-                Alert.alert(
-                  'Restore Failed',
-                  result.error || result.message,
-                );
-
-                return;
-              }
-
-              Alert.alert(
-                'Restore Complete',
-                result.message,
-                [
-                  {
-                    text: 'OK',
-                    onPress: () => {
-                      void loadBackupFiles();
-                      void loadGroups();
-                    },
-                  },
-                ],
-              );
-            } catch (error) {
-              Alert.alert(
-                'Restore Failed',
-                error instanceof Error
-                  ? error.message
-                  : 'Could not restore the backup.',
-              );
-            } finally {
-              setRestoringFile(null);
-            }
-          },
-        },
-      ],
-    );
-  };
-
-  // ---------------------------------------------------------
-  // PICK AND RESTORE A BACKUP FILE
-  // ---------------------------------------------------------
-
-  const handlePickBackupFile = async () => {
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: 'application/json',
-        copyToCacheDirectory: true,
-        multiple: false,
-      });
-
-      if (result.canceled) {
-        return;
-      }
-
-      const file = result.assets?.[0];
-
-      if (!file?.uri) {
-        Alert.alert(
-          'Restore Failed',
-          'No backup file was selected.',
-        );
-
-        return;
-      }
-
-      const fileName = file.name || 'Selected backup';
-
-      Alert.alert(
-        'Restore Backup',
-        `Restore "${fileName}"?\n\nMake sure you have a recent backup of your current data before continuing.`,
-        [
-          {
-            text: 'Cancel',
-            style: 'cancel',
-          },
-          {
-            text: 'Restore',
-            style: 'destructive',
-            onPress: async () => {
-              try {
-                setRestoringFile(file.uri);
-
-                const restoreResult =
-                  await restoreDatabaseBackup(file.uri);
-
-                if (!restoreResult.success) {
-                  Alert.alert(
-                    'Restore Failed',
-                    restoreResult.error ||
-                      restoreResult.message,
-                  );
-
-                  return;
-                }
-
-                Alert.alert(
-                  'Restore Complete',
-                  restoreResult.message,
-                  [
-                    {
-                      text: 'OK',
-                      onPress: () => {
-                        void loadBackupFiles();
-                        void loadGroups();
-                      },
-                    },
-                  ],
-                );
-              } catch (error) {
-                Alert.alert(
-                  'Restore Failed',
-                  error instanceof Error
-                    ? error.message
-                    : 'Could not restore the selected backup file.',
-                );
-              } finally {
-                setRestoringFile(null);
-              }
-            },
-          },
-        ],
-      );
-    } catch (error) {
-      Alert.alert(
-        'Backup File',
-        error instanceof Error
-          ? error.message
-          : 'Could not select the backup file.',
-      );
-    }
-  };
-
-  // ---------------------------------------------------------
-  // DELETE LOCAL BACKUP
-  // ---------------------------------------------------------
-
-  const handleDeleteBackup = (filePath: string) => {
-    Alert.alert(
-      'Delete Backup',
-      'This backup file will be permanently deleted from this device.',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const result = await deleteBackupFile(filePath);
-
-              if (!result.success) {
-                Alert.alert(
-                  'Delete Failed',
-                  result.error || result.message,
-                );
-
-                return;
-              }
-
-              await loadBackupFiles();
-            } catch (error) {
-              Alert.alert(
-                'Delete Failed',
-                error instanceof Error
-                  ? error.message
-                  : 'Could not delete the backup.',
-              );
-            }
-          },
-        },
-      ],
-    );
-  };
-
-  // ---------------------------------------------------------
-  // SCREEN UI
-  // ---------------------------------------------------------
-
-  return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      keyboardShouldPersistTaps="handled"
-    >
-      {/* HEADER AND BACK BUTTON */}
-
-      <View style={styles.header}>
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel="Go back to previous screen"
-          style={styles.backButton}
-          onPress={handleGoBack}
-        >
-          <Text style={styles.backButtonText}>
-            {'‹  Back'}
-          </Text>
-        </TouchableOpacity>
-
-        <Text style={styles.title}>
-          Data Backup & Restore
-        </Text>
-
-        <Text style={styles.subtitle}>
-          Protect your group data and recover it on another phone.
-        </Text>
-      </View>
-
-      {/* AUTOMATIC CLOUD BACKUP */}
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>
-          Automatic Back4App Backup
-        </Text>
-
-        <Text style={styles.bodyText}>
-          Enable consent to allow encrypted cloud backups
-          approximately every 6 hours when Android or iOS
-          allows them. Actual timing depends on the operating
-          system. Local SQLite records are not changed simply
-          by uploading a backup.
-        </Text>
-
-        <TouchableOpacity
-          accessibilityRole="button"
-          style={[
-            styles.consentButton,
-            cloudBackupConsent === true
-              ? styles.disableConsentButton
-              : null,
-            (changingConsent ||
-              cloudBackupConsent === null) &&
-              styles.disabledButton,
-          ]}
-          onPress={() => {
-            void handleCloudBackupConsent();
-          }}
-          disabled={
-            changingConsent ||
-            cloudBackupConsent === null
-          }
-        >
-          {changingConsent ? (
-            <ActivityIndicator color="#ffffff" />
-          ) : (
-            <Text style={styles.consentButtonText}>
-              {cloudBackupConsent === null
-                ? 'Checking Automatic Backup...'
-                : cloudBackupConsent
-                  ? 'Disable Automatic Cloud Backup'
-                  : 'Enable Automatic Cloud Backup'}
-            </Text>
-          )}
-        </TouchableOpacity>
-
-        <View style={styles.infoBox}>
-          <Text style={styles.infoText}>
-            {cloudBackupConsent === null
-              ? 'Checking saved automatic backup consent...'
-              : cloudBackupConsent
-                ? 'Consent enabled: automatic encrypted cloud backups are allowed.'
-                : 'Consent disabled: automatic cloud backups are turned off.'}
-          </Text>
-        </View>
-
-        <Text style={styles.bodyText}>
-          {cloudBackupStatus}
-        </Text>
-      </View>
-
-      {/* GROUP CLOUD BACKUP AND RECOVERY */}
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>
-          Group Cloud Backup & Recovery
-        </Text>
-
-        <Text style={styles.bodyText}>
-          Create an encrypted backup for a registered group,
-          or find and restore an existing group backup on
-          another phone. Use a passphrase of at least
-          12 characters and keep it safe. A forgotten
-          passphrase cannot be recovered by the app.
-        </Text>
-
-        {/* REGISTERED GROUPS */}
-
-        {groups.length > 0 ? (
-          <>
-            <Text style={styles.fieldLabel}>
-              Select the group to back up
-            </Text>
-
-            {groups.map((group) => (
-              <TouchableOpacity
-                key={group.id}
-                accessibilityRole="button"
-                onPress={() => {
-                  setSelectedGroupId(group.id);
-                }}
-                style={[
-                  styles.groupChoice,
-                  selectedGroupId === group.id &&
-                    styles.groupChoiceSelected,
-                ]}
-              >
-                <Text style={styles.groupChoiceText}>
-                  {selectedGroupId === group.id
-                    ? '✓  '
-                    : ''}
-                  KYA {group.group_number}
-                  {' — '}
-                  {group.group_name}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </>
-        ) : (
-          <View style={styles.emptyCloudBox}>
-            <Text style={styles.emptyCloudTitle}>
-              No groups on this phone yet
-            </Text>
-
-            <Text style={styles.emptyCloudText}>
-              You can still search for an existing cloud
-              backup below. Having no local group does not
-              prove that your cloud backup has been deleted.
-            </Text>
-          </View>
-        )}
-
-        {/* SHARED PASSPHRASE INPUT */}
-
-        <Text style={styles.fieldLabel}>
-          Cloud backup passphrase
-        </Text>
-
-        <TextInput
-          value={recoveryPassphrase}
-          onChangeText={setRecoveryPassphrase}
-          placeholder="Enter passphrase (12+ characters)"
-          secureTextEntry
-          autoCapitalize="none"
-          autoCorrect={false}
-          style={styles.recoveryInput}
-          editable={!groupCloudBusy}
-          accessibilityLabel="Cloud backup passphrase"
-        />
-
-        {/* CREATE GROUP BACKUP */}
-
-        <TouchableOpacity
-          accessibilityRole="button"
-          style={[
-            styles.button,
-            styles.primaryButton,
-            groupCloudBusy && styles.disabledButton,
-          ]}
-          onPress={() => {
-            void handleUploadGroupBackup();
-          }}
-          disabled={groupCloudBusy}
-        >
-          {groupCloudBusy ? (
-            <ActivityIndicator color="#ffffff" />
-          ) : (
-            <Text style={styles.buttonText}>
-              Create Encrypted Group Cloud Backup
-            </Text>
-          )}
-        </TouchableOpacity>
-
-        {/* GROUP NUMBER TO RECOVER */}
-
-        <Text style={[styles.fieldLabel, styles.fieldLabelSpaced]}>
-          Group number to recover
-        </Text>
-
-        <TextInput
-          value={groupNumberInput}
-          onChangeText={setGroupNumberInput}
-          placeholder="Enter group number (e.g. KYA2012)"
-          autoCapitalize="characters"
-          autoCorrect={false}
-          style={styles.recoveryInput}
-          editable={!groupCloudBusy}
-          accessibilityLabel="Group number to recover"
-        />
-
-        {/* FIND CLOUD BACKUPS */}
-
-        <TouchableOpacity
-          accessibilityRole="button"
-          style={[
-            styles.button,
-            styles.importButton,
-            groupCloudBusy && styles.disabledButton,
-          ]}
-          onPress={() => {
-            void handleFindCloudGroupBackups();
-          }}
-          disabled={groupCloudBusy}
-        >
-          {groupCloudBusy ? (
-            <ActivityIndicator color="#1d4ed8" />
-          ) : (
-            <Text style={styles.importButtonText}>
-              Find Group Backups in Cloud
-            </Text>
-          )}
-        </TouchableOpacity>
-
-        {/* CLOUD BACKUP SEARCH RESULTS */}
-
-        {cloudGroupBackups.length > 0 && (
-          <View style={styles.cloudResults}>
-            <Text style={styles.resultsTitle}>
-              Available Cloud Backups
-            </Text>
-
-            {cloudGroupBackups.map((backup) => (
-              <View
-                key={backup.objectId}
-                style={styles.backupCard}
-              >
-                <View style={styles.backupInfo}>
-                  <Text
-                    style={styles.backupName}
-                    numberOfLines={2}
-                  >
-                    {backup.name}
-                  </Text>
-
-                  <Text style={styles.backupDetails}>
-                    {backup.backupCreatedAt ||
-                      backup.createdAt ||
-                      'Backup date unavailable'}
-                  </Text>
-                </View>
-
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  accessibilityLabel={`Restore ${backup.name}`}
-                  style={[
-                    styles.cloudRestoreButton,
-                    groupCloudBusy &&
-                      styles.disabledButton,
-                  ]}
-                  onPress={() => {
-                    handleRestoreCloudGroup(backup);
-                  }}
-                  disabled={groupCloudBusy}
-                >
-                  <Text style={styles.cloudRestoreButtonText}>
-                    Restore
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            ))}
-          </View>
-        )}
-      </View>
-
-      {/* CREATE LOCAL BACKUP */}
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>
-          Create Local Backup
-        </Text>
-
-        <View style={styles.infoBox}>
-          <Text style={styles.infoText}>
-            Create a backup of your application data,
-            including groups, members, meetings, and
-            financial transactions, according to the
-            existing backup implementation. You can
-            save the backup file on your device and
-            email it to yourself.
-          </Text>
-        </View>
-
-        <TouchableOpacity
-          accessibilityRole="button"
-          style={[
-            styles.button,
-            styles.primaryButton,
-            exporting && styles.disabledButton,
-          ]}
-          onPress={() => {
-            void handleExportBackup();
-          }}
-          disabled={exporting}
-        >
-          {exporting ? (
-            <ActivityIndicator
-              color="#ffffff"
-              size="small"
-            />
-          ) : (
-            <>
-              <Text style={styles.buttonIcon}>
-                📦
-              </Text>
-
-              <Text style={styles.buttonText}>
-                Create Backup
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          accessibilityRole="button"
-          style={[
-            styles.button,
-            styles.importButton,
-            restoringFile !== null &&
-              styles.disabledButton,
-          ]}
-          onPress={() => {
-            void handlePickBackupFile();
-          }}
-          disabled={restoringFile !== null}
-        >
-          {restoringFile !== null ? (
-            <ActivityIndicator
-              color="#1d4ed8"
-              size="small"
-            />
-          ) : (
-            <>
-              <Text style={styles.buttonIcon}>
-                📂
-              </Text>
-
-              <Text style={styles.importButtonText}>
-                Import Backup File
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      {/* SAVED LOCAL BACKUPS */}
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>
-          Saved Backups
-        </Text>
-
-        {loading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator
-              size="large"
-              color="#16a34a"
-            />
-
-            <Text style={styles.loadingText}>
-              Loading backups...
-            </Text>
-          </View>
-        ) : backupFiles.length === 0 ? (
-          <View style={styles.emptyBox}>
-            <Text style={styles.emptyTitle}>
-              No local backups yet
-            </Text>
-
-            <Text style={styles.emptyText}>
-              Create a backup using the button above.
-            </Text>
-          </View>
-        ) : (
-          <View>
-            {backupFiles.map((file, index) => (
-              <View
-                key={`${file.path}-${index}`}
-                style={styles.backupCard}
-              >
-                <View style={styles.backupInfo}>
-                  <Text
-                    style={styles.backupName}
-                    numberOfLines={2}
-                  >
-                    {file.name}
-                  </Text>
-
-                  <Text style={styles.backupDetails}>
-                    {file.timestamp}
-                    {' • '}
-                    {formatFileSize(file.size)}
-                  </Text>
-                </View>
-
-                <View style={styles.backupActions}>
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    accessibilityLabel="Restore local backup"
-                    style={[
-                      styles.iconButton,
-                      styles.restoreButton,
-                      restoringFile === file.path &&
-                        styles.disabledButton,
-                    ]}
-                    onPress={() => {
-                      handleRestoreBackup(file.path);
-                    }}
-                    disabled={restoringFile !== null}
-                  >
-                    {restoringFile === file.path ? (
-                      <ActivityIndicator
-                        color="#16a34a"
-                        size="small"
-                      />
-                    ) : (
-                      <Text style={styles.buttonIcon}>
-                        ↩️
-                      </Text>
-                    )}
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    accessibilityLabel="Email local backup"
-                    style={[
-                      styles.iconButton,
-                      styles.emailButton,
-                    ]}
-                    onPress={() => {
-                      void handleEmailBackup(
-                        file.path,
-                        file.name,
-                      );
-                    }}
-                  >
-                    <Text style={styles.buttonIcon}>
-                      ✉️
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    accessibilityLabel="Delete local backup"
-                    style={[
-                      styles.iconButton,
-                      styles.deleteButton,
-                    ]}
-                    onPress={() => {
-                      handleDeleteBackup(file.path);
-                    }}
-                  >
-                    <Text style={styles.buttonIcon}>
-                      🗑️
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
-      </View>
-
-      {/* RESTORE INSTRUCTIONS */}
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>
-          After Reinstalling
-        </Text>
-
-        <View style={styles.instructionBox}>
-          <Text style={styles.instructionTitle}>
-            How to restore a local backup
-          </Text>
-
-          {[
-            'Install Ebadsave VSLA.',
-            'Open Data Backup & Restore.',
-            'Tap Import Backup File.',
-            'Select your backup JSON file.',
-            'Confirm restoration and wait for completion.',
-          ].map((step, index) => (
-            <View
-              key={step}
-              style={styles.instructionStep}
-            >
-              <Text style={styles.stepNumber}>
-                {index + 1}
-              </Text>
-
-              <Text style={styles.stepText}>
-                {step}
-              </Text>
-            </View>
-          ))}
-        </View>
-      </View>
-
-      {/* BEST PRACTICES */}
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>
-          Best Practices
-        </Text>
-
-        <View style={styles.tipBox}>
-          <Text style={styles.tipTitle}>
-            Keep the passphrase safe
-          </Text>
-
-          <Text style={styles.tipText}>
-            An encrypted group backup cannot be recovered
-            without the correct passphrase.
-          </Text>
-        </View>
-
-        <View style={styles.tipBox}>
-          <Text style={styles.tipTitle}>
-            Keep an additional backup
-          </Text>
-
-          <Text style={styles.tipText}>
-            Keep a separate backup copy in a secure
-            location in case your phone is lost or damaged.
-          </Text>
-        </View>
-
-        <View style={styles.tipBox}>
-          <Text style={styles.tipTitle}>
-            Verify cloud recovery
-          </Text>
-
-          <Text style={styles.tipText}>
-            Before relying on a cloud backup, verify that
-            it can be found and restored using the correct
-            group number and passphrase.
-          </Text>
-        </View>
-      </View>
-
-      {/* BOTTOM BACK BUTTON */}
-
-      <TouchableOpacity
-        accessibilityRole="button"
-        style={styles.bottomBackButton}
-        onPress={handleGoBack}
-      >
-        <Text style={styles.bottomBackButtonText}>
-          ‹  Return to Previous Screen
-        </Text>
-      </TouchableOpacity>
-    </ScrollView>
-  );
+      },
+    },
+    {
+      text: 'Done',
+      onPress: () => loadBackupFiles(),
+      style: 'cancel',
+    },
+  ]);
+} catch (error) {
+  const message =
+    error instanceof Error ? error.message : 'Unknown error';
+
+  Alert.alert('Error', message);
+} finally {
+  setExporting(false);
 }
 
-// ---------------------------------------------------------
-// STYLES
-// ---------------------------------------------------------
+};
+
+const handleEmailBackup = async (
+filePath: string,
+fileName: string
+) => {
+try {
+const result = await emailBackupFile(filePath, fileName);
+
+  if (!result.success) {
+    Alert.alert('Email Failed', result.error || result.message);
+    return;
+  }
+
+  Alert.alert('Email Sent', result.message, [
+    {
+      text: 'OK',
+      onPress: () => loadBackupFiles(),
+    },
+  ]);
+} catch (error) {
+  const message =
+    error instanceof Error ? error.message : 'Unknown error';
+
+  Alert.alert('Error', message);
+}
+
+};
+
+const handleRestoreBackup = async (filePath: string) => {
+Alert.alert(
+'Restore Backup',
+'This will overwrite all current data. Are you sure?',
+[
+{
+text: 'Cancel',
+style: 'cancel',
+},
+{
+text: 'Restore',
+style: 'destructive',
+onPress: async () => {
+try {
+setRestoringFile(filePath);
+
+          const result = await restoreDatabaseBackup(filePath);
+
+          if (!result.success) {
+            Alert.alert(
+              'Restore Failed',
+              result.error || result.message
+            );
+            return;
+          }
+
+          Alert.alert('Restore Complete', result.message, [
+            {
+              text: 'OK',
+              onPress: () => loadBackupFiles(),
+            },
+          ]);
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : 'Unknown error';
+
+          Alert.alert('Restore Failed', message);
+        } finally {
+          setRestoringFile(null);
+        }
+      },
+    },
+  ]
+);
+
+};
+
+const handlePickBackupFile = async () => {
+try {
+const result = await DocumentPicker.getDocumentAsync({
+type: 'application/json',
+copyToCacheDirectory: true,
+multiple: false,
+});
+
+  if (result.canceled) {
+    return;
+  }
+
+  const file = result.assets?.[0];
+
+  if (!file?.uri) {
+    Alert.alert(
+      'Restore Failed',
+      'No backup file was selected.'
+    );
+    return;
+  }
+
+  const fileName = file.name || 'Selected backup';
+
+  Alert.alert(
+    'Restore Backup',
+    `Restore "${fileName}"?\n\nThis will overwrite all current data.`,
+    [
+      {
+        text: 'Cancel',
+        style: 'cancel',
+      },
+      {
+        text: 'Restore',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            setRestoringFile(file.uri);
+
+            const restoreResult =
+              await restoreDatabaseBackup(file.uri);
+
+            if (!restoreResult.success) {
+              Alert.alert(
+                'Restore Failed',
+                restoreResult.error ||
+                  restoreResult.message
+              );
+              return;
+            }
+
+            Alert.alert(
+              'Restore Complete',
+              restoreResult.message,
+              [
+                {
+                  text: 'OK',
+                  onPress: () => loadBackupFiles(),
+                },
+              ]
+            );
+          } catch (error) {
+            const message =
+              error instanceof Error
+                ? error.message
+                : 'Unknown error';
+
+            Alert.alert(
+              'Restore Failed',
+              message
+            );
+          } finally {
+            setRestoringFile(null);
+          }
+        },
+      },
+    ]
+  );
+} catch (error) {
+  const message =
+    error instanceof Error
+      ? error.message
+      : 'Could not select backup file';
+
+  Alert.alert('Restore Failed', message);
+}
+
+};
+
+const handleDeleteBackup = async (filePath: string) => {
+Alert.alert(
+'Delete Backup',
+'This backup will be permanently deleted.',
+[
+{
+text: 'Cancel',
+style: 'cancel',
+},
+{
+text: 'Delete',
+style: 'destructive',
+onPress: async () => {
+try {
+const result =
+await deleteBackupFile(filePath);
+
+          if (!result.success) {
+            Alert.alert(
+              'Delete Failed',
+              result.error || result.message
+            );
+            return;
+          }
+
+          await loadBackupFiles();
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : 'Unknown error';
+
+          Alert.alert('Error', message);
+        }
+      },
+    },
+  ]
+);
+
+};
+
+return (
+<ScrollView
+style={styles.container}
+contentContainerStyle={styles.content}
+>
+<View style={styles.header}>
+<TouchableOpacity
+  accessibilityRole="button"
+  accessibilityLabel="Go back to previous screen"
+  style={styles.backButton}
+  onPress={() => { if (navigation.canGoBack()) navigation.goBack(); else Alert.alert('Navigation', 'There is no previous screen to return to.'); }}
+>
+  <Text style={styles.backButtonText}>‹  Back</Text>
+</TouchableOpacity>
+<Text style={styles.title}>
+Data Backup & Restore
+</Text>
+
+    <Text style={styles.subtitle}>
+      Backup your data before uninstalling the app
+    </Text>
+  </View>
+
+  <View style={styles.section}>
+  <Text style={styles.sectionTitle}>Automatic Back4App Backup</Text>
+  <Text style={styles.bodyText}>Enable consent to allow encrypted cloud backups approximately every 6 hours. Android/iOS controls the exact run time. Backups can run while you use another app when the operating system allows it. Your local SQLite database is not changed by backup uploads.</Text>
+  <TouchableOpacity style={[styles.consentButton, cloudBackupConsent === true ? styles.disableConsentButton : null, (changingConsent || cloudBackupConsent === null) && styles.disabledButton]} onPress={() => void handleCloudBackupConsent()} disabled={changingConsent || cloudBackupConsent === null}>
+    {changingConsent ? <ActivityIndicator color="#fff" /> : <Text style={styles.consentButtonText}>{cloudBackupConsent === null ? 'Checking Automatic Backup…' : cloudBackupConsent ? 'Disable Automatic Cloud Backup' : 'Enable Automatic Cloud Backup (Consent)'}</Text>}
+  </TouchableOpacity>
+  <View style={styles.infoBox}><Text style={styles.infoText}>{cloudBackupConsent === null ? 'Checking saved automatic backup consent…' : cloudBackupConsent ? 'Consent enabled: automatic encrypted cloud backups are allowed.' : 'Consent disabled: automatic cloud backups are turned off.'}</Text></View>
+  <Text style={styles.bodyText}>{cloudBackupStatus}</Text>
+</View>
+
+<View style={styles.section}>
+  <Text style={styles.sectionTitle}>Group Cloud Backup & Recovery</Text>
+  <Text style={styles.bodyText}>Create an encrypted backup for one group, or recover that group on another phone. Use a passphrase of at least 12 characters and keep it somewhere safe. The app cannot recover a forgotten passphrase.</Text>
+  {groups.length ? groups.map((group) => (
+    <TouchableOpacity key={group.id} onPress={() => setSelectedGroupId(group.id)} style={[styles.groupChoice, selectedGroupId === group.id && styles.groupChoiceSelected]}>
+      <Text style={styles.groupChoiceText}>{selectedGroupId === group.id ? '✓ ' : ''}KYA {group.group_number} — {group.group_name}</Text>
+    </TouchableOpacity>
+  )) : <Text style={styles.bodyText}>No locally registered groups found for creating a group backup.</Text>}
+  <TextInput value={recoveryPassphrase} onChangeText={setRecoveryPassphrase} placeholder="Cloud backup passphrase (12+ characters)" secureTextEntry autoCapitalize="none" style={styles.recoveryInput} />
+  <TouchableOpacity accessibilityRole="button" style={[styles.button, styles.primaryButton, groupCloudBusy && styles.disabledButton]} onPress={() => void handleUploadGroupBackup()} disabled={groupCloudBusy}>
+    {groupCloudBusy ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Create Encrypted Group Cloud Backup</Text>}
+  </TouchableOpacity>
+  <TextInput value={groupNumberInput} onChangeText={setGroupNumberInput} placeholder="Group number to restore (e.g. KYA2012)" autoCapitalize="characters" style={styles.recoveryInput} />
+  <TouchableOpacity accessibilityRole="button" style={[styles.button, styles.importButton, groupCloudBusy && styles.disabledButton]} onPress={() => void handleFindCloudGroupBackups()} disabled={groupCloudBusy}>
+    <Text style={styles.importButtonText}>Find Group Backups in Cloud</Text>
+  </TouchableOpacity>
+  {cloudGroupBackups.map((backup) => (
+    <View key={backup.objectId} style={styles.backupCard}>
+      <View style={styles.backupInfo}><Text style={styles.backupName}>{backup.name}</Text><Text style={styles.backupDetails}>{backup.backupCreatedAt || backup.createdAt}</Text></View>
+      <TouchableOpacity style={[styles.iconButton, styles.restoreButton, groupCloudBusy && styles.disabledButton]} onPress={() => handleRestoreCloudGroup(backup)} disabled={groupCloudBusy}><Text style={styles.buttonIcon}>↩️</Text></TouchableOpacity>
+    </View>
+  ))}
+</View>
+
+<View style={styles.section}>
+    <Text style={styles.sectionTitle}>
+      Create Backup
+    </Text>
+
+    <View style={styles.infoBox}>
+      <Text style={styles.infoText}>
+        💾 Create a backup of all your data including
+        groups, members, meetings, and financial
+        transactions. The backup file will be saved to
+        your device and can be emailed to yourself.
+      </Text>
+    </View>
+
+    <TouchableOpacity
+      style={[
+        styles.button,
+        styles.primaryButton,
+        exporting && styles.disabledButton,
+      ]}
+      onPress={handleExportBackup}
+      disabled={exporting}
+    >
+      {exporting ? (
+        <ActivityIndicator
+          color="#ffffff"
+          size="small"
+        />
+      ) : (
+        <>
+          <Text style={styles.buttonIcon}>
+            📦
+          </Text>
+
+          <Text style={styles.buttonText}>
+            Create Backup
+          </Text>
+        </>
+      )}
+    </TouchableOpacity>
+
+    <TouchableOpacity
+      style={[
+        styles.button,
+        styles.importButton,
+        restoringFile !== null &&
+          styles.disabledButton,
+      ]}
+      onPress={handlePickBackupFile}
+      disabled={restoringFile !== null}
+    >
+      {restoringFile ? (
+        <ActivityIndicator
+          color="#1d4ed8"
+          size="small"
+        />
+      ) : (
+        <>
+          <Text style={styles.buttonIcon}>
+            📂
+          </Text>
+
+          <Text style={styles.importButtonText}>
+            Import Backup File
+          </Text>
+        </>
+      )}
+    </TouchableOpacity>
+  </View>
+
+  <View style={styles.section}>
+    <Text style={styles.sectionTitle}>
+      Saved Backups
+    </Text>
+
+    {loading ? (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator
+          size="large"
+          color="#16a34a"
+        />
+
+        <Text style={styles.loadingText}>
+          Loading backups...
+        </Text>
+      </View>
+    ) : backupFiles.length === 0 ? (
+      <View style={styles.emptyBox}>
+        <Text style={styles.emptyTitle}>
+          No backups yet
+        </Text>
+
+        <Text style={styles.emptyText}>
+          Create your first backup using the button
+          above
+        </Text>
+      </View>
+    ) : (
+      <View>
+        {backupFiles.map((file, index) => (
+          <View
+            key={`${file.path}-${index}`}
+            style={styles.backupCard}
+          >
+            <View style={styles.backupInfo}>
+              <Text
+                style={styles.backupName}
+                numberOfLines={2}
+              >
+                {file.name}
+              </Text>
+
+              <Text style={styles.backupDetails}>
+                {file.timestamp} •{' '}
+                {formatFileSize(file.size)}
+              </Text>
+            </View>
+
+            <View style={styles.backupActions}>
+              <TouchableOpacity
+                style={[
+                  styles.iconButton,
+                  styles.restoreButton,
+                  restoringFile === file.path &&
+                    styles.disabledButton,
+                ]}
+                onPress={() =>
+                  handleRestoreBackup(file.path)
+                }
+                disabled={restoringFile !== null}
+              >
+                {restoringFile === file.path ? (
+                  <ActivityIndicator
+                    color="#16a34a"
+                    size="small"
+                  />
+                ) : (
+                  <Text style={styles.buttonIcon}>
+                    ↩️
+                  </Text>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.iconButton,
+                  styles.emailButton,
+                ]}
+                onPress={() =>
+                  handleEmailBackup(
+                    file.path,
+                    file.name
+                  )
+                }
+              >
+                <Text style={styles.buttonIcon}>
+                  ✉️
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.iconButton,
+                  styles.deleteButton,
+                ]}
+                onPress={() =>
+                  handleDeleteBackup(file.path)
+                }
+              >
+                <Text style={styles.buttonIcon}>
+                  🗑️
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ))}
+      </View>
+    )}
+  </View>
+
+  <View style={styles.section}>
+    <Text style={styles.sectionTitle}>
+      After Reinstalling
+    </Text>
+
+    <View style={styles.instructionBox}>
+      <Text style={styles.instructionTitle}>
+        How to Restore:
+      </Text>
+
+      <View style={styles.instructionStep}>
+        <Text style={styles.stepNumber}>1</Text>
+        <Text style={styles.stepText}>
+          Install Ebadsave VSLA
+        </Text>
+      </View>
+
+      <View style={styles.instructionStep}>
+        <Text style={styles.stepNumber}>2</Text>
+        <Text style={styles.stepText}>
+          Open Data Backup & Restore
+        </Text>
+      </View>
+
+      <View style={styles.instructionStep}>
+        <Text style={styles.stepNumber}>3</Text>
+        <Text style={styles.stepText}>
+          Tap "Import Backup File"
+        </Text>
+      </View>
+
+      <View style={styles.instructionStep}>
+        <Text style={styles.stepNumber}>4</Text>
+        <Text style={styles.stepText}>
+          Select your Ebadsave backup JSON file
+        </Text>
+      </View>
+
+      <View style={styles.instructionStep}>
+        <Text style={styles.stepNumber}>5</Text>
+        <Text style={styles.stepText}>
+          Confirm Restore and wait for completion
+        </Text>
+      </View>
+    </View>
+  </View>
+
+  <View style={styles.section}>
+    <Text style={styles.sectionTitle}>
+      💡 Best Practices
+    </Text>
+
+    <View style={styles.tipBox}>
+      <Text style={styles.tipTitle}>
+        Email backups to yourself
+      </Text>
+
+      <Text style={styles.tipText}>
+        After creating a backup, send it via email
+        as a second safeguard.
+      </Text>
+    </View>
+
+    <View style={styles.tipBox}>
+      <Text style={styles.tipTitle}>
+        Keep multiple backups
+      </Text>
+
+      <Text style={styles.tipText}>
+        Don't delete old backups. You can restore
+        from any of them.
+      </Text>
+    </View>
+
+    <View style={styles.tipBox}>
+      <Text style={styles.tipTitle}>
+        Store in cloud
+      </Text>
+
+      <Text style={styles.tipText}>
+        Save backup files to Google Drive or
+        Dropbox for extra safety.
+      </Text>
+    </View>
+  </View>
+</ScrollView>
+
+);
+}
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f9fafb',
-  },
+container: {
+flex: 1,
+backgroundColor: '#f9fafb',
+},
 
-  content: {
-    padding: 16,
-    paddingBottom: 40,
-  },
+content: {
+padding: 16,
+paddingBottom: 32,
+},
 
-  header: {
-    marginBottom: 24,
-  },
+header: {
+marginBottom: 24,
+},
 
-  backButton: {
-    alignSelf: 'flex-start',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    marginBottom: 14,
-    borderRadius: 8,
-    backgroundColor: '#e5e7eb',
-  },
+backButton: { alignSelf: 'flex-start', paddingVertical: 10, paddingHorizontal: 14, marginBottom: 12, borderRadius: 8, backgroundColor: '#e5e7eb' },
+backButtonText: { color: '#1f2937', fontSize: 16, fontWeight: '700' },
 
-  backButtonText: {
-    color: '#1f2937',
-    fontSize: 16,
-    fontWeight: '700',
-  },
+title: {
+fontSize: 28,
+fontWeight: 'bold',
+color: '#1f2937',
+marginBottom: 4,
+},
 
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#1f2937',
-    marginBottom: 6,
-  },
+subtitle: {
+fontSize: 14,
+color: '#6b7280',
+},
 
-  subtitle: {
-    fontSize: 14,
-    color: '#6b7280',
-    lineHeight: 21,
-  },
+section: {
+marginBottom: 24,
+},
 
-  section: {
-    marginBottom: 26,
-  },
+groupChoice: { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8, padding: 10, marginTop: 6, backgroundColor: '#fff' },
+groupChoiceSelected: { borderColor: '#16a34a', backgroundColor: '#f0fdf4' },
+groupChoiceText: { color: '#1f2937', fontSize: 13 },
+recoveryInput: { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#fff', marginTop: 10, color: '#111827' },
+sectionTitle: {
+fontSize: 16,
+fontWeight: '600',
+color: '#1f2937',
+marginBottom: 12,
+},
+bodyText: { fontSize: 13, color: '#4b5563', lineHeight: 19, marginBottom: 12 },
+consentButton: { backgroundColor: '#16a34a', paddingVertical: 13, paddingHorizontal: 14, borderRadius: 8, marginBottom: 12, alignItems: 'center' },
+disableConsentButton: { backgroundColor: '#b91c1c' },
+consentButtonText: { color: '#fff', fontWeight: '700', textAlign: 'center' },
 
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#1f2937',
-    marginBottom: 12,
-  },
+infoBox: {
+backgroundColor: '#ecfdf5',
+borderLeftWidth: 4,
+borderLeftColor: '#16a34a',
+padding: 12,
+borderRadius: 8,
+marginBottom: 16,
+},
 
-  bodyText: {
-    fontSize: 14,
-    color: '#4b5563',
-    lineHeight: 21,
-    marginBottom: 12,
-  },
+infoText: {
+fontSize: 13,
+color: '#047857',
+lineHeight: 20,
+},
 
-  fieldLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#374151',
-    marginTop: 8,
-    marginBottom: 6,
-  },
+button: {
+paddingVertical: 12,
+paddingHorizontal: 16,
+borderRadius: 8,
+flexDirection: 'row',
+alignItems: 'center',
+justifyContent: 'center',
+gap: 8,
+},
 
-  fieldLabelSpaced: {
-    marginTop: 20,
-  },
+primaryButton: {
+backgroundColor: '#16a34a',
+},
 
-  groupChoice: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 8,
-    padding: 13,
-    marginBottom: 7,
-    backgroundColor: '#ffffff',
-  },
+importButton: {
+backgroundColor: '#dbeafe',
+marginTop: 10,
+},
 
-  groupChoiceSelected: {
-    borderColor: '#16a34a',
-    backgroundColor: '#f0fdf4',
-  },
+buttonIcon: {
+fontSize: 20,
+},
 
-  groupChoiceText: {
-    color: '#1f2937',
-    fontSize: 14,
-    lineHeight: 20,
-  },
+buttonText: {
+color: '#ffffff',
+fontSize: 15,
+fontWeight: '600',
+},
 
-  recoveryInput: {
-    minHeight: 52,
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    backgroundColor: '#ffffff',
-    marginTop: 5,
-    color: '#111827',
-    fontSize: 16,
-  },
+importButtonText: {
+color: '#1d4ed8',
+fontSize: 15,
+fontWeight: '600',
+},
 
-  consentButton: {
-    backgroundColor: '#16a34a',
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    borderRadius: 9,
-    marginBottom: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 50,
-  },
+disabledButton: {
+opacity: 0.6,
+},
 
-  disableConsentButton: {
-    backgroundColor: '#b91c1c',
-  },
+loadingContainer: {
+alignItems: 'center',
+justifyContent: 'center',
+paddingVertical: 32,
+},
 
-  consentButtonText: {
-    color: '#ffffff',
-    fontWeight: '700',
-    textAlign: 'center',
-    fontSize: 14,
-  },
+loadingText: {
+marginTop: 12,
+fontSize: 14,
+color: '#6b7280',
+},
 
-  infoBox: {
-    backgroundColor: '#ecfdf5',
-    borderLeftWidth: 4,
-    borderLeftColor: '#16a34a',
-    padding: 13,
-    borderRadius: 8,
-    marginBottom: 14,
-  },
+emptyBox: {
+backgroundColor: '#f3f4f6',
+borderRadius: 8,
+padding: 24,
+alignItems: 'center',
+},
 
-  infoText: {
-    fontSize: 13,
-    color: '#047857',
-    lineHeight: 20,
-  },
+emptyTitle: {
+fontSize: 15,
+fontWeight: '600',
+color: '#374151',
+marginBottom: 4,
+},
 
-  emptyCloudBox: {
-    backgroundColor: '#eff6ff',
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 12,
-  },
+emptyText: {
+fontSize: 13,
+color: '#6b7280',
+},
 
-  emptyCloudTitle: {
-    color: '#1e40af',
-    fontSize: 15,
-    fontWeight: '700',
-    marginBottom: 6,
-  },
+backupCard: {
+backgroundColor: '#ffffff',
+borderRadius: 8,
+padding: 12,
+marginBottom: 12,
+flexDirection: 'row',
+alignItems: 'center',
+justifyContent: 'space-between',
+borderWidth: 1,
+borderColor: '#e5e7eb',
+},
 
-  emptyCloudText: {
-    color: '#1e3a8a',
-    fontSize: 13,
-    lineHeight: 20,
-  },
+backupInfo: {
+flex: 1,
+},
 
-  button: {
-    minHeight: 54,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderRadius: 9,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    marginTop: 12,
-  },
+backupName: {
+fontSize: 13,
+fontWeight: '600',
+color: '#1f2937',
+marginBottom: 2,
+},
 
-  primaryButton: {
-    backgroundColor: '#16a34a',
-  },
+backupDetails: {
+fontSize: 12,
+color: '#9ca3af',
+},
 
-  importButton: {
-    backgroundColor: '#dbeafe',
-  },
+backupActions: {
+flexDirection: 'row',
+gap: 8,
+},
 
-  buttonIcon: {
-    fontSize: 18,
-  },
+iconButton: {
+width: 36,
+height: 36,
+borderRadius: 6,
+alignItems: 'center',
+justifyContent: 'center',
+},
 
-  buttonText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
-    textAlign: 'center',
-    flexShrink: 1,
-  },
+restoreButton: {
+backgroundColor: '#dbeafe',
+},
 
-  importButtonText: {
-    color: '#1d4ed8',
-    fontSize: 15,
-    fontWeight: '700',
-    textAlign: 'center',
-    flexShrink: 1,
-  },
+emailButton: {
+backgroundColor: '#fef3c7',
+},
 
-  disabledButton: {
-    opacity: 0.6,
-  },
+deleteButton: {
+backgroundColor: '#fee2e2',
+},
 
-  cloudResults: {
-    marginTop: 20,
-  },
+instructionBox: {
+backgroundColor: '#f3f4f6',
+borderRadius: 8,
+padding: 16,
+},
 
-  resultsTitle: {
-    color: '#1f2937',
-    fontSize: 16,
-    fontWeight: '700',
-    marginBottom: 12,
-  },
+instructionTitle: {
+fontSize: 14,
+fontWeight: '600',
+color: '#1f2937',
+marginBottom: 12,
+},
 
-  cloudRestoreButton: {
-    backgroundColor: '#16a34a',
-    paddingHorizontal: 13,
-    paddingVertical: 10,
-    borderRadius: 7,
-    marginLeft: 10,
-  },
+instructionStep: {
+flexDirection: 'row',
+marginBottom: 12,
+alignItems: 'flex-start',
+gap: 12,
+},
 
-  cloudRestoreButtonText: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '700',
-  },
+stepNumber: {
+width: 24,
+height: 24,
+borderRadius: 12,
+backgroundColor: '#16a34a',
+color: '#ffffff',
+fontSize: 12,
+fontWeight: 'bold',
+textAlign: 'center',
+textAlignVertical: 'center',
+paddingTop: 2,
+},
 
-  loadingContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 32,
-  },
+stepText: {
+flex: 1,
+fontSize: 13,
+color: '#374151',
+lineHeight: 18,
+paddingTop: 2,
+},
 
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: '#6b7280',
-  },
+tipBox: {
+backgroundColor: '#ffffff',
+borderRadius: 8,
+padding: 12,
+marginBottom: 12,
+borderLeftWidth: 3,
+borderLeftColor: '#fbbf24',
+},
 
-  emptyBox: {
-    backgroundColor: '#f3f4f6',
-    borderRadius: 9,
-    padding: 24,
-    alignItems: 'center',
-  },
+tipTitle: {
+fontSize: 13,
+fontWeight: '600',
+color: '#1f2937',
+marginBottom: 4,
+},
 
-  emptyTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#374151',
-    marginBottom: 6,
-  },
-
-  emptyText: {
-    fontSize: 13,
-    color: '#6b7280',
-    textAlign: 'center',
-    lineHeight: 19,
-  },
-
-  backupCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 9,
-    padding: 12,
-    marginBottom: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-
-  backupInfo: {
-    flex: 1,
-    minWidth: 0,
-  },
-
-  backupName: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#1f2937',
-    marginBottom: 5,
-  },
-
-  backupDetails: {
-    fontSize: 12,
-    color: '#6b7280',
-    lineHeight: 18,
-  },
-
-  backupActions: {
-    flexDirection: 'row',
-    gap: 6,
-    marginLeft: 8,
-  },
-
-  iconButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 7,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  restoreButton: {
-    backgroundColor: '#dbeafe',
-  },
-
-  emailButton: {
-    backgroundColor: '#fef3c7',
-  },
-
-  deleteButton: {
-    backgroundColor: '#fee2e2',
-  },
-
-  instructionBox: {
-    backgroundColor: '#f3f4f6',
-    borderRadius: 9,
-    padding: 16,
-  },
-
-  instructionTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#1f2937',
-    marginBottom: 14,
-  },
-
-  instructionStep: {
-    flexDirection: 'row',
-    marginBottom: 13,
-    alignItems: 'flex-start',
-    gap: 12,
-  },
-
-  stepNumber: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    overflow: 'hidden',
-    backgroundColor: '#16a34a',
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '700',
-    textAlign: 'center',
-    textAlignVertical: 'center',
-    paddingTop: 3,
-  },
-
-  stepText: {
-    flex: 1,
-    fontSize: 13,
-    color: '#374151',
-    lineHeight: 20,
-    paddingTop: 3,
-  },
-
-  tipBox: {
-    backgroundColor: '#ffffff',
-    borderRadius: 9,
-    padding: 14,
-    marginBottom: 12,
-    borderLeftWidth: 3,
-    borderLeftColor: '#fbbf24',
-  },
-
-  tipTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#1f2937',
-    marginBottom: 5,
-  },
-
-  tipText: {
-    fontSize: 13,
-    color: '#6b7280',
-    lineHeight: 20,
-  },
-
-  bottomBackButton: {
-    backgroundColor: '#e5e7eb',
-    borderRadius: 9,
-    minHeight: 50,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 4,
-    marginBottom: 16,
-  },
-
-  bottomBackButtonText: {
-    color: '#1f2937',
-    fontSize: 15,
-    fontWeight: '700',
-  },
+tipText: {
+fontSize: 12,
+color: '#6b7280',
+lineHeight: 18,
+},
 });
