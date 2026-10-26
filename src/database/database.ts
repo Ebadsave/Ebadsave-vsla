@@ -5829,6 +5829,9 @@ export async function getHomeDashboardSummary(
   const closed = await getLastConcludedMeeting(groupId);
   return {
     ...financial,
+    // Fund Balance is the cash currently available in the box plus the
+    // outstanding amount members still owe. Expenditure is reported separately.
+    fundBalance: financial.loanFund + loansOut,
     loansOut,
     members: Number(members?.count) || 0,
     currency: group.currency || 'UGX',
