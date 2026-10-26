@@ -2872,6 +2872,17 @@ export async function createGroupDatabaseBackup(groupId: number): Promise<string
       continue;
     }
 
+    // Registration attempts do not store group_id. Include only attempts whose
+    // assigned group_number matches this group's KYA number; never include
+    // unrelated pending registrations in a group-only backup.
+    if (table === 'group_registration_attempts') {
+      tables[table] = await db.getAllAsync(
+        'SELECT * FROM group_registration_attempts WHERE CAST(group_number AS TEXT) = ?',
+        String(group.group_number),
+      );
+      continue;
+    }
+
     if (groupTables.has(table) && columnNames.has('group_id')) {
       tables[table] = await db.getAllAsync(`SELECT * FROM "${table}" WHERE group_id = ?`, groupId);
       continue;
