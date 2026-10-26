@@ -242,9 +242,11 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
 
   const cards = [
     { title: 'Total Savings', value: money(dashboard.currency, dashboard.savings), icon: 'S', action: () => navigateWithGroup('FinancialTransactions') },
-    { title: 'Loans Out', value: money(dashboard.currency, dashboard.loansOut), icon: 'L', action: () => navigateWithGroup('Loans') },
+    { title: 'Loan Fund (Cash in Box)', value: money(dashboard.currency, dashboard.loanFund), icon: 'C', action: () => navigateWithGroup('FinancialTransactions') },
+    { title: 'Loans Out (Unpaid)', value: money(dashboard.currency, dashboard.loansOut), icon: 'L', action: () => navigateWithGroup('Loans') },
     { title: 'Members', value: String(dashboard.members), icon: 'M', action: openAddMembers },
     { title: 'Fund Balance', value: money(dashboard.currency, dashboard.fundBalance), icon: 'F', action: () => navigateWithGroup('FinancialTransactions') },
+    { title: 'Expenditure', value: money(dashboard.currency, Math.abs(dashboard.expenditureFund)), icon: 'E', action: () => navigateWithGroup('Expenditure') },
     { title: 'Insurance Fund', value: money(dashboard.currency, dashboard.insuranceFund), icon: 'I', action: () => navigateWithGroup('Insurance') },
     { title: 'Fines Fund', value: money(dashboard.currency, dashboard.fines), icon: 'N', action: () => navigateWithGroup('Fines') },
   ];
