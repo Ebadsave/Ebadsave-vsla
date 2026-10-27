@@ -27,6 +27,8 @@ import OnboardingScreen from './src/screens/OnboardingScreen';
 import ExistingGroupOnboardingScreen from './src/screens/ExistingGroupOnboardingScreen';
 import HistoricalRecordsScreen from './src/screens/HistoricalRecordsScreen';
 import ShareOutCalculationScreen from './src/screens/ShareOutCalculationScreen';
+import MemberPassbookLoginScreen from './src/screens/MemberPassbookLoginScreen';
+import MemberPassbookScreen from './src/screens/MemberPassbookScreen';
 import './src/services/backupBackground';
 import { initializeAutomaticBackupTask } from './src/services/backupBackground';
 
@@ -43,6 +45,8 @@ export type RootStackParamList = {
   Home: undefined;
   Constitution: undefined;
   BackupRestore: undefined;
+  MemberPassbookLogin: undefined;
+  MemberPassbook: { memberId: number; groupId: number; currency?: string };
 
   SetupRules: {
     groupId: number;
@@ -155,6 +159,9 @@ function WelcomeScreen({ navigation }: { navigation: any }) {
       <Pressable style={welcomeStyles.secondaryButton} onPress={() => navigation.navigate('PersonalLogin')}>
         <Text style={welcomeStyles.secondaryText}>4. Personal login</Text>
       </Pressable>
+      <Pressable style={welcomeStyles.secondaryButton} onPress={() => navigation.navigate('MemberPassbookLogin')}>
+        <Text style={welcomeStyles.secondaryText}>5. Member Passbook</Text>
+      </Pressable>
 
       <Text style={welcomeStyles.note}>Group login continues to require the group's pre-app authorization.</Text>
     </View>
@@ -225,6 +232,8 @@ export default function App() {
         <Stack.Screen name="CreateGroupStart" component={EntryFlowScreen} />
         <Stack.Screen name="PersonalAccount" component={EntryFlowScreen} />
         <Stack.Screen name="PersonalLogin" component={EntryFlowScreen} />
+        <Stack.Screen name="MemberPassbookLogin" component={MemberPassbookLoginScreen} />
+        <Stack.Screen name="MemberPassbook" component={MemberPassbookScreen} />
         <Stack.Screen name="ExistingGroupOnboarding" component={ExistingGroupOnboardingScreen} />
         <Stack.Screen name="HistoricalRecords" component={HistoricalRecordsScreen} />
         <Stack.Screen name="ShareOutCalculation" component={ShareOutCalculationScreen} />
