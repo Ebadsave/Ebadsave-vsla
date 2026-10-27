@@ -974,3 +974,250 @@ Parse.Cloud.define('uploadEbadsaveBackup', async (request) => {
     uploaded: true
   };
 });
+
+/* ============================================================
+   REMOTE MEMBER PASSBOOK (additive; does not alter backup code)
+   Deploy this appended code with the existing Back4App main.js.
+
+   Required Back4App Role: PassbookAdmins
+   Required Parse classes (created automatically on first save):
+     MemberPassbookCredentials, MemberPassbookSessions,
+     MemberPassbookSnapshots
+   ============================================================ */
+const memberPassbookCrypto = require('crypto');
+const MEMBER_PASSBOOK_PIN_ITERATIONS = 120000;
+const MEMBER_PASSBOOK_SESSION_DAYS = 30;
+const MEMBER_PASSBOOK_MAX_FAILED_ATTEMPTS = 5;
+const MEMBER_PASSBOOK_LOCK_MINUTES = 15;
+
+function mpNormalizeMemberNumber(value) {
+  return typeof value === 'string' ? value.trim().toUpperCase().replace(/\s+/g, '') : '';
+}
+
+function mpNormalizeGroupNumber(value) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 2010 || number > 9090) {
+    throw new Parse.Error(Parse.Error.INVALID_PARAMETER, 'Invalid KYA group number.');
+  }
+  return number;
+}
+
+function mpHashPin(pin, salt) {
+  return memberPassbookCrypto.pbkdf2Sync(String(pin), salt, MEMBER_PASSBOOK_PIN_ITERATIONS, 32, 'sha256').toString('hex');
+}
+
+function mpHashToken(token) {
+  return memberPassbookCrypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+function mpConstantTimeEqual(left, right) {
+  const a = Buffer.from(String(left || ''), 'hex');
+  const b = Buffer.from(String(right || ''), 'hex');
+  return a.length === b.length && a.length > 0 && memberPassbookCrypto.timingSafeEqual(a, b);
+}
+
+async function mpRequirePassbookAdmin(request) {
+  if (!request.user || !request.user.id) {
+    throw new Parse.Error(Parse.Error.SESSION_MISSING, 'Administrator sign-in is required.');
+  }
+  const roleQuery = new Parse.Query(Parse.Role);
+  roleQuery.equalTo('name', 'PassbookAdmins');
+  const role = await roleQuery.first({ useMasterKey: true });
+  if (!role) throw new Parse.Error(Parse.Error.OPERATION_FORBIDDEN, 'Passbook administrator access is not configured.');
+  const users = role.getUsers().query();
+  users.equalTo('objectId', request.user.id);
+  const authorizedUser = await users.first({ useMasterKey: true });
+  if (!authorizedUser) throw new Parse.Error(Parse.Error.OPERATION_FORBIDDEN, 'Passbook administrator access is required.');
+}
+
+function mpValidatePin(pin) {
+  return typeof pin === 'string' && /^[A-Za-z0-9]{4}$/.test(pin);
+}
+
+function mpValidateSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    throw new Parse.Error(Parse.Error.INVALID_PARAMETER, 'A passbook snapshot is required.');
+  }
+  const allowed = [
+    'memberName', 'memberNumber', 'groupNumber', 'groupName', 'currency',
+    'personalSavings', 'loanAmount', 'loanBalance', 'loanIssueDate', 'loanDueDate',
+    'personalFines', 'insuranceContributions', 'groupSavings', 'groupLoanFund',
+    'groupInsuranceBalance', 'activity', 'updatedAtIso'
+  ];
+  const result = {};
+  for (const key of allowed) if (Object.prototype.hasOwnProperty.call(snapshot, key)) result[key] = snapshot[key];
+  const numericFields = [
+    'personalSavings', 'loanAmount', 'loanBalance', 'personalFines',
+    'insuranceContributions', 'groupSavings', 'groupLoanFund', 'groupInsuranceBalance'
+  ];
+  for (const key of numericFields) {
+    const value = Number(result[key] || 0);
+    if (!Number.isFinite(value) || value < 0) throw new Parse.Error(Parse.Error.INVALID_PARAMETER, 'Invalid passbook amount.');
+    result[key] = value;
+  }
+  if (!Array.isArray(result.activity)) result.activity = [];
+  if (result.activity.length > 100) throw new Parse.Error(Parse.Error.INVALID_PARAMETER, 'Passbook history is limited to 100 entries.');
+  result.activity = result.activity.map((item) => {
+    if (!item || typeof item !== 'object') throw new Parse.Error(Parse.Error.INVALID_PARAMETER, 'Invalid transaction history entry.');
+    return {
+      id: String(item.id == null ? '' : item.id).slice(0, 100),
+      account_type: String(item.account_type || '').slice(0, 80),
+      amount: Number.isFinite(Number(item.amount)) ? Number(item.amount) : 0,
+      reason: String(item.reason || '').slice(0, 300),
+      transaction_type: String(item.transaction_type || '').slice(0, 80),
+      created_at: String(item.created_at || '').slice(0, 50)
+    };
+  });
+  result.currency = String(result.currency || 'UGX').slice(0, 8);
+  result.updatedAtIso = new Date().toISOString();
+  return result;
+}
+
+Parse.Cloud.define('activateRemoteMemberPassbook', async (request) => {
+  await mpRequirePassbookAdmin(request);
+  const params = request.params || {};
+  const memberNumber = mpNormalizeMemberNumber(params.memberNumber);
+  const groupNumber = mpNormalizeGroupNumber(params.groupNumber);
+  const pin = params.pin;
+  const memberName = typeof params.memberName === 'string' ? params.memberName.trim().slice(0, 160) : '';
+  const groupName = typeof params.groupName === 'string' ? params.groupName.trim().slice(0, 160) : '';
+  if (!memberNumber || memberNumber.length > 40 || !memberName || !groupName || !mpValidatePin(pin)) {
+    throw new Parse.Error(Parse.Error.INVALID_PARAMETER, 'Provide a valid member number, name, group name and 4-character PIN.');
+  }
+  const query = new Parse.Query('MemberPassbookCredentials');
+  query.equalTo('memberNumberNormalized', memberNumber);
+  query.equalTo('groupNumber', groupNumber);
+  let credential = await query.first({ useMasterKey: true });
+  if (!credential) credential = new Parse.Object('MemberPassbookCredentials');
+  const salt = memberPassbookCrypto.randomBytes(16).toString('hex');
+  credential.set('memberNumberNormalized', memberNumber);
+  credential.set('groupNumber', groupNumber);
+  credential.set('memberName', memberName);
+  credential.set('groupName', groupName);
+  credential.set('pinSalt', salt);
+  credential.set('pinHash', mpHashPin(pin, salt));
+  credential.set('isActive', true);
+  credential.set('failedAttempts', 0);
+  credential.unset('lockedUntil');
+  credential.set('updatedAtIso', new Date().toISOString());
+  await credential.save(null, { useMasterKey: true });
+  return { activated: true, memberNumber, groupNumber };
+});
+
+Parse.Cloud.define('publishRemoteMemberPassbookSnapshots', async (request) => {
+  await mpRequirePassbookAdmin(request);
+  const params = request.params || {};
+  const groupNumber = mpNormalizeGroupNumber(params.groupNumber);
+  const snapshots = params.snapshots;
+  if (!Array.isArray(snapshots) || snapshots.length < 1 || snapshots.length > 500) {
+    throw new Parse.Error(Parse.Error.INVALID_PARAMETER, 'Provide between 1 and 500 member snapshots.');
+  }
+  let published = 0;
+  for (const raw of snapshots) {
+    const memberNumber = mpNormalizeMemberNumber(raw && raw.memberNumber);
+    if (!memberNumber || memberNumber.length > 40) continue;
+    const credentials = new Parse.Query('MemberPassbookCredentials');
+    credentials.equalTo('memberNumberNormalized', memberNumber);
+    credentials.equalTo('groupNumber', groupNumber);
+    credentials.equalTo('isActive', true);
+    const credential = await credentials.first({ useMasterKey: true });
+    if (!credential) continue;
+    const clean = mpValidateSnapshot(raw);
+    clean.memberNumber = credential.get('memberNumberNormalized');
+    clean.memberName = credential.get('memberName');
+    clean.groupNumber = groupNumber;
+    clean.groupName = credential.get('groupName');
+    const query = new Parse.Query('MemberPassbookSnapshots');
+    query.equalTo('credential', credential);
+    let record = await query.first({ useMasterKey: true });
+    if (!record) record = new Parse.Object('MemberPassbookSnapshots');
+    record.set('credential', credential);
+    record.set('memberNumberNormalized', memberNumber);
+    record.set('groupNumber', groupNumber);
+    record.set('snapshot', clean);
+    record.set('updatedAtIso', new Date().toISOString());
+    await record.save(null, { useMasterKey: true });
+    published += 1;
+  }
+  return { published, groupNumber };
+});
+
+Parse.Cloud.define('loginRemoteMemberPassbook', async (request) => {
+  const params = request.params || {};
+  const memberNumber = mpNormalizeMemberNumber(params.memberNumber);
+  const pin = params.pin;
+  if (!memberNumber || memberNumber.length > 40 || !mpValidatePin(pin)) {
+    throw new Parse.Error(Parse.Error.INVALID_LOGIN, 'Member number or PIN is incorrect.');
+  }
+  const query = new Parse.Query('MemberPassbookCredentials');
+  query.equalTo('memberNumberNormalized', memberNumber);
+  query.equalTo('isActive', true);
+  const credential = await query.first({ useMasterKey: true });
+  const genericError = () => new Parse.Error(Parse.Error.INVALID_LOGIN, 'Member number or PIN is incorrect, or passbook access is unavailable.');
+  if (!credential) throw genericError();
+  const lockedUntil = credential.get('lockedUntil');
+  if (lockedUntil && new Date(lockedUntil).getTime() > Date.now()) throw genericError();
+  if (lockedUntil) {
+    credential.set('failedAttempts', 0);
+    credential.unset('lockedUntil');
+  }
+  const expected = mpHashPin(pin, credential.get('pinSalt'));
+  if (!mpConstantTimeEqual(expected, credential.get('pinHash'))) {
+    const attempts = Number(credential.get('failedAttempts') || 0) + 1;
+    credential.set('failedAttempts', attempts);
+    if (attempts >= MEMBER_PASSBOOK_MAX_FAILED_ATTEMPTS) {
+      credential.set('lockedUntil', new Date(Date.now() + MEMBER_PASSBOOK_LOCK_MINUTES * 60000).toISOString());
+      credential.set('failedAttempts', 0);
+    }
+    await credential.save(null, { useMasterKey: true });
+    throw genericError();
+  }
+  credential.set('failedAttempts', 0);
+  credential.unset('lockedUntil');
+  await credential.save(null, { useMasterKey: true });
+  const token = memberPassbookCrypto.randomBytes(32).toString('hex');
+  const session = new Parse.Object('MemberPassbookSessions');
+  session.set('tokenHash', mpHashToken(token));
+  session.set('credential', credential);
+  session.set('expiresAt', new Date(Date.now() + MEMBER_PASSBOOK_SESSION_DAYS * 86400000).toISOString());
+  await session.save(null, { useMasterKey: true });
+  return {
+    sessionToken: token,
+    expiresAt: session.get('expiresAt'),
+    member: {
+      memberNumber: credential.get('memberNumberNormalized'),
+      memberName: credential.get('memberName'),
+      groupNumber: credential.get('groupNumber'),
+      groupName: credential.get('groupName')
+    }
+  };
+});
+
+Parse.Cloud.define('getRemoteMemberPassbook', async (request) => {
+  const token = request.params && request.params.sessionToken;
+  if (typeof token !== 'string' || token.length !== 64) {
+    throw new Parse.Error(Parse.Error.SESSION_MISSING, 'Please sign in again.');
+  }
+  const sessionQuery = new Parse.Query('MemberPassbookSessions');
+  sessionQuery.equalTo('tokenHash', mpHashToken(token));
+  sessionQuery.greaterThan('expiresAt', new Date().toISOString());
+  const session = await sessionQuery.first({ useMasterKey: true });
+  if (!session) throw new Parse.Error(Parse.Error.SESSION_MISSING, 'Your passbook session expired. Please sign in again.');
+  const credential = session.get('credential');
+  if (!credential) throw new Parse.Error(Parse.Error.SESSION_MISSING, 'Please sign in again.');
+  const snapshotQuery = new Parse.Query('MemberPassbookSnapshots');
+  snapshotQuery.equalTo('credential', credential);
+  const record = await snapshotQuery.first({ useMasterKey: true });
+  if (!record) throw new Parse.Error(Parse.Error.OBJECT_NOT_FOUND, 'Your passbook has not been synchronized yet.');
+  return record.get('snapshot');
+});
+
+Parse.Cloud.define('logoutRemoteMemberPassbook', async (request) => {
+  const token = request.params && request.params.sessionToken;
+  if (typeof token !== 'string' || token.length !== 64) return { loggedOut: true };
+  const query = new Parse.Query('MemberPassbookSessions');
+  query.equalTo('tokenHash', mpHashToken(token));
+  const session = await query.first({ useMasterKey: true });
+  if (session) await session.destroy({ useMasterKey: true });
+  return { loggedOut: true };
+});
