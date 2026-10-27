@@ -5977,6 +5977,156 @@ export async function getMemberPassbook(
   );
 }
 
+export type MemberPassbookLoginResult = {
+  memberId: number;
+  groupId: number;
+  memberNumber: string;
+  memberName: string;
+  groupNumber: number;
+  groupName: string;
+  currency: string;
+};
+
+export type MemberPassbookActivity = {
+  id: number;
+  account_type: string;
+  amount: number;
+  reason: string;
+  transaction_type: string;
+  created_at: string;
+};
+
+/**
+ * Local-device passbook login foundation. This verifies the member number and
+ * the existing salted passcode hash against this device's SQLite database.
+ * It is NOT remote authentication; a secure server-backed flow is required
+ * before a member can sign in from a different phone.
+ */
+export async function authenticateMemberPassbook(
+  memberNumber: string,
+  passcode: string,
+): Promise<MemberPassbookLoginResult | null> {
+  const cleanNumber = normalizeText(memberNumber).toUpperCase();
+  if (!cleanNumber || !isValidPasscode(passcode)) return null;
+
+  const db = await getDatabase();
+  const member = await db.getFirstAsync<{
+    id: number;
+    group_id: number;
+    member_number: string;
+    full_name: string;
+    status: string;
+    group_number: number;
+    group_name: string;
+    currency: string;
+  }>(
+    `SELECT m.id, m.group_id, m.member_number, m.full_name, m.status,
+            g.group_number, g.group_name, g.currency
+     FROM members m
+     JOIN groups g ON g.id = m.group_id
+     WHERE UPPER(TRIM(m.member_number)) = ?
+     LIMIT 1`,
+    cleanNumber,
+  );
+
+  if (!member || member.status !== 'active') return null;
+  const verified = await verifyMemberPasscode(
+    Number(member.id), Number(member.group_id), passcode,
+    { requirePhone: false },
+  );
+  if (!verified.success) return null;
+
+  return {
+    memberId: Number(member.id),
+    groupId: Number(member.group_id),
+    memberNumber: member.member_number,
+    memberName: member.full_name,
+    groupNumber: Number(member.group_number),
+    groupName: member.group_name,
+    currency: member.currency || 'UGX',
+  };
+}
+
+export async function getMemberPassbookDashboardData(
+  memberId: number,
+  groupId: number,
+): Promise<{
+  memberNumber: string;
+  memberName: string;
+  groupNumber: number;
+  groupName: string;
+  currency: string;
+  personalSavings: number;
+  loanAmount: number;
+  loanBalance: number;
+  loanIssueDate: string | null;
+  loanDueDate: string | null;
+  personalFines: number;
+  insuranceContributions: number;
+  groupSavings: number;
+  groupLoanFund: number;
+  groupInsuranceBalance: number;
+  activity: MemberPassbookActivity[];
+}> {
+  const db = await getDatabase();
+  const member = await db.getFirstAsync<{
+    member_number: string; full_name: string; group_number: number;
+    group_name: string; currency: string;
+  }>(
+    `SELECT m.member_number, m.full_name, g.group_number, g.group_name, g.currency
+     FROM members m JOIN groups g ON g.id = m.group_id
+     WHERE m.id = ? AND m.group_id = ? AND m.status = 'active' LIMIT 1`,
+    memberId, groupId,
+  );
+  if (!member) throw new Error('Member passbook was not found. Please sign in again.');
+
+  const [personalSavings, loan, loanIssueDate, loanDueDate, fines, insurance, groupSummary, activity, loanIssued] = await Promise.all([
+    getMemberSavings(groupId, memberId),
+    getMemberLoanBalance(groupId, memberId),
+    getMemberLoanIssueDate(groupId, memberId),
+    getMemberLoanDueDate(groupId, memberId),
+    getMemberFines(groupId, memberId),
+    db.getFirstAsync<{ total: number }>(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM financial_transactions
+       WHERE group_id = ? AND member_id = ? AND account_type = 'insurance_fund'
+         AND transaction_type = 'insurance_contribution' AND reversed = 0`, groupId, memberId,
+    ),
+    getFinancialSummary(groupId),
+    db.getAllAsync<MemberPassbookActivity>(
+      `SELECT id, account_type, amount, reason, transaction_type, created_at
+       FROM financial_transactions
+       WHERE group_id = ? AND member_id = ? AND reversed = 0
+       ORDER BY created_at DESC, id DESC LIMIT 100`, groupId, memberId,
+    ),
+    db.getFirstAsync<{ total: number }>(
+      `SELECT COALESCE(SUM(ABS(amount)), 0) AS total FROM financial_transactions
+       WHERE group_id = ? AND member_id = ? AND account_type = 'loan_fund'
+         AND transaction_type = 'loan_issued' AND reversed = 0`, groupId, memberId,
+    ),
+  ]);
+  const personalFines = fines.reduce((sum, fine) => sum + Number(fine.outstanding_amount || 0), 0);
+
+  return {
+    memberNumber: member.member_number,
+    memberName: member.full_name,
+    groupNumber: Number(member.group_number),
+    groupName: member.group_name,
+    currency: member.currency || 'UGX',
+    personalSavings,
+    loanAmount: Number(loanIssued?.total || 0),
+    loanBalance: Number(loan.balance || 0),
+    loanIssueDate,
+    loanDueDate,
+    personalFines,
+    insuranceContributions: Number(insurance?.total || 0),
+    groupSavings: Number(groupSummary.savings || 0),
+    // Approved definition: cash currently available to issue as new loans.
+    groupLoanFund: Number(groupSummary.loanFund || 0),
+    groupInsuranceBalance: Number(groupSummary.insuranceFund || 0),
+    activity,
+  };
+}
+
 /* ============================================================
    FINANCIAL TRANSACTIONS
    ============================================================ */
