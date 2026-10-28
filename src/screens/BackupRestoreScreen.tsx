@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
 Alert,
 ActivityIndicator,
@@ -10,7 +10,14 @@ TouchableOpacity,
 View,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
+import * as AuthSession from 'expo-auth-session';
+import * as WebBrowser from 'expo-web-browser';
+import * as Google from 'expo-auth-session/providers/google';
+import { GOOGLE_ANDROID_CLIENT_ID, GOOGLE_WEB_CLIENT_ID } from '../config/googleDrive';
+import { uploadGoogleDriveBackup, listGoogleDriveBackups, restoreGoogleDriveBackup, type GoogleDriveBackupInfo } from '../services/googleDriveBackup';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
+
+WebBrowser.maybeCompleteAuthSession();
 import { getAutomaticCloudBackupConsent, setAutomaticCloudBackupConsent, runAutomaticCloudBackup } from '../database/backup';
 import { registerAutomaticBackupTask, unregisterAutomaticBackupTask } from '../services/backupBackground';
 import { getAllGroups, type GroupRecord } from '../database/database';
@@ -47,6 +54,26 @@ const [groupNumberInput, setGroupNumberInput] = useState('');
 const [recoveryPassphrase, setRecoveryPassphrase] = useState('');
 const [cloudGroupBackups, setCloudGroupBackups] = useState<CloudBackupFileInfo[]>([]);
 const [groupCloudBusy, setGroupCloudBusy] = useState(false);
+const [driveAccessToken, setDriveAccessToken] = useState<string | null>(null);
+const [driveBackups, setDriveBackups] = useState<GoogleDriveBackupInfo[]>([]);
+const [driveBusy, setDriveBusy] = useState(false);
+const [drivePassphrase, setDrivePassphrase] = useState('');
+const redirectUri = AuthSession.makeRedirectUri({ scheme: 'ebadsavevsla' });
+const [googleRequest, googleResponse, promptGoogleSignIn] = Google.useAuthRequest({
+  androidClientId: GOOGLE_ANDROID_CLIENT_ID.startsWith('YOUR_') ? undefined : GOOGLE_ANDROID_CLIENT_ID,
+  webClientId: GOOGLE_WEB_CLIENT_ID.startsWith('YOUR_') ? undefined : GOOGLE_WEB_CLIENT_ID,
+  scopes: ['https://www.googleapis.com/auth/drive.appdata'],
+  redirectUri,
+});
+
+useEffect(() => {
+  if (googleResponse?.type === 'success') {
+    const token = googleResponse.authentication?.accessToken;
+    if (token) { setDriveAccessToken(token); Alert.alert('Google Drive Connected', 'Google Drive is connected for this app session.'); }
+  } else if (googleResponse?.type === 'error') {
+    Alert.alert('Google Sign-in Failed', 'Could not connect to Google Drive. Check OAuth setup and try again.');
+  }
+}, [googleResponse]);
 
 const loadConsent = useCallback(async () => {
   try {
@@ -136,6 +163,34 @@ const handleRestoreCloudGroup = (backup: CloudBackupFileInfo) => {
       } catch (error) {
         Alert.alert('Restore Stopped', error instanceof Error ? error.message : 'Could not restore this group.');
       } finally { setGroupCloudBusy(false); }
+    } },
+  ]);
+};
+
+const handleGoogleDriveBackup = async () => {
+  if (!driveAccessToken) { Alert.alert('Connect Google Drive', 'Sign in with Google first.'); return; }
+  if (drivePassphrase.trim().length < 12) { Alert.alert('Passphrase Required', 'Use a passphrase of at least 12 characters. Keep it safe; Google cannot recover a forgotten encryption passphrase.'); return; }
+  try { setDriveBusy(true); const saved = await uploadGoogleDriveBackup(driveAccessToken, drivePassphrase); Alert.alert('Google Drive Backup Saved', `Encrypted backup saved: ${saved.name}`); const files = await listGoogleDriveBackups(driveAccessToken); setDriveBackups(files); }
+  catch (error) { Alert.alert('Google Drive Backup Failed', error instanceof Error ? error.message : 'Could not back up to Google Drive.'); }
+  finally { setDriveBusy(false); }
+};
+
+const handleListGoogleDriveBackups = async () => {
+  if (!driveAccessToken) { Alert.alert('Connect Google Drive', 'Sign in with Google first.'); return; }
+  try { setDriveBusy(true); const files = await listGoogleDriveBackups(driveAccessToken); setDriveBackups(files); if (!files.length) Alert.alert('No Google Drive Backups', 'No Ebadsave backups were found in this Google account.'); }
+  catch (error) { Alert.alert('Google Drive', error instanceof Error ? error.message : 'Could not list backups.'); }
+  finally { setDriveBusy(false); }
+};
+
+const handleRestoreGoogleDriveBackup = (backup: GoogleDriveBackupInfo) => {
+  if (!driveAccessToken) { Alert.alert('Connect Google Drive', 'Sign in with Google first.'); return; }
+  if (drivePassphrase.trim().length < 12) { Alert.alert('Passphrase Required', 'Enter the same passphrase used when creating the backup.'); return; }
+  Alert.alert('Replace Local Database?', `Restoring ${backup.name} will replace the current local database with the database in this backup. Continue only on a new phone or after making a separate backup.`, [
+    { text: 'Cancel', style: 'cancel' },
+    { text: 'Restore', style: 'destructive', onPress: async () => {
+      try { setDriveBusy(true); await restoreGoogleDriveBackup(driveAccessToken, backup.id, drivePassphrase); Alert.alert('Restore Complete', 'Google Drive backup restored. Reopen the relevant screens to reload records.'); }
+      catch (error) { Alert.alert('Restore Failed', error instanceof Error ? error.message : 'Could not restore this backup.'); }
+      finally { setDriveBusy(false); }
     } },
   ]);
 };
@@ -450,6 +505,28 @@ Data Backup & Restore
     <Text style={styles.subtitle}>
       Backup your data before uninstalling the app
     </Text>
+  </View>
+
+  <View style={styles.section}>
+    <Text style={styles.sectionTitle}>Google Drive Backup & Restore</Text>
+    <Text style={styles.bodyText}>Back up the full Ebadsave database to your Google account and restore it on a replacement phone. Drive backups are encrypted before upload. This feature is separate from Back4App and does not change its business code.</Text>
+    <View style={styles.infoBox}><Text style={styles.infoText}>{driveAccessToken ? 'Google Drive is connected for this session.' : 'Connect Google Drive to access this app’s private backup folder. You may need to sign in again after reopening the app.'}</Text></View>
+    <TouchableOpacity style={[styles.button, styles.primaryButton, (!googleRequest || driveBusy) && styles.disabledButton]} onPress={() => { if (GOOGLE_ANDROID_CLIENT_ID.startsWith('YOUR_') && GOOGLE_WEB_CLIENT_ID.startsWith('YOUR_')) { Alert.alert('Google OAuth Setup Required', 'Add your Android and Web OAuth client IDs in src/config/googleDrive.ts, then rebuild the app.'); return; } void promptGoogleSignIn(); }} disabled={!googleRequest || driveBusy}>
+      <Text style={styles.buttonText}>{driveAccessToken ? 'Reconnect Google Drive' : 'Connect Google Drive'}</Text>
+    </TouchableOpacity>
+    <TextInput value={drivePassphrase} onChangeText={setDrivePassphrase} placeholder="Drive backup passphrase (12+ characters)" secureTextEntry autoCapitalize="none" style={styles.recoveryInput} />
+    <TouchableOpacity style={[styles.button, styles.primaryButton, driveBusy && styles.disabledButton]} onPress={() => void handleGoogleDriveBackup()} disabled={driveBusy || !driveAccessToken}>
+      {driveBusy ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Back Up Database to Google Drive</Text>}
+    </TouchableOpacity>
+    <TouchableOpacity style={[styles.button, styles.importButton, driveBusy && styles.disabledButton]} onPress={() => void handleListGoogleDriveBackups()} disabled={driveBusy || !driveAccessToken}>
+      <Text style={styles.importButtonText}>Find Google Drive Backups</Text>
+    </TouchableOpacity>
+    {driveBackups.map((backup) => (
+      <View key={backup.id} style={styles.backupCard}>
+        <View style={styles.backupInfo}><Text style={styles.backupName}>{backup.name}</Text><Text style={styles.backupDetails}>{backup.createdTime || 'Date unavailable'}{backup.size ? ` • ${Math.round(Number(backup.size) / 1024)} KB` : ''}</Text></View>
+        <TouchableOpacity style={[styles.iconButton, styles.restoreButton, driveBusy && styles.disabledButton]} onPress={() => handleRestoreGoogleDriveBackup(backup)} disabled={driveBusy}><Text style={styles.buttonIcon}>↩️</Text></TouchableOpacity>
+      </View>
+    ))}
   </View>
 
   <View style={styles.section}>

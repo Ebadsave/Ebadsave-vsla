@@ -268,15 +268,6 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
           <TouchableOpacity style={styles.headerButton} onPress={() => requireGroup() && navigation.navigate('SetupRules', { groupId: activeGroup!.id })}>
             <Text style={styles.headerButtonText}>Setup Rules</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel="Open Backup and Restore"
-            style={styles.headerButton}
-            onPress={openBackupRestore}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.headerButtonText}>Backup &amp; Restore</Text>
-          </TouchableOpacity>
         </View>
       </View>
 
@@ -299,18 +290,28 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel="Open Backup and Restore"
-          style={styles.backupRestoreAction}
-          onPress={openBackupRestore}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.backupRestoreActionTitle}>Backup &amp; Restore</Text>
-          <Text style={styles.backupRestoreActionSubtitle}>
-            Save a backup or restore a verified backup file
-          </Text>
-        </TouchableOpacity>
+        <View style={styles.backupButtonsRow}>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Open Back4App backup and restore"
+            style={[styles.backupProviderButton, styles.back4AppButton]}
+            onPress={openBackupRestore}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.backupProviderTitle}>Back4App Backup</Text>
+            <Text style={styles.backupProviderSubtitle}>Existing cloud backup</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Open Google Drive backup and restore"
+            style={[styles.backupProviderButton, styles.googleDriveButton]}
+            onPress={openBackupRestore}
+            activeOpacity={0.85}
+          >
+            <Text style={[styles.backupProviderTitle, styles.googleDriveButtonTitle]}>Google Drive Backup</Text>
+            <Text style={[styles.backupProviderSubtitle, styles.googleDriveButtonTitle]}>Separate Drive backup</Text>
+          </TouchableOpacity>
+        </View>
 
         <View style={styles.cardsGrid}>
           {cards.map((card) => (
@@ -451,9 +452,13 @@ const styles = StyleSheet.create({
   noGroupsText: { color: '#b45309', backgroundColor: '#fffbeb', borderRadius: 9, padding: 12, marginTop: 8 },
   cancelPickerButton: { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 9, paddingVertical: 12, alignItems: 'center', marginTop: 14 },
   cancelPickerText: { color: '#334155', fontWeight: '700' },
-  backupRestoreAction: { backgroundColor: '#ecfdf5', borderColor: '#16a34a', borderWidth: 1, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 13, marginBottom: 14 },
-  backupRestoreActionTitle: { color: '#166534', fontSize: 15, fontWeight: '800' },
-  backupRestoreActionSubtitle: { color: '#166534', fontSize: 12, marginTop: 3 },
+  backupButtonsRow: { flexDirection: 'row', gap: 10, marginBottom: 14 },
+  backupProviderButton: { flex: 1, minHeight: 82, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 13, justifyContent: 'center' },
+  back4AppButton: { backgroundColor: '#166534' },
+  googleDriveButton: { backgroundColor: '#ecfdf5', borderWidth: 1, borderColor: '#16a34a' },
+  backupProviderTitle: { color: '#ffffff', fontSize: 14, fontWeight: '800' },
+  backupProviderSubtitle: { color: '#ffffff', fontSize: 11, marginTop: 5 },
+  googleDriveButtonTitle: { color: '#166534' },
   cardsGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
   card: { width: '48%', backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#e5e7eb' },
   iconCircle: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#dcfce7', justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
