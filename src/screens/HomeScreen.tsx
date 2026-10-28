@@ -303,13 +303,13 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
           </TouchableOpacity>
           <TouchableOpacity
             accessibilityRole="button"
-            accessibilityLabel="Open Google Drive backup and restore"
-            style={[styles.backupProviderButton, styles.googleDriveButton]}
+            accessibilityLabel="Open Cloudflare backup and restore"
+            style={[styles.backupProviderButton, styles.cloudflareButton]}
             onPress={openBackupRestore}
             activeOpacity={0.85}
           >
-            <Text style={[styles.backupProviderTitle, styles.googleDriveButtonTitle]}>Google Drive Backup</Text>
-            <Text style={[styles.backupProviderSubtitle, styles.googleDriveButtonTitle]}>Separate Drive backup</Text>
+            <Text style={[styles.backupProviderTitle, styles.cloudflareButtonTitle]}>Cloudflare Backup</Text>
+            <Text style={[styles.backupProviderSubtitle, styles.cloudflareButtonTitle]}>Long-term cloud backup</Text>
           </TouchableOpacity>
         </View>
 
@@ -455,10 +455,10 @@ const styles = StyleSheet.create({
   backupButtonsRow: { flexDirection: 'row', gap: 10, marginBottom: 14 },
   backupProviderButton: { flex: 1, minHeight: 82, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 13, justifyContent: 'center' },
   back4AppButton: { backgroundColor: '#166534' },
-  googleDriveButton: { backgroundColor: '#ecfdf5', borderWidth: 1, borderColor: '#16a34a' },
+  cloudflareButton: { backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#f97316' },
   backupProviderTitle: { color: '#ffffff', fontSize: 14, fontWeight: '800' },
   backupProviderSubtitle: { color: '#ffffff', fontSize: 11, marginTop: 5 },
-  googleDriveButtonTitle: { color: '#166534' },
+  cloudflareButtonTitle: { color: '#9a3412' },
   cardsGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
   card: { width: '48%', backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#e5e7eb' },
   iconCircle: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#dcfce7', justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
