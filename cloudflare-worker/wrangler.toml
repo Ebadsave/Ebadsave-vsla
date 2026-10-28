@@ -1,0 +1,16 @@
+name = "ebadsave-vsla-api"
+main = "src/index.ts"
+compatibility_date = "2026-10-28"
+
+[[r2_buckets]]
+binding = "BACKUPS"
+bucket_name = "ebadsave-vsla"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ebadsave-vsla-db"
+database_id = "52a15672-86d8-4547-b95e-d16c63c48222"
+migrations_dir = "migrations"
+
+[observability]
+enabled = true
