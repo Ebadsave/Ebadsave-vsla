@@ -1,4 +1,4 @@
-PRAGMA foreign_keys = ON;
+.PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS backups (
 backup_id TEXT PRIMARY KEY,
