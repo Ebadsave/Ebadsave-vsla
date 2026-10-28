@@ -1,5 +1,3 @@
-import type { R2Bucket, D1Database } from '@cloudflare/workers-types';
-
 export interface Env {
 BACKUPS: R2Bucket;
 DB: D1Database;
