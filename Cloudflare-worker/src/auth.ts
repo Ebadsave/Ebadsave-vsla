@@ -28,9 +28,14 @@ async function derivePinHash(
   pin: string,
   salt: Uint8Array,
 ): Promise<Uint8Array> {
+  // Copy into a definite ArrayBuffer for TypeScript 5.9 compatibility.
+  const pinBytes = new TextEncoder().encode(pin);
+  const saltBuffer = new ArrayBuffer(salt.length);
+  new Uint8Array(saltBuffer).set(salt);
+
   const material = await crypto.subtle.importKey(
     'raw',
-    new TextEncoder().encode(pin),
+    pinBytes,
     'PBKDF2',
     false,
     ['deriveBits'],
@@ -39,7 +44,7 @@ async function derivePinHash(
   const derived = await crypto.subtle.deriveBits(
     {
       name: 'PBKDF2',
-      salt,
+      salt: saltBuffer,
       iterations: PIN_ITERATIONS,
       hash: 'SHA-256',
     },
@@ -95,4 +100,4 @@ export async function verifyPin(
   } catch {
     return false;
   }
-}
+                       }
