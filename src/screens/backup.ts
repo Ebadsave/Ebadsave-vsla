@@ -72,6 +72,7 @@ export interface CloudBackupFileInfo {
   backupCreatedAt: string;
   fileUrl: string;
   vaultId: string;
+  bytes?: number;
 }
 
 interface BackupEnvelope {
@@ -383,6 +384,63 @@ export async function exportGroupDatabaseBackup(groupId: number): Promise<{
   }
 }
 
+const CLOUDFLARE_WORKER_URL = 'https://ebadsave-vsla.info-ebadsave.workers.dev';
+const CLOUDFLARE_ADMIN_SESSION_KEY = 'ebadsave.cloudflare.admin.session.v1';
+
+type CloudflareSession = { accessToken: string; expiresAt: number };
+
+async function getCloudflareSession(): Promise<CloudflareSession> {
+  const raw = await SecureStore.getItemAsync(CLOUDFLARE_ADMIN_SESSION_KEY);
+  if (!raw) throw new Error('Sign in as this group administrator to Cloudflare first.');
+  let session: CloudflareSession;
+  try { session = JSON.parse(raw) as CloudflareSession; } catch { throw new Error('Cloudflare session is invalid. Sign in again.'); }
+  if (!session.accessToken || session.expiresAt <= Date.now() + 15_000) {
+    await SecureStore.deleteItemAsync(CLOUDFLARE_ADMIN_SESSION_KEY);
+    throw new Error('Cloudflare administrator session expired. Sign in again.');
+  }
+  return session;
+}
+
+async function cloudflareRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const session = await getCloudflareSession();
+  const response = await fetch(`${CLOUDFLARE_WORKER_URL}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${session.accessToken}`,
+      ...(init.headers || {}),
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    let reason = text;
+    try { reason = (JSON.parse(text) as { error?: string }).error || text; } catch { /* keep response text */ }
+    throw new Error(`Cloudflare request failed (${response.status}): ${reason || 'unknown_error'}`);
+  }
+  return await response.json() as T;
+}
+
+export async function signInCloudflareBackupAdmin(memberNumber: string, pin: string): Promise<{ success: boolean; message: string }> {
+  const normalized = memberNumber.trim().toUpperCase().replace(/\s+/g, ' ');
+  if (!/^KYA\s?\d{7}$/.test(normalized)) throw new Error('Enter a valid member number, for example KYA 2000001.');
+  if (!/^\d{6,12}$/.test(pin)) throw new Error('Administrator PIN must contain 6–12 digits.');
+  const response = await fetch(`${CLOUDFLARE_WORKER_URL}/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ memberNumber: normalized, pin }),
+  });
+  const payload = await response.json() as { accessToken?: string; expiresIn?: number; error?: string };
+  if (!response.ok || !payload.accessToken) throw new Error(`Cloudflare login failed: ${payload.error || response.status}`);
+  await SecureStore.setItemAsync(CLOUDFLARE_ADMIN_SESSION_KEY, JSON.stringify({
+    accessToken: payload.accessToken,
+    expiresAt: Date.now() + Math.max(60, payload.expiresIn || 900) * 1000,
+  }), { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+  return { success: true, message: 'Cloudflare administrator sign-in successful. Session expires automatically.' };
+}
+
+export async function signOutCloudflareBackupAdmin(): Promise<void> {
+  await SecureStore.deleteItemAsync(CLOUDFLARE_ADMIN_SESSION_KEY);
+}
+
 /** Encrypt and upload a group-only snapshot. The passphrase is required to recover it on another device. */
 export async function uploadGroupDatabaseBackupToCloud(
   groupId: number,
@@ -393,31 +451,26 @@ export async function uploadGroupDatabaseBackupToCloud(
     const contents = await createGroupDatabaseBackup(groupId);
     const parsed = JSON.parse(contents) as BackupEnvelope & { group_number?: string | number };
     parseAndValidateBackup(contents);
-    if (!parsed.group_number) throw new Error('The group backup has no KYA group identity.');
+    if (parsed.group_number === undefined || parsed.group_number === null) throw new Error('The group backup has no KYA group identity.');
     const groupNumber = String(parsed.group_number).replace(/^KYA\s*/i, '').trim();
     const envelope = await encryptBackupForCloud(contents, passphrase);
-    const cloudFileName = `ebadsave_group_${groupNumber}_encrypted_${Date.now()}.json`;
-    const uploadedFile = await parseApiRequest<{ name: string; url: string }>(`/files/${encodeURIComponent(cloudFileName)}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(envelope),
-    });
-    if (!uploadedFile?.name || !uploadedFile?.url) throw new Error('Back4App did not confirm the encrypted group backup upload.');
-    await parseApiRequest<{ objectId: string }>(`/classes/${BACK4APP_BACKUP_CLASS}`, {
-      method: 'POST',
-      body: JSON.stringify({
-        file: { __type: 'File', name: uploadedFile.name, url: uploadedFile.url },
-        backupFileName: cloudFileName,
-        backupCreatedAt: parsed.created_at,
-        vaultId: vaultIdForPassphrase(passphrase),
-        groupNumber,
-        recoverySchemaVersion: 1,
-        encrypted: true,
-        ACL: { '*': { read: true, write: false } },
-      }),
-    });
-    return { success: true, message: `Encrypted cloud backup saved for KYA ${groupNumber}. Keep the passphrase safe.`, groupNumber };
+    const backupId = `g${groupNumber}_${Date.now()}_${Crypto.randomUUID()}`.replace(/[^A-Za-z0-9_-]/g, '_');
+    const encryptedBody = JSON.stringify(envelope);
+    const response = await cloudflareRequest<{ ok?: boolean; backupId?: string; encrypted?: boolean }>(
+      '/v1/backups',
+      { method: 'POST', headers: {
+          'Content-Type': 'application/octet-stream',
+          'x-backup-id': backupId,
+          'x-backup-encrypted': 'true',
+          'x-group-id': String(groupId),
+          'x-group-number': groupNumber,
+        }, body: encryptedBody },
+    );
+    if (!response.ok || !response.backupId || response.encrypted !== true) throw new Error('Cloudflare did not confirm the encrypted backup upload.');
+    return { success: true, message: `Encrypted backup for KYA ${groupNumber} uploaded to Cloudflare R2 and catalogued in D1.`, groupNumber };
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown group cloud backup error.';
-    return { success: false, message: 'Group cloud backup failed.', error: message };
+    const message = error instanceof Error ? error.message : 'Unknown Cloudflare group backup error.';
+    return { success: false, message: 'Cloudflare group backup failed.', error: message };
   }
 }
 
@@ -428,21 +481,22 @@ export async function listCloudGroupBackups(
 ): Promise<{ success: boolean; backups: CloudBackupFileInfo[]; message: string; error?: string }> {
   try {
     requirePassphrase(passphraseInput);
-    const groupNumber = String(groupNumberInput).replace(/^KYA\s*/i, '').trim();
-    if (!groupNumber) throw new Error('Enter a valid KYA group number.');
-    const where = encodeURIComponent(JSON.stringify({ vaultId: vaultIdForPassphrase(passphraseInput), encrypted: true, groupNumber }));
-    const result = await parseApiRequest<{ results?: Array<{ objectId: string; createdAt: string; backupCreatedAt?: string; backupFileName?: string; vaultId: string; file?: { url?: string; name?: string } }> }>(
-      `/classes/${BACK4APP_BACKUP_CLASS}?where=${where}&order=-createdAt&limit=100`,
-    );
-    const backups = (result.results || []).filter((item) => Boolean(item.objectId && item.file?.url)).map((item) => ({
-      objectId: item.objectId, name: item.backupFileName || item.file?.name || `KYA ${groupNumber} backup`,
-      createdAt: item.createdAt || '', backupCreatedAt: item.backupCreatedAt || item.createdAt || '',
-      fileUrl: item.file!.url!, vaultId: item.vaultId,
+    const expected = String(groupNumberInput).replace(/^KYA\s*/i, '').trim();
+    if (!/^\d{4}$/.test(expected)) throw new Error('Enter a four-digit KYA group number.');
+    const result = await cloudflareRequest<{ backups?: Array<{ backupId: string; bytes: number; createdAt: string }> }>('/v1/backups');
+    const backups = (result.backups || []).filter((item) => item.backupId.startsWith(`g${expected}_`)).map((item) => ({
+      objectId: item.backupId,
+      name: `KYA ${expected} encrypted backup (${item.bytes} bytes)`,
+      createdAt: item.createdAt || '',
+      backupCreatedAt: item.createdAt || '',
+      fileUrl: '',
+      vaultId: 'cloudflare-group-admin',
+      bytes: item.bytes,
     }));
-    return { success: true, backups, message: `Found ${backups.length} cloud backup(s) for KYA ${groupNumber}.` };
+    return { success: true, backups, message: `Cloudflare returned ${backups.length} backup(s) for the signed-in administrator's group. The group number is verified again before restore.` };
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown group backup lookup error.';
-    return { success: false, backups: [], message: 'Could not load group cloud backups.', error: message };
+    const message = error instanceof Error ? error.message : 'Unknown Cloudflare backup lookup error.';
+    return { success: false, backups: [], message: 'Could not load Cloudflare group backups.', error: message };
   }
 }
 
@@ -455,26 +509,28 @@ export async function restoreCloudGroupDatabaseBackup(
   try {
     requirePassphrase(passphraseInput);
     const expected = String(expectedGroupNumber).replace(/^KYA\s*/i, '').trim();
-    if (!expected) throw new Error('Enter the KYA group number to restore.');
-    if (cloudBackup.vaultId !== vaultIdForPassphrase(passphraseInput)) throw new Error('The selected backup does not belong to this passphrase vault.');
-    const response = await fetch(cloudBackup.fileUrl);
-    if (!response.ok) throw new Error(`Could not download group backup (${response.status}).`);
-    const decrypted = decryptCloudBackup(await response.text(), passphraseInput);
+    if (!/^\d{4}$/.test(expected)) throw new Error('Enter the four-digit KYA group number to restore.');
+    const response = await fetch(`${CLOUDFLARE_WORKER_URL}/v1/backups/${encodeURIComponent(cloudBackup.objectId)}`, {
+      headers: { Authorization: `Bearer ${(await getCloudflareSession()).accessToken}` },
+    });
+    if (!response.ok) throw new Error(`Cloudflare backup download failed (${response.status}).`);
+    if (response.headers.get('x-backup-encrypted') !== 'true') throw new Error('Cloudflare did not identify this object as encrypted. Restore stopped.');
+    const encryptedContents = await response.text();
+    const decrypted = decryptCloudBackup(encryptedContents, passphraseInput);
     const parsed = JSON.parse(decrypted) as { group_number?: string | number };
     parseAndValidateBackup(decrypted);
     const actual = String(parsed.group_number ?? '').replace(/^KYA\s*/i, '').trim();
     if (actual !== expected) throw new Error(`Backup is for KYA ${actual || 'unknown'}, not KYA ${expected}. No data was changed.`);
-
-    const localFileName = `ebadsave_group_${expected}_recovery_${makeTimestamp()}.json`;
+    const localFileName = `ebadsave_group_${expected}_cloudflare_recovery_${makeTimestamp()}.json`;
     const localFilePath = `${getDocumentsDirectory()}${localFileName}`;
     await FileSystem.writeAsStringAsync(localFilePath, decrypted, { encoding: FileSystem.EncodingType.UTF8 });
     const saved = await FileSystem.readAsStringAsync(localFilePath, { encoding: FileSystem.EncodingType.UTF8 });
     parseAndValidateBackup(saved);
     await restoreGroupDatabaseBackup(saved, expected);
-    return { success: true, message: `KYA ${expected} restored. A verified local recovery copy was retained.`, localFilePath, localFileName };
+    return { success: true, message: `KYA ${expected} restored from Cloudflare. A verified local recovery copy was retained.`, localFilePath, localFileName };
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown group restore error.';
-    return { success: false, message: 'Group cloud restore failed.', error: message };
+    const message = error instanceof Error ? error.message : 'Unknown Cloudflare group restore error.';
+    return { success: false, message: 'Cloudflare group restore failed.', error: message };
   }
 }
 
