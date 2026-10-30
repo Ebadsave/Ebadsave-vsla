@@ -32,13 +32,11 @@ interface D1PreparedStatement {
 }
 interface D1Database {
   prepare(query: string): D1PreparedStatement;
-  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
 }
 export interface Env extends AuthEnv {
   BACKUPS: R2Bucket;
   DB: D1Database;
   JWT_HS256_SECRET: string;
-  ADMIN_BOOTSTRAP_SECRET: string;
 }
 
 type JwtRole = AuthRole;
@@ -62,7 +60,7 @@ function cors(response: Response, request: Request): Response {
   // Configure a specific production app origin if the mobile/web client requires CORS.
   if (origin) headers.set('access-control-allow-origin', origin);
   headers.set('access-control-allow-methods', 'GET,POST,OPTIONS');
-  headers.set('access-control-allow-headers', 'authorization,content-type,x-backup-id,x-backup-encrypted');
+  headers.set('access-control-allow-headers', 'authorization,content-type,x-backup-id,x-backup-encrypted,x-group-id,x-group-number');
   headers.set('access-control-max-age', '86400');
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
@@ -88,93 +86,6 @@ async function audit(env: Env, actorId: string, groupId: string, action: string,
     `INSERT INTO audit_events (actor_id, group_id, action, result, backup_id, created_at)
      VALUES (?, ?, ?, ?, ?, datetime('now'))`,
   ).bind(actorId, groupId, action, result, backupId ?? null).run();
-}
-
-
-function validGroupNumber(value: string): boolean {
-  const match = /^KYA\s?(\d{4})$/i.exec(value.trim());
-  if (!match) return false;
-  const number = Number(match[1]);
-  return (number >= 2000 && number <= 2009) || (number >= 2010 && number <= 9090);
-}
-
-function memberBelongsToGroup(memberNumber: string, groupNumber: string): boolean {
-  const member = normalizeMemberNumber(memberNumber).replace(/\s/g, '');
-  const group = normalizeMemberNumber(groupNumber).replace(/\s/g, '');
-  return new RegExp(`^${group}\\d{3}$`).test(member);
-}
-
-async function constantTimeSecretMatch(provided: string, expected: string): Promise<boolean> {
-  if (!provided || !expected) return false;
-  const encoder = new TextEncoder();
-  const [a, b] = await Promise.all([
-    crypto.subtle.digest('SHA-256', encoder.encode(provided)),
-    crypto.subtle.digest('SHA-256', encoder.encode(expected)),
-  ]);
-  const left = new Uint8Array(a);
-  const right = new Uint8Array(b);
-  let diff = left.length ^ right.length;
-  for (let i = 0; i < left.length; i++) diff |= left[i] ^ right[i];
-  return diff === 0;
-}
-
-async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
-  if (!env.ADMIN_BOOTSTRAP_SECRET || !env.JWT_HS256_SECRET) {
-    return json({ error: 'server_authentication_secrets_not_configured' }, 503);
-  }
-  const suppliedSecret = request.headers.get('x-admin-bootstrap-secret') ?? '';
-  if (!(await constantTimeSecretMatch(suppliedSecret, env.ADMIN_BOOTSTRAP_SECRET))) {
-    return json({ error: 'bootstrap_authorization_failed' }, 401);
-  }
-  const body = await readJson(request);
-  if (!body || typeof body.groupId !== 'string' || typeof body.groupNumber !== 'string' ||
-      typeof body.memberNumber !== 'string' || typeof body.memberName !== 'string' ||
-      typeof body.pin !== 'string') {
-    return json({ error: 'group_id_group_number_member_number_member_name_and_pin_required' }, 400);
-  }
-  const groupId = body.groupId.trim();
-  const groupNumber = normalizeMemberNumber(body.groupNumber);
-  const memberNumber = normalizeMemberNumber(body.memberNumber);
-  const memberName = body.memberName.trim();
-  if (!validId(groupId) || !validGroupNumber(groupNumber) ||
-      !memberBelongsToGroup(memberNumber, groupNumber) ||
-      !/^\d{6,12}$/.test(body.pin) || memberName.length < 2 || memberName.length > 160) {
-    return json({ error: 'invalid_group_or_admin_details', allowedGroupRanges: ['KYA 2000-KYA 2009', 'KYA 2010-KYA 9090'], memberSuffix: '001-999' }, 400);
-  }
-
-  const alreadyBootstrapped = await env.DB.prepare(
-    'SELECT group_id FROM group_admin_bootstrap_claims WHERE group_id = ? LIMIT 1',
-  ).bind(groupId).first<{ group_id: string }>();
-  if (alreadyBootstrapped) return json({ error: 'group_admin_already_bootstrapped' }, 409);
-
-  const numberClaimed = await env.DB.prepare(
-    'SELECT group_id FROM group_admin_bootstrap_claims WHERE group_number = ? LIMIT 1',
-  ).bind(groupNumber.replace(/\s/g, '')).first<{ group_id: string }>();
-  if (numberClaimed) return json({ error: 'group_number_already_bootstrapped' }, 409);
-
-  const memberExists = await env.DB.prepare(
-    `SELECT user_id FROM auth_users WHERE UPPER(REPLACE(member_number, ' ', '')) = ? LIMIT 1`,
-  ).bind(memberNumber.replace(/\s/g, '')).first<{ user_id: string }>();
-  if (memberExists) return json({ error: 'member_number_already_registered' }, 409);
-
-  const verifier = await createPinVerifier(body.pin);
-  const userId = crypto.randomUUID();
-  // D1 batch makes the one-time group claim and administrator creation atomic.
-  const claim = env.DB.prepare(
-    `INSERT INTO group_admin_bootstrap_claims (group_id, group_number, admin_user_id, created_at)
-     VALUES (?, ?, ?, datetime('now'))`,
-  ).bind(groupId, groupNumber.replace(/\s/g, ''), userId);
-  const user = env.DB.prepare(
-    `INSERT INTO auth_users (user_id, group_id, member_number, role, pin_hash, pin_salt, status)
-     VALUES (?, ?, ?, 'admin', ?, ?, 'active')`,
-  ).bind(userId, groupId, memberNumber, verifier.pinHash, verifier.pinSalt);
-  const event = env.DB.prepare(
-    `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
-     VALUES (?, ?, 'admin_bootstrap', 'success', datetime('now'))`,
-  ).bind(userId, groupId);
-  // D1Database.batch is added to the interface below and guarantees all-or-nothing writes.
-  await env.DB.batch([claim, user, event]);
-  return json({ ok: true, groupId, groupNumber, adminUserId: userId, memberNumber, role: 'admin' }, 201);
 }
 
 async function login(request: Request, env: Env): Promise<Response> {
@@ -387,11 +298,6 @@ export default {
       return cors(response, request);
     }
 
-    if (url.pathname === '/v1/auth/bootstrap-admin' && request.method === 'POST') {
-      response = await bootstrapAdmin(request, env);
-      return cors(response, request);
-    }
-
     if (url.pathname === '/v1/auth/login' && request.method === 'POST') {
       response = await login(request, env);
       return cors(response, request);
@@ -399,6 +305,14 @@ export default {
 
     const claims = await verifyAccessToken(request, env) as JwtClaims | null;
     if (!claims) return cors(json({ error: 'unauthorized' }, 401), request);
+
+    if (url.pathname === '/v1/auth/logout' && request.method === 'POST') {
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO revoked_tokens (token_id, user_id, expires_at, revoked_at)
+         VALUES (?, ?, ?, datetime('now'))`,
+      ).bind(claims.jti, claims.sub, claims.exp).run();
+      return cors(json({ ok: true, loggedOut: true }), request);
+    }
 
     if (url.pathname === '/v1/auth/users' && request.method === 'POST') {
       response = await createAuthUser(request, env, claims);
@@ -417,6 +331,12 @@ export default {
     if (url.pathname === '/v1/backups' && request.method === 'POST') {
       if (claims.role !== 'admin') return cors(json({ error: 'admin_required' }, 403), request);
       const backupId = request.headers.get('x-backup-id') ?? crypto.randomUUID();
+      const requestedGroupId = request.headers.get('x-group-id');
+      const requestedGroupNumber = request.headers.get('x-group-number') ?? '';
+      if (requestedGroupId !== claims.groupId) return cors(json({ error: 'group_scope_mismatch' }, 403), request);
+      if (!/^\d{4}$/.test(requestedGroupNumber) || !(Number(requestedGroupNumber) >= 2000 && Number(requestedGroupNumber) <= 2009 || Number(requestedGroupNumber) >= 2010 && Number(requestedGroupNumber) <= 9090)) {
+        return cors(json({ error: 'invalid_group_number' }, 400), request);
+      }
       if (!validId(backupId)) return cors(json({ error: 'invalid_backup_id' }, 400), request);
       const contentType = request.headers.get('content-type') ?? '';
       if (!contentType.toLowerCase().includes('application/octet-stream')) {
@@ -432,7 +352,7 @@ export default {
       const key = backupKey(claims.groupId, backupId);
       await env.BACKUPS.put(key, body, {
         httpMetadata: { contentType: 'application/octet-stream', cacheControl: 'private, no-store' },
-        customMetadata: { groupId: claims.groupId, backupId, uploadedBy: claims.sub, encrypted: 'true' },
+        customMetadata: { groupId: claims.groupId, groupNumber: requestedGroupNumber, backupId, uploadedBy: claims.sub, encrypted: 'true' },
       });
       await env.DB.prepare(
         `INSERT INTO backups (backup_id, group_id, object_key, uploaded_by, byte_size, created_at, status)
