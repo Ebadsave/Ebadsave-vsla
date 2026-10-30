@@ -6127,6 +6127,82 @@ export async function getMemberPassbookDashboardData(
   };
 }
 
+/** Build a Cloudflare passbook snapshot from the existing SQLite ledger.
+ * The administrator's authenticated sync action uploads this snapshot; amounts
+ * are derived here from the app's canonical financial helpers and ledger rows.
+ */
+export async function buildRemotePassbookSyncPayload(groupId: number): Promise<{
+  groupSummary: Record<string, string | number>;
+  members: Array<Record<string, unknown>>;
+}> {
+  const db = await getDatabase();
+  const group = await db.getFirstAsync<{ group_number: number; group_name: string; currency: string }>(
+    `SELECT group_number, group_name, currency FROM groups WHERE id = ? LIMIT 1`, groupId,
+  );
+  if (!group) throw new Error('Group was not found.');
+  const members = await db.getAllAsync<{ id: number; member_number: string; full_name: string; status: string }>(
+    `SELECT id, member_number, full_name, status FROM members WHERE group_id = ? ORDER BY id`, groupId,
+  );
+  const financial = await getFinancialSummary(groupId);
+  const activeMembers = members.filter((m) => m.status === 'active');
+  let outstandingLoansUgx = 0;
+  const memberSnapshots: Array<Record<string, unknown>> = [];
+  for (const member of activeMembers) {
+    const [savings, loan, dueDate, txs] = await Promise.all([
+      getMemberSavings(groupId, Number(member.id)),
+      getMemberLoanBalance(groupId, Number(member.id)),
+      getMemberLoanDueDate(groupId, Number(member.id)),
+      db.getAllAsync<{ id: number; transaction_type: string; amount: number; reason: string; created_at: string }>(
+        `SELECT id, transaction_type, amount, reason, created_at FROM financial_transactions
+         WHERE group_id = ? AND member_id = ? AND reversed = 0 ORDER BY created_at DESC, id DESC LIMIT 500`,
+        groupId, Number(member.id),
+      ),
+    ]);
+    outstandingLoansUgx += Math.max(0, Number(loan.balance || 0));
+    memberSnapshots.push({
+      memberNumber: member.member_number,
+      memberName: member.full_name,
+      totalSavingsUgx: Math.max(0, Math.round(savings)),
+      loanBalanceUgx: Math.max(0, Math.round(loan.balance || 0)),
+      loanDueDate: dueDate,
+      transactions: txs.map((tx) => ({
+        transactionId: String(tx.id), transactionType: tx.transaction_type,
+        amountUgx: Math.max(0, Math.round(Math.abs(Number(tx.amount) || 0))),
+        description: tx.reason || '', transactionDate: tx.created_at,
+      })),
+    });
+  }
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const previousDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const previousMonth = `${previousDate.getFullYear()}-${String(previousDate.getMonth() + 1).padStart(2, '0')}`;
+  const expenditureRows = await db.getAllAsync<{ period: string; total: number }>(
+    `SELECT substr(created_at, 1, 7) AS period, COALESCE(SUM(ABS(amount)), 0) AS total
+     FROM financial_transactions
+     WHERE group_id = ? AND reversed = 0 AND account_type = 'expenditure_fund'
+     GROUP BY substr(created_at, 1, 7)`, groupId,
+  );
+  const expenditureByMonth = new Map(expenditureRows.map((r) => [r.period, Math.round(Number(r.total) || 0)]));
+  const registeredCount = members.length;
+  return {
+    groupSummary: {
+      groupNumber: String(group.group_number), groupName: group.group_name,
+      currency: group.currency || 'UGX',
+      totalSavingsUgx: Math.max(0, Math.round(financial.savings)),
+      // financial.loanFund is the reconciled cash balance available in the loan account.
+      availableLoanFundUgx: Math.max(0, Math.round(financial.loanFund)),
+      outstandingLoansUgx: Math.max(0, Math.round(outstandingLoansUgx)),
+      insuranceFundUgx: Math.max(0, Math.round(financial.insuranceFund)),
+      finesFundUgx: Math.max(0, Math.round(financial.fines)),
+      registeredMembers: registeredCount, activeMembers: activeMembers.length,
+      totalExpenditureUgx: expenditureByMonth.get(currentMonth) || 0,
+      previousPeriodExpenditureUgx: expenditureByMonth.get(previousMonth) || 0,
+      reportingPeriod: currentMonth, previousReportingPeriod: previousMonth,
+    },
+    members: memberSnapshots,
+  };
+}
+
 /* ============================================================
    FINANCIAL TRANSACTIONS
    ============================================================ */
