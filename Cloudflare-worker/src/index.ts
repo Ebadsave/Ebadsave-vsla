@@ -37,6 +37,7 @@ export interface Env extends AuthEnv {
   BACKUPS: R2Bucket;
   DB: D1Database;
   JWT_HS256_SECRET: string;
+  ADMIN_BOOTSTRAP_SECRET?: string;
 }
 
 type JwtRole = AuthRole;
@@ -86,6 +87,26 @@ async function audit(env: Env, actorId: string, groupId: string, action: string,
     `INSERT INTO audit_events (actor_id, group_id, action, result, backup_id, created_at)
      VALUES (?, ?, ?, ?, ?, datetime('now'))`,
   ).bind(actorId, groupId, action, result, backupId ?? null).run();
+}
+
+async function bootstrapGroupAdmin(request: Request, env: Env): Promise<Response> {
+  const configured = env.ADMIN_BOOTSTRAP_SECRET;
+  const supplied = request.headers.get('x-admin-bootstrap-secret') || '';
+  if (!configured || supplied.length < 32 || supplied !== configured) return json({ error: 'bootstrap_not_authorized' }, 403);
+  const body = await readJson(request);
+  if (!body || typeof body.groupId !== 'string' || !/^\d{1,12}$/.test(body.groupId) ||
+      typeof body.memberNumber !== 'string' || typeof body.pin !== 'string') return json({ error: 'invalid_bootstrap_request' }, 400);
+  const memberNumber = normalizeMemberNumber(body.memberNumber);
+  if (!validMemberNumber(memberNumber) || !/^\d{6,12}$/.test(body.pin)) return json({ error: 'invalid_member_number_or_pin' }, 400);
+  const claimed = await env.DB.prepare('INSERT OR IGNORE INTO group_admin_bootstraps (group_id) VALUES (?)').bind(body.groupId).run();
+  if (!claimed.meta || Number(claimed.meta.changes || 0) !== 1) return json({ error: 'group_admin_already_bootstrapped' }, 409);
+  const verifier = await createPinVerifier(body.pin);
+  const userId = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO auth_users (user_id, group_id, member_number, role, pin_hash, pin_salt, status)
+     VALUES (?, ?, ?, 'admin', ?, ?, 'active')`,
+  ).bind(userId, body.groupId, memberNumber, verifier.pinHash, verifier.pinSalt).run();
+  return json({ ok: true, userId, groupId: body.groupId, memberNumber, role: 'admin' }, 201);
 }
 
 async function login(request: Request, env: Env): Promise<Response> {
@@ -195,14 +216,28 @@ async function getMyPassbook(env: Env, claims: JwtClaims): Promise<Response> {
      WHERE group_id = ? AND UPPER(REPLACE(member_number, ' ', '')) = ?
      ORDER BY transaction_date DESC LIMIT 500`,
   ).bind(claims.groupId, normalizedNumber).all();
-  return json({ passbook: { ...account, transactions: transactions.results ?? [] } });
+  const group = await env.DB.prepare(
+    `SELECT group_number AS groupNumber, group_name AS groupName, currency,
+            total_savings_ugx AS totalSavingsUgx,
+            available_loan_fund_ugx AS availableLoanFundUgx,
+            outstanding_loans_ugx AS outstandingLoansUgx,
+            insurance_fund_ugx AS insuranceFundUgx, fines_fund_ugx AS finesFundUgx,
+            registered_members AS registeredMembers, active_members AS activeMembers,
+            total_expenditure_ugx AS totalExpenditureUgx,
+            previous_period_expenditure_ugx AS previousPeriodExpenditureUgx,
+            reporting_period AS reportingPeriod,
+            previous_reporting_period AS previousReportingPeriod
+     FROM passbook_group_summaries WHERE group_id = ? LIMIT 1`,
+  ).bind(claims.groupId).first<Record<string, unknown>>();
+  if (!group) return json({ error: 'group_summary_not_synced' }, 404);
+  return json({ passbook: { ...account, group, transactions: transactions.results ?? [] } });
 }
 
 async function syncPassbook(request: Request, env: Env, claims: JwtClaims): Promise<Response> {
   if (claims.role !== 'admin') return json({ error: 'admin_required' }, 403);
   const body = await readJson(request);
-  if (!body || !Array.isArray(body.members) || body.members.length < 1 || body.members.length > 500) {
-    return json({ error: 'members_array_required_max_500' }, 400);
+  if (!body || !Array.isArray(body.members) || body.members.length < 1 || body.members.length > 500 || !isRecord(body.groupSummary)) {
+    return json({ error: 'members_and_group_summary_required' }, 400);
   }
   const db = env.DB;
   let synced = 0;
@@ -255,8 +290,43 @@ async function syncPassbook(request: Request, env: Env, claims: JwtClaims): Prom
     }
     synced++;
   }
+  const summary = body.groupSummary;
+  const numericFields = ['totalSavingsUgx','availableLoanFundUgx','outstandingLoansUgx','insuranceFundUgx','finesFundUgx','registeredMembers','activeMembers','totalExpenditureUgx','previousPeriodExpenditureUgx'];
+  if (typeof summary.groupNumber !== 'string' || typeof summary.groupName !== 'string' ||
+      typeof summary.currency !== 'string' || typeof summary.reportingPeriod !== 'string' ||
+      typeof summary.previousReportingPeriod !== 'string' || numericFields.some((key) => !Number.isSafeInteger(summary[key]) || Number(summary[key]) < 0)) {
+    return json({ error: 'invalid_group_summary' }, 400);
+  }
+  await db.prepare(
+    `INSERT INTO passbook_group_summaries
+     (group_id, group_number, group_name, currency, total_savings_ugx, available_loan_fund_ugx,
+      outstanding_loans_ugx, insurance_fund_ugx, fines_fund_ugx, registered_members, active_members,
+      total_expenditure_ugx, previous_period_expenditure_ugx, reporting_period, previous_reporting_period, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(group_id) DO UPDATE SET group_number=excluded.group_number, group_name=excluded.group_name,
+      currency=excluded.currency, total_savings_ugx=excluded.total_savings_ugx,
+      available_loan_fund_ugx=excluded.available_loan_fund_ugx, outstanding_loans_ugx=excluded.outstanding_loans_ugx,
+      insurance_fund_ugx=excluded.insurance_fund_ugx, fines_fund_ugx=excluded.fines_fund_ugx,
+      registered_members=excluded.registered_members, active_members=excluded.active_members,
+      total_expenditure_ugx=excluded.total_expenditure_ugx,
+      previous_period_expenditure_ugx=excluded.previous_period_expenditure_ugx,
+      reporting_period=excluded.reporting_period, previous_reporting_period=excluded.previous_reporting_period,
+      updated_at=datetime('now')`,
+  ).bind(claims.groupId, summary.groupNumber, summary.groupName, summary.currency,
+    summary.totalSavingsUgx, summary.availableLoanFundUgx, summary.outstandingLoansUgx,
+    summary.insuranceFundUgx, summary.finesFundUgx, summary.registeredMembers, summary.activeMembers,
+    summary.totalExpenditureUgx, summary.previousPeriodExpenditureUgx,
+    summary.reportingPeriod, summary.previousReportingPeriod).run();
   await audit(env, claims.sub, claims.groupId, 'passbook_sync', 'success');
-  return json({ ok: true, membersSynced: synced });
+  return json({ ok: true, membersSynced: synced, groupSummarySynced: true });
+}
+
+async function logout(request: Request, env: Env, claims: JwtClaims): Promise<Response> {
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO revoked_tokens (token_id, user_id, expires_at, revoked_at)
+     VALUES (?, ?, ?, datetime('now'))`,
+  ).bind(claims.jti, claims.sub, claims.exp).run();
+  return json({ ok: true });
 }
 
 async function createAuthUser(request: Request, env: Env, claims: JwtClaims): Promise<Response> {
@@ -298,6 +368,10 @@ export default {
       return cors(response, request);
     }
 
+    if (url.pathname === '/v1/auth/bootstrap-admin' && request.method === 'POST') {
+      response = await bootstrapGroupAdmin(request, env);
+      return cors(response, request);
+    }
     if (url.pathname === '/v1/auth/login' && request.method === 'POST') {
       response = await login(request, env);
       return cors(response, request);
@@ -306,6 +380,10 @@ export default {
     const claims = await verifyAccessToken(request, env) as JwtClaims | null;
     if (!claims) return cors(json({ error: 'unauthorized' }, 401), request);
 
+    if (url.pathname === '/v1/auth/logout' && request.method === 'POST') {
+      response = await logout(request, env, claims);
+      return cors(response, request);
+    }
     if (url.pathname === '/v1/auth/users' && request.method === 'POST') {
       response = await createAuthUser(request, env, claims);
       return cors(response, request);
