@@ -3,6 +3,7 @@ import * as MailComposer from 'expo-mail-composer';
 import * as Crypto from 'expo-crypto';
 import * as CryptoJS from 'crypto-js';
 import * as SecureStore from 'expo-secure-store';
+import * as Network from 'expo-network';
 import {
   createDatabaseBackup,
   createGroupDatabaseBackup,
@@ -49,7 +50,6 @@ const REQUIRED_BACKUP_TABLES = [
 
 const CLOUD_BACKUP_VERSION = 1;
 const PBKDF2_ITERATIONS = 120_000;
-const MAX_LOCAL_BACKUP_FILES = 2;
 
 export interface BackupFileInfo {
   name: string;
@@ -319,7 +319,7 @@ export async function exportGroupDatabaseBackup(groupId: number): Promise<{
 const CLOUDFLARE_WORKER_URL = 'https://ebadsave-vsla.info-ebadsave.workers.dev';
 const CLOUDFLARE_ADMIN_SESSION_KEY = 'ebadsave.cloudflare.admin.session.v1';
 
-type CloudflareSession = { accessToken: string; expiresAt: number };
+type CloudflareSession = { accessToken: string; expiresAt: number; groupId: string; role: string };
 
 async function getCloudflareSession(): Promise<CloudflareSession> {
   const raw = await SecureStore.getItemAsync(CLOUDFLARE_ADMIN_SESSION_KEY);
@@ -362,8 +362,14 @@ export async function signInCloudflareBackupAdmin(memberNumber: string, pin: str
   });
   const payload = await response.json() as { accessToken?: string; expiresIn?: number; error?: string };
   if (!response.ok || !payload.accessToken) throw new Error(`Cloudflare login failed: ${payload.error || response.status}`);
+  const tokenParts = payload.accessToken.split('.');
+  if (tokenParts.length !== 3) throw new Error('Cloudflare returned an invalid access token.');
+  let claims: { groupId?: string; role?: string };
+  try { claims = JSON.parse(decodeURIComponent(Array.from(atob(tokenParts[1].replace(/-/g, '+').replace(/_/g, '/')), (c) => '%' + c.charCodeAt(0).toString(16).padStart(2, '0')).join(''))); }
+  catch { throw new Error('Could not read Cloudflare token claims.'); }
+  if (!claims.groupId || claims.role !== 'admin') throw new Error('This account is not a group administrator.');
   await SecureStore.setItemAsync(CLOUDFLARE_ADMIN_SESSION_KEY, JSON.stringify({
-    accessToken: payload.accessToken,
+    accessToken: payload.accessToken, groupId: claims.groupId, role: claims.role,
     expiresAt: Date.now() + Math.max(60, payload.expiresIn || 900) * 1000,
   }), { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
   return { success: true, message: 'Cloudflare administrator sign-in successful. Session expires automatically.' };
@@ -394,7 +400,7 @@ export async function uploadGroupDatabaseBackupToCloud(
           'Content-Type': 'application/octet-stream',
           'x-backup-id': backupId,
           'x-backup-encrypted': 'true',
-          'x-group-id': String(groupId),
+          'x-group-id': (await getCloudflareSession()).groupId,
           'x-group-number': groupNumber,
         }, body: encryptedBody },
     );
@@ -612,3 +618,121 @@ export function formatFileSize(bytes: number): string {
 }
 
 
+// Automatic backups use a device-generated key stored in Android/iOS secure storage.
+// The key is never sent to Back4App; it is used locally to encrypt/decrypt the backup.
+const AUTO_BACKUP_SECRET_KEY = 'ebadsave.back4app.autoBackupSecret.v1';
+const AUTO_BACKUP_LAST_SUCCESS_KEY = 'ebadsave.back4app.autoBackupLastSuccess.v1';
+const AUTO_BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const MAX_LOCAL_BACKUP_FILES = 2;
+const MAX_CLOUD_BACKUP_FILES = 2;
+let automaticBackupInProgress = false;
+
+async function getAutomaticBackupPassphrase(): Promise<string> {
+  let secret = await SecureStore.getItemAsync(AUTO_BACKUP_SECRET_KEY);
+  if (secret && secret.length >= 32) return secret;
+
+  // 32 random bytes produce a strong 64-character hexadecimal secret.
+  secret = randomBytesToHex(await Crypto.getRandomBytesAsync(32));
+  await SecureStore.setItemAsync(AUTO_BACKUP_SECRET_KEY, secret, {
+    keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  });
+  return secret;
+}
+
+async function hasInternetConnection(): Promise<boolean> {
+  try {
+    const state = await Network.getNetworkStateAsync();
+    return state.isConnected === true && state.isInternetReachable !== false;
+  } catch {
+    // If the network state cannot be determined, do not risk an upload attempt.
+    return false;
+  }
+}
+
+/**
+ * Creates an encrypted Back4App backup automatically when internet is available.
+ * It runs at most once every six hours unless force=true. A failed upload is retried
+ * on a later app start/network opportunity. Local backups remain on the device.
+ */
+export async function runAutomaticCloudBackup(force = false): Promise<{
+  success: boolean;
+  skipped?: boolean;
+  message: string;
+  error?: string;
+}> {
+  if (automaticBackupInProgress) {
+    return { success: true, skipped: true, message: 'An automatic backup is already running.' };
+  }
+
+  automaticBackupInProgress = true;
+  try {
+    if (!(await hasInternetConnection())) {
+      return { success: false, skipped: true, message: 'Automatic backup is waiting for an internet connection.' };
+    }
+
+    const lastSuccessText = await SecureStore.getItemAsync(AUTO_BACKUP_LAST_SUCCESS_KEY);
+    const lastSuccess = lastSuccessText ? Number(lastSuccessText) : 0;
+    if (!force && Number.isFinite(lastSuccess) && Date.now() - lastSuccess < AUTO_BACKUP_INTERVAL_MS) {
+      return { success: true, skipped: true, message: 'Automatic backup is up to date.' };
+    }
+
+    const local = await exportDatabaseBackup();
+    if (!local.success || !local.filePath || !local.fileName) {
+      throw new Error(local.error || local.message || 'Could not create a local backup.');
+    }
+
+    const secret = await getAutomaticBackupPassphrase();
+    const uploaded = await uploadDatabaseBackupToCloud(local.filePath, local.fileName, secret);
+    if (!uploaded.success) {
+      throw new Error(uploaded.error || uploaded.message || 'Back4App upload failed.');
+    }
+
+    await SecureStore.setItemAsync(AUTO_BACKUP_LAST_SUCCESS_KEY, String(Date.now()));
+    return { success: true, message: 'Automatic encrypted backup completed.' };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown automatic backup error.';
+    return { success: false, message: 'Automatic backup did not complete.', error: message };
+  } finally {
+    automaticBackupInProgress = false;
+  }
+}
+
+/** Lists backups created by this device's automatic backup vault. */
+export async function listAutomaticCloudBackups(): Promise<{
+  success: boolean;
+  backups: CloudBackupFileInfo[];
+  message: string;
+  error?: string;
+}> {
+  try {
+    if (!(await hasInternetConnection())) {
+      return { success: false, backups: [], message: 'Connect to the internet to view cloud backups.' };
+    }
+    const secret = await getAutomaticBackupPassphrase();
+    return await listCloudBackups(secret);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown cloud backup error.';
+    return { success: false, backups: [], message: 'Could not load automatic cloud backups.', error: message };
+  }
+}
+
+/** Restores a selected automatic cloud backup without asking for a separate passphrase or consent prompt. */
+export async function restoreAutomaticCloudBackup(
+  cloudBackup: CloudBackupFileInfo,
+): Promise<{ success: boolean; message: string; error?: string; localFilePath?: string; localFileName?: string }> {
+  try {
+    if (!(await hasInternetConnection())) {
+      throw new Error('Connect to the internet before restoring a cloud backup.');
+    }
+    const secret = await getAutomaticBackupPassphrase();
+    const result = await restoreCloudDatabaseBackup(cloudBackup, secret);
+    if (!result.success) throw new Error(result.error || result.message);
+
+    // Force a fresh cloud backup on the next eligible opportunity after a restore.
+    await SecureStore.deleteItemAsync(AUTO_BACKUP_LAST_SUCCESS_KEY);
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown automatic restore error.';
+    return { success: false, message: 'Could not restore the automatic cloud backup.', error: message };
+  }
+}

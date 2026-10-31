@@ -12,8 +12,10 @@ View,
 import * as DocumentPicker from 'expo-document-picker';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 
+import { getAutomaticCloudBackupConsent, setAutomaticCloudBackupConsent, runAutomaticCloudBackup } from '../database/backup';
+import { registerAutomaticBackupTask, unregisterAutomaticBackupTask } from '../services/backupBackground';
 import { getAllGroups, type GroupRecord } from '../database/database';
-import { exportGroupDatabaseBackup, uploadGroupDatabaseBackupToCloud, listCloudGroupBackups, restoreCloudGroupDatabaseBackup, type CloudBackupFileInfo } from './backup';
+import { exportGroupDatabaseBackup, uploadGroupDatabaseBackupToCloud, listCloudGroupBackups, restoreCloudGroupDatabaseBackup, signInCloudflareBackupAdmin, signOutCloudflareBackupAdmin, type CloudBackupFileInfo } from './backup';
 
 import {
 exportDatabaseBackup,
@@ -37,12 +39,35 @@ const [backupFiles, setBackupFiles] = useState<BackupFile[]>([]);
 const [loading, setLoading] = useState(false);
 const [exporting, setExporting] = useState(false);
 const [restoringFile, setRestoringFile] = useState<string | null>(null);
+const [cloudBackupConsent, setCloudBackupConsent] = useState<boolean | null>(null);
+const [changingConsent, setChangingConsent] = useState(false);
+const [cloudBackupStatus, setCloudBackupStatus] = useState('Checking automatic cloud backup status…');
 const [groups, setGroups] = useState<GroupRecord[]>([]);
 const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
 const [groupNumberInput, setGroupNumberInput] = useState('');
 const [recoveryPassphrase, setRecoveryPassphrase] = useState('');
 const [cloudGroupBackups, setCloudGroupBackups] = useState<CloudBackupFileInfo[]>([]);
 const [groupCloudBusy, setGroupCloudBusy] = useState(false);
+const [cloudAdminMemberNumber, setCloudAdminMemberNumber] = useState('');
+const [cloudAdminPin, setCloudAdminPin] = useState('');
+const [cloudAdminSignedIn, setCloudAdminSignedIn] = useState(false);
+const loadConsent = useCallback(async () => {
+  try {
+    const enabled = await getAutomaticCloudBackupConsent();
+    setCloudBackupConsent(enabled);
+    setCloudBackupStatus(
+      enabled
+        ? 'Consent is enabled. Automatic encrypted cloud uploads are allowed; backups may run approximately every 6 hours when Android/iOS allows them.'
+        : 'Automatic cloud backup is off because consent is disabled. Local backups remain available.',
+    );
+  } catch (error) {
+    console.error('Could not load automatic cloud backup setting:', error);
+    setCloudBackupStatus(
+      'Unable to verify the automatic cloud backup setting. Please reopen this screen.',
+    );
+  }
+}, []);
+
 const loadGroups = useCallback(async () => {
   try {
     const result = await getAllGroups();
@@ -61,7 +86,26 @@ const loadGroups = useCallback(async () => {
   }
 }, [selectedGroupId]);
 
+const handleCloudflareAdminSignIn = async () => {
+  try {
+    setGroupCloudBusy(true);
+    await signInCloudflareBackupAdmin(cloudAdminMemberNumber, cloudAdminPin);
+    setCloudAdminPin('');
+    setCloudAdminSignedIn(true);
+    Alert.alert('Cloudflare Connected', 'Group administrator authenticated successfully.');
+  } catch (error) {
+    Alert.alert('Cloudflare Sign-in Failed', error instanceof Error ? error.message : 'Sign-in failed.');
+  } finally { setGroupCloudBusy(false); }
+};
+
+const handleCloudflareAdminSignOut = async () => {
+  await signOutCloudflareBackupAdmin();
+  setCloudAdminSignedIn(false);
+  setCloudGroupBackups([]);
+};
+
 const handleUploadGroupBackup = async () => {
+  if (!cloudAdminSignedIn) { Alert.alert('Administrator Sign-in Required', 'Sign in with the group administrator member number and PIN first.'); return; }
   if (selectedGroupId === null) {
     Alert.alert('Select Group', 'Choose the registered group to back up.');
     return;
@@ -83,6 +127,7 @@ const handleUploadGroupBackup = async () => {
 };
 
 const handleFindCloudGroupBackups = async () => {
+  if (!cloudAdminSignedIn) { Alert.alert('Administrator Sign-in Required', 'Sign in with the group administrator first.'); return; }
   if (!groupNumberInput.trim()) {
     Alert.alert('Group Number Required', 'Enter the KYA group number, for example KYA2012.');
     return;
@@ -134,9 +179,35 @@ setLoading(false);
 useFocusEffect(
 useCallback(() => {
   void loadBackupFiles();
+  void loadConsent();
   void loadGroups();
-}, [loadBackupFiles, loadGroups])
+}, [loadBackupFiles, loadConsent, loadGroups])
 );
+
+const handleCloudBackupConsent = async () => {
+  if (cloudBackupConsent === null) return;
+  const nextValue = !cloudBackupConsent;
+  try {
+    setChangingConsent(true);
+    const saved = await setAutomaticCloudBackupConsent(nextValue);
+    if (!saved.success) throw new Error(saved.error || saved.message);
+    if (nextValue) {
+      setCloudBackupConsent(true);
+      await registerAutomaticBackupTask();
+      setCloudBackupStatus('Consent enabled. Starting the first encrypted cloud backup.');
+      const result = await runAutomaticCloudBackup(true);
+      setCloudBackupStatus(result.message);
+      if (!result.success && !result.skipped) Alert.alert('Cloud Backup Pending', result.error || result.message);
+    } else {
+      await unregisterAutomaticBackupTask();
+      setCloudBackupConsent(false);
+      setCloudBackupStatus('Automatic cloud uploads are disabled. Local backups remain available.');
+    }
+  } catch (error) {
+    setCloudBackupStatus('Could not update the automatic backup setting.');
+    Alert.alert('Automatic Backup', error instanceof Error ? error.message : 'Could not update setting.');
+  } finally { setChangingConsent(false); }
+};
 
 const handleExportBackup = async () => {
 try {
@@ -404,9 +475,22 @@ Data Backup & Restore
     </Text>
   </View>
 
+  <View style={styles.section}>
+    <Text style={styles.sectionTitle}>Cloudflare Backup & Restore</Text>
+    <TextInput value={cloudAdminMemberNumber} onChangeText={setCloudAdminMemberNumber} placeholder="Administrator member number (KYA2010001)" autoCapitalize="characters" style={styles.recoveryInput} />
+    <TextInput value={cloudAdminPin} onChangeText={setCloudAdminPin} placeholder="Administrator PIN" secureTextEntry keyboardType="number-pad" style={styles.recoveryInput} />
+    <TouchableOpacity style={[styles.button, styles.primaryButton, groupCloudBusy && styles.disabledButton]} onPress={() => void (cloudAdminSignedIn ? handleCloudflareAdminSignOut() : handleCloudflareAdminSignIn())} disabled={groupCloudBusy}>
+      <Text style={styles.buttonText}>{cloudAdminSignedIn ? 'Sign Out of Cloudflare' : 'Sign In as Group Administrator'}</Text>
+    </TouchableOpacity>
+    <Text style={styles.bodyText}>Sign in as the group administrator to upload, list and restore encrypted group backups using Cloudflare Worker, R2 and D1.</Text>
+    <View style={styles.infoBox}><Text style={styles.infoText}>Cloudflare backup requires an active group administrator account. Backups are encrypted on this device before upload.</Text></View>
+  </View>
+
+
+
 <View style={styles.section}>
-  <Text style={styles.sectionTitle}>Cloudflare Group Backup & Recovery</Text>
-  <Text style={styles.bodyText}>Create an encrypted backup for one group in Cloudflare, or recover that group on another phone. Use a passphrase of at least 12 characters and keep it somewhere safe. The app cannot recover a forgotten passphrase.</Text>
+  <Text style={styles.sectionTitle}>Group Cloud Backup & Recovery</Text>
+  <Text style={styles.bodyText}>Create an encrypted backup for one group, or recover that group on another phone. Use a passphrase of at least 12 characters and keep it somewhere safe. The app cannot recover a forgotten passphrase.</Text>
   {groups.length ? groups.map((group) => (
     <TouchableOpacity key={group.id} onPress={() => setSelectedGroupId(group.id)} style={[styles.groupChoice, selectedGroupId === group.id && styles.groupChoiceSelected]}>
       <Text style={styles.groupChoiceText}>{selectedGroupId === group.id ? '✓ ' : ''}KYA {group.group_number} — {group.group_name}</Text>
@@ -688,7 +772,7 @@ Data Backup & Restore
       </Text>
 
       <Text style={styles.tipText}>
-        Keep a verified local backup on this device. Cloudflare recovery requires administrator sign-in.
+        Keep a verified local backup and use the existing approved cloud backup until Cloudflare recovery has been tested.
       </Text>
     </View>
   </View>
