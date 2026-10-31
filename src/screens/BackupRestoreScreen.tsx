@@ -190,7 +190,7 @@ const handleCloudBackupConsent = async () => {
   try {
     setChangingConsent(true);
     const saved = await setAutomaticCloudBackupConsent(nextValue);
-    if (!saved.success) throw new Error(saved.error || saved.message);
+    if (!saved.success) throw new Error(saved.message);
     if (nextValue) {
       setCloudBackupConsent(true);
       await registerAutomaticBackupTask();
