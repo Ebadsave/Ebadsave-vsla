@@ -21,7 +21,7 @@ import {
   getMeetingCashReconciliation,
   getOpenMeeting,
 } from '../database/database';
-import { exportDatabaseBackup } from './backup';
+import { exportDatabaseBackup } from './backup/backup';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CloseMeeting'>;
 
