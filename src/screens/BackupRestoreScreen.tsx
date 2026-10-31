@@ -12,8 +12,6 @@ View,
 import * as DocumentPicker from 'expo-document-picker';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 
-import { getAutomaticCloudBackupConsent, setAutomaticCloudBackupConsent, runAutomaticCloudBackup } from '../database/backup';
-import { registerAutomaticBackupTask, unregisterAutomaticBackupTask } from '../services/backupBackground';
 import { getAllGroups, type GroupRecord } from '../database/database';
 import { exportGroupDatabaseBackup, uploadGroupDatabaseBackupToCloud, listCloudGroupBackups, restoreCloudGroupDatabaseBackup, type CloudBackupFileInfo } from './backup';
 
@@ -39,32 +37,12 @@ const [backupFiles, setBackupFiles] = useState<BackupFile[]>([]);
 const [loading, setLoading] = useState(false);
 const [exporting, setExporting] = useState(false);
 const [restoringFile, setRestoringFile] = useState<string | null>(null);
-const [cloudBackupConsent, setCloudBackupConsent] = useState<boolean | null>(null);
-const [changingConsent, setChangingConsent] = useState(false);
-const [cloudBackupStatus, setCloudBackupStatus] = useState('Checking automatic cloud backup status…');
 const [groups, setGroups] = useState<GroupRecord[]>([]);
 const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
 const [groupNumberInput, setGroupNumberInput] = useState('');
 const [recoveryPassphrase, setRecoveryPassphrase] = useState('');
 const [cloudGroupBackups, setCloudGroupBackups] = useState<CloudBackupFileInfo[]>([]);
 const [groupCloudBusy, setGroupCloudBusy] = useState(false);
-const loadConsent = useCallback(async () => {
-  try {
-    const enabled = await getAutomaticCloudBackupConsent();
-    setCloudBackupConsent(enabled);
-    setCloudBackupStatus(
-      enabled
-        ? 'Consent is enabled. Automatic encrypted cloud uploads are allowed; backups may run approximately every 6 hours when Android/iOS allows them.'
-        : 'Automatic cloud backup is off because consent is disabled. Local backups remain available.',
-    );
-  } catch (error) {
-    console.error('Could not load automatic cloud backup setting:', error);
-    setCloudBackupStatus(
-      'Unable to verify the automatic cloud backup setting. Please reopen this screen.',
-    );
-  }
-}, []);
-
 const loadGroups = useCallback(async () => {
   try {
     const result = await getAllGroups();
@@ -156,35 +134,9 @@ setLoading(false);
 useFocusEffect(
 useCallback(() => {
   void loadBackupFiles();
-  void loadConsent();
   void loadGroups();
-}, [loadBackupFiles, loadConsent, loadGroups])
+}, [loadBackupFiles, loadGroups])
 );
-
-const handleCloudBackupConsent = async () => {
-  if (cloudBackupConsent === null) return;
-  const nextValue = !cloudBackupConsent;
-  try {
-    setChangingConsent(true);
-    const saved = await setAutomaticCloudBackupConsent(nextValue);
-    if (!saved.success) throw new Error(saved.error || saved.message);
-    if (nextValue) {
-      setCloudBackupConsent(true);
-      await registerAutomaticBackupTask();
-      setCloudBackupStatus('Consent enabled. Starting the first encrypted cloud backup.');
-      const result = await runAutomaticCloudBackup(true);
-      setCloudBackupStatus(result.message);
-      if (!result.success && !result.skipped) Alert.alert('Cloud Backup Pending', result.error || result.message);
-    } else {
-      await unregisterAutomaticBackupTask();
-      setCloudBackupConsent(false);
-      setCloudBackupStatus('Automatic cloud uploads are disabled. Local backups remain available.');
-    }
-  } catch (error) {
-    setCloudBackupStatus('Could not update the automatic backup setting.');
-    Alert.alert('Automatic Backup', error instanceof Error ? error.message : 'Could not update setting.');
-  } finally { setChangingConsent(false); }
-};
 
 const handleExportBackup = async () => {
 try {
@@ -452,25 +404,9 @@ Data Backup & Restore
     </Text>
   </View>
 
-  <View style={styles.section}>
-    <Text style={styles.sectionTitle}>Cloudflare Backup & Restore</Text>
-    <Text style={styles.bodyText}>Cloudflare is the planned long-term backup platform for Ebadsave VSLA. The app-side Google Drive code has been removed. Cloudflare backup is not active until the secure Worker API, R2 storage, D1 authorization records, and recovery endpoints are deployed and configured.</Text>
-    <View style={styles.infoBox}><Text style={styles.infoText}>Status: Cloudflare connection not configured. Existing Back4App backup features remain available during migration. Do not uninstall the app or delete existing backups.</Text></View>
-  </View>
-
-  <View style={styles.section}>
-  <Text style={styles.sectionTitle}>Automatic Back4App Backup</Text>
-  <Text style={styles.bodyText}>Enable consent to allow encrypted cloud backups approximately every 6 hours. Android/iOS controls the exact run time. Backups can run while you use another app when the operating system allows it. Your local SQLite database is not changed by backup uploads.</Text>
-  <TouchableOpacity style={[styles.consentButton, cloudBackupConsent === true ? styles.disableConsentButton : null, (changingConsent || cloudBackupConsent === null) && styles.disabledButton]} onPress={() => void handleCloudBackupConsent()} disabled={changingConsent || cloudBackupConsent === null}>
-    {changingConsent ? <ActivityIndicator color="#fff" /> : <Text style={styles.consentButtonText}>{cloudBackupConsent === null ? 'Checking Automatic Backup…' : cloudBackupConsent ? 'Disable Automatic Cloud Backup' : 'Enable Automatic Cloud Backup (Consent)'}</Text>}
-  </TouchableOpacity>
-  <View style={styles.infoBox}><Text style={styles.infoText}>{cloudBackupConsent === null ? 'Checking saved automatic backup consent…' : cloudBackupConsent ? 'Consent enabled: automatic encrypted cloud backups are allowed.' : 'Consent disabled: automatic cloud backups are turned off.'}</Text></View>
-  <Text style={styles.bodyText}>{cloudBackupStatus}</Text>
-</View>
-
 <View style={styles.section}>
-  <Text style={styles.sectionTitle}>Group Cloud Backup & Recovery</Text>
-  <Text style={styles.bodyText}>Create an encrypted backup for one group, or recover that group on another phone. Use a passphrase of at least 12 characters and keep it somewhere safe. The app cannot recover a forgotten passphrase.</Text>
+  <Text style={styles.sectionTitle}>Cloudflare Group Backup & Recovery</Text>
+  <Text style={styles.bodyText}>Create an encrypted backup for one group in Cloudflare, or recover that group on another phone. Use a passphrase of at least 12 characters and keep it somewhere safe. The app cannot recover a forgotten passphrase.</Text>
   {groups.length ? groups.map((group) => (
     <TouchableOpacity key={group.id} onPress={() => setSelectedGroupId(group.id)} style={[styles.groupChoice, selectedGroupId === group.id && styles.groupChoiceSelected]}>
       <Text style={styles.groupChoiceText}>{selectedGroupId === group.id ? '✓ ' : ''}KYA {group.group_number} — {group.group_name}</Text>
@@ -752,7 +688,7 @@ Data Backup & Restore
       </Text>
 
       <Text style={styles.tipText}>
-        Keep a verified local backup and use the existing approved cloud backup until Cloudflare recovery has been tested.
+        Keep a verified local backup on this device. Cloudflare recovery requires administrator sign-in.
       </Text>
     </View>
   </View>
