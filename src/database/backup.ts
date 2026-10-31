@@ -46,6 +46,20 @@ const REQUIRED_BACKUP_TABLES = [
   'loan_interest_charges',
 ] as const;
 
+// --- ADDED FROM YOUR SMALL FILE (so Member Number + PIN doesn't crash) ---
+export async function getAutomaticCloudBackupConsent(): Promise<boolean> {
+  return false;
+}
+
+export async function setAutomaticCloudBackupConsent(
+  _consent: boolean,
+): Promise<{ success: boolean; message: string }> {
+  return {
+    success: true,
+    message: 'Automatic cloud backup is disabled.',
+  };
+}
+// --- END ADDED ---
 
 /**
  * Automatic cloud backup is temporarily disabled
@@ -324,6 +338,4 @@ export function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-
+  }
