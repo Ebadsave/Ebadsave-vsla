@@ -293,23 +293,13 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
         <View style={styles.backupButtonsRow}>
           <TouchableOpacity
             accessibilityRole="button"
-            accessibilityLabel="Open Back4App backup and restore"
-            style={[styles.backupProviderButton, styles.back4AppButton]}
-            onPress={openBackupRestore}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.backupProviderTitle}>Back4App Backup</Text>
-            <Text style={styles.backupProviderSubtitle}>Existing cloud backup</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            accessibilityRole="button"
             accessibilityLabel="Open Cloudflare backup and restore"
             style={[styles.backupProviderButton, styles.cloudflareButton]}
             onPress={openBackupRestore}
             activeOpacity={0.85}
           >
-            <Text style={[styles.backupProviderTitle, styles.cloudflareButtonTitle]}>Cloudflare Backup</Text>
-            <Text style={[styles.backupProviderSubtitle, styles.cloudflareButtonTitle]}>Long-term cloud backup</Text>
+            <Text style={[styles.backupProviderTitle, styles.cloudflareButtonTitle]}>Cloudflare Backup & Restore</Text>
+            <Text style={[styles.backupProviderSubtitle, styles.cloudflareButtonTitle]}>Secure group cloud backup</Text>
           </TouchableOpacity>
         </View>
 
@@ -454,7 +444,6 @@ const styles = StyleSheet.create({
   cancelPickerText: { color: '#334155', fontWeight: '700' },
   backupButtonsRow: { flexDirection: 'row', gap: 10, marginBottom: 14 },
   backupProviderButton: { flex: 1, minHeight: 82, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 13, justifyContent: 'center' },
-  back4AppButton: { backgroundColor: '#166534' },
   cloudflareButton: { backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#f97316' },
   backupProviderTitle: { color: '#ffffff', fontSize: 14, fontWeight: '800' },
   backupProviderSubtitle: { color: '#ffffff', fontSize: 11, marginTop: 5 },
