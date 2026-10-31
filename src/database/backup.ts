@@ -47,6 +47,25 @@ const REQUIRED_BACKUP_TABLES = [
 ] as const;
 
 
+/**
+ * Automatic cloud backup is temporarily disabled
+ * during the Back4App-to-Cloudflare migration.
+ * Local backups remain unchanged.
+ */
+export async function runAutomaticCloudBackup(
+  _force = false
+): Promise<{
+  success: boolean;
+  skipped: boolean;
+  message: string;
+  error?: string;
+}> {
+  return {
+    success: true,
+    skipped: true,
+    message: 'Automatic cloud backup is temporarily disabled.',
+  };
+  }
 export interface BackupFileInfo {
   name: string;
   path: string;
