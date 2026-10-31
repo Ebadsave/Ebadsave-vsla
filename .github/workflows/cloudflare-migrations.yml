@@ -1,34 +1,42 @@
 name: Cloudflare Migration Check
 
 on:
-workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
-migration-check:
-runs-on: ubuntu-latest
-defaults:
-run:
-working-directory: Cloudflare-worker
+  migration-check:
+    runs-on: ubuntu-latest
 
-steps:
-  - name: Checkout repository
-    uses: actions/checkout@v4
+    defaults:
+      run:
+        working-directory: Cloudflare-worker
 
-  - name: Setup Node.js
-    uses: actions/setup-node@v4
-    with:
-      node-version: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  - name: Install Worker dependencies
-    run: npm ci
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: Cloudflare-worker/package-lock.json
 
-  - name: Check Wrangler version
-    run: npx wrangler --version
+      - name: Install Worker dependencies
+        run: npm ci
 
-  - name: Validate migration files
-    run: |
-      set -eu
-      test -f migrations/0001_initial.sql
-      test -f migrations/0002_authentication.sql
-      echo "Both migration files are present."
-      echo "No database changes were made."
+      - name: Check Wrangler version
+        run: npx wrangler --version
+
+      - name: Validate migration files
+        run: |
+          set -eu
+
+          test -f migrations/0001_initial.sql
+          test -f migrations/0002_authentication.sql
+          test -f migrations/0003_remote_passbooks.sql
+          test -f migrations/0004_group_passbook_summary.sql
+          test -f migrations/0005_group_admin_bootstrap.sql
+
+          echo "All five migration files are present."
+          echo "No database changes were made."
