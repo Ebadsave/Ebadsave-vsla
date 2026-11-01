@@ -23,6 +23,7 @@ import LoansScreen from './src/screens/LoansScreen';
 import MiscellaneousExpenseScreen from './src/screens/MiscellaneousExpenseScreen';
 import ExpenditureScreen from './src/screens/ExpenditureScreen';
 import BackupRestoreScreen from './src/screens/BackupRestoreScreen';
+import CloudflareAdminSetupScreen from './src/screens/CloudflareAdminSetupScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
 import ExistingGroupOnboardingScreen from './src/screens/ExistingGroupOnboardingScreen';
 import HistoricalRecordsScreen from './src/screens/HistoricalRecordsScreen';
@@ -45,6 +46,7 @@ export type RootStackParamList = {
   Home: undefined;
   Constitution: undefined;
   BackupRestore: undefined;
+  CloudflareAdminSetup: undefined;
   MemberPassbookLogin: undefined;
   MemberPassbook: { memberId: number; groupId: number; currency?: string };
 
@@ -162,6 +164,9 @@ function WelcomeScreen({ navigation }: { navigation: any }) {
       <Pressable style={welcomeStyles.secondaryButton} onPress={() => navigation.navigate('MemberPassbookLogin')}>
         <Text style={welcomeStyles.secondaryText}>5. Member Passbook</Text>
       </Pressable>
+      <Pressable style={welcomeStyles.secondaryButton} onPress={() => navigation.navigate('CloudflareAdminSetup')}>
+        <Text style={welcomeStyles.secondaryText}>KYA 2000 Administrator Setup (one-time)</Text>
+      </Pressable>
 
       <Text style={welcomeStyles.note}>Group login continues to require the group's pre-app authorization.</Text>
     </View>
@@ -234,6 +239,7 @@ export default function App() {
         <Stack.Screen name="PersonalLogin" component={EntryFlowScreen} />
         <Stack.Screen name="MemberPassbookLogin" component={MemberPassbookLoginScreen} />
         <Stack.Screen name="MemberPassbook" component={MemberPassbookScreen} />
+        <Stack.Screen name="CloudflareAdminSetup" component={CloudflareAdminSetupScreen} />
         <Stack.Screen name="ExistingGroupOnboarding" component={ExistingGroupOnboardingScreen} />
         <Stack.Screen name="HistoricalRecords" component={HistoricalRecordsScreen} />
         <Stack.Screen name="ShareOutCalculation" component={ShareOutCalculationScreen} />
