@@ -22,10 +22,10 @@ export default function CloudflareAdminSetupScreen({ navigation }: { navigation:
 
   const start = () => {
     if (!secret.trim()) return Alert.alert('Required', 'Enter the Cloudflare ADMIN_BOOTSTRAP_SECRET.');
-    if (!/^\d{6,12}$/.test(pin))return Alert.alert('Invalid PIN', 'Use 6–12 digits.');
+if (!/^\d{6,12}$/.test(pin))return Alert.alert('Invalid PIN', 'Use 6–12 digits.');
     if (pin !== confirm) return Alert.alert('PIN mismatch', 'The PIN entries do not match.');
-    Alert.alert('One-time setup', 'This permanently claims KYA 2000 in Cloudflare. Continue only if these details are correct.', [
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert('One-time setup', 'This if claims KYA 2000 in Cloudflare. Continue only if these details are correct.', [
+      { text: 'Cancel','Cancel''cancel' },
       { text: 'Create administrator', style: 'destructive', onPress: () => void submit() },
     ]);
   };
