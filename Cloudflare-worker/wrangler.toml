@@ -1,4 +1,4 @@
-name = "ebadsave-vsla-api"
+name = "ebadsave-vsla"
 main = "src/index.ts"
 compatibility_date = "2026-10-28"
 
