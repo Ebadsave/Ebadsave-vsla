@@ -22,8 +22,10 @@ function fromBase64Url(value: string): Uint8Array {
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
 
-async function derivePinHash(pin: string, salt: Uint8Array): Promise<Uint8Array> {
-  const pinBytes = new TextEncoder().encode(pin);
+async function derivePinHash(pin: string, salt: Uint8Array, pepper: string): Promise<Uint8Array> {
+  if (!pepper || pepper.length < 32) throw new Error('PIN_PEPPER must be configured with at least 32 characters.');
+  // Pepper remains server-side; it is never stored in D1 or sent to the app.
+  const pinBytes = new TextEncoder().encode(`${pepper}:${pin}`);
   const pinBuffer = new ArrayBuffer(pinBytes.length);
   new Uint8Array(pinBuffer).set(pinBytes);
 
@@ -54,13 +56,14 @@ async function derivePinHash(pin: string, salt: Uint8Array): Promise<Uint8Array>
 
 export async function createPinVerifier(
   pin: string,
+  pepper: string,
 ): Promise<{ pinHash: string; pinSalt: string }> {
   if (!/^\d{6,12}$/.test(pin)) {
     throw new Error('PIN must contain 6–12 digits.');
   }
 
   const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
-  const hash = await derivePinHash(pin, salt);
+  const hash = await derivePinHash(pin, salt, pepper);
 
   return {
     pinHash: toBase64Url(hash),
@@ -72,6 +75,7 @@ export async function verifyPin(
   pin: string,
   pinHash: string,
   pinSalt: string,
+  pepper: string,
 ): Promise<boolean> {
   if (!/^\d{6,12}$/.test(pin)) return false;
 
@@ -83,7 +87,7 @@ export async function verifyPin(
       return false;
     }
 
-    const actual = await derivePinHash(pin, salt);
+    const actual = await derivePinHash(pin, salt, pepper);
 
     let difference = 0;
     for (let i = 0; i < expected.length; i++) {
@@ -127,6 +131,7 @@ export interface AuthD1Database {
 export interface AuthEnv {
   DB: AuthD1Database;
   JWT_HS256_SECRET: string;
+  PIN_PEPPER: string;
 }
 
 function encodeJsonSegment(value: unknown): string {

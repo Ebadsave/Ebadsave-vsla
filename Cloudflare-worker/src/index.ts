@@ -37,6 +37,7 @@ export interface Env extends AuthEnv {
   BACKUPS: R2Bucket;
   DB: D1Database;
   JWT_HS256_SECRET: string;
+  ADMIN_BOOTSTRAP_SECRET: string;
 }
 
 type JwtRole = AuthRole;
@@ -60,7 +61,7 @@ function cors(response: Response, request: Request): Response {
   // Configure a specific production app origin if the mobile/web client requires CORS.
   if (origin) headers.set('access-control-allow-origin', origin);
   headers.set('access-control-allow-methods', 'GET,POST,OPTIONS');
-  headers.set('access-control-allow-headers', 'authorization,content-type,x-backup-id,x-backup-encrypted,x-group-id,x-group-number');
+  headers.set('access-control-allow-headers', 'authorization,content-type,x-admin-bootstrap-secret,x-backup-id,x-backup-encrypted,x-group-id,x-group-number');
   headers.set('access-control-max-age', '86400');
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
@@ -86,6 +87,84 @@ async function audit(env: Env, actorId: string, groupId: string, action: string,
     `INSERT INTO audit_events (actor_id, group_id, action, result, backup_id, created_at)
      VALUES (?, ?, ?, ?, ?, datetime('now'))`,
   ).bind(actorId, groupId, action, result, backupId ?? null).run();
+}
+
+async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
+  // This endpoint is deliberately restricted to the pre-agreed KYA 2000 test identity.
+  // Production groups must use a separately authorized onboarding process.
+  const suppliedSecret = request.headers.get('x-admin-bootstrap-secret') ?? '';
+  const expectedSecret = env.ADMIN_BOOTSTRAP_SECRET ?? '';
+  if (expectedSecret.length < 32 || !constantTimeSecretEqual(suppliedSecret, expectedSecret)) {
+    return json({ error: 'bootstrap_not_authorized' }, 401);
+  }
+
+  const body = await readJson(request);
+  if (!body || body.groupId !== 'kya-2000' || body.groupNumber !== 'KYA 2000' ||
+      body.memberNumber !== 'KYA2000001' || body.memberName !== 'Twebaze Edwin' ||
+      typeof body.pin !== 'string' || !/^\d{6,12}$/.test(body.pin)) {
+    return json({ error: 'invalid_test_admin_details' }, 400);
+  }
+  if (!env.PIN_PEPPER || env.PIN_PEPPER.length < 32) {
+    return json({ error: 'server_pin_pepper_not_configured' }, 500);
+  }
+
+  // The dedicated claim table provides a permanent, unique group-number claim.
+  // Migration 0005_group_admin_bootstrap.sql must be applied before this endpoint is used.
+  const existingGroup = await env.DB.prepare(
+    `SELECT admin_user_id FROM group_admin_bootstrap_claims WHERE group_id = ? OR group_number = ? LIMIT 1`,
+  ).bind('kya-2000', 'KYA 2000').first<{ admin_user_id: string }>();
+  if (existingGroup) return json({ error: 'group_already_bootstrapped' }, 409);
+
+  const existingAuthUser = await env.DB.prepare(
+    `SELECT user_id FROM auth_users WHERE group_id = ? LIMIT 1`,
+  ).bind('kya-2000').first<{ user_id: string }>();
+  if (existingAuthUser) return json({ error: 'group_already_bootstrapped' }, 409);
+
+  const existingMember = await env.DB.prepare(
+    `SELECT user_id FROM auth_users WHERE UPPER(REPLACE(member_number, ' ', '')) = ? LIMIT 1`,
+  ).bind('KYA2000001').first<{ user_id: string }>();
+  if (existingMember) return json({ error: 'member_number_already_registered' }, 409);
+
+  const verifier = await createPinVerifier(body.pin, env.PIN_PEPPER);
+  const userId = crypto.randomUUID();
+  // Claim first: the primary/unique keys prevent two simultaneous bootstrap requests
+  // from claiming the same group. If user creation fails, release this new claim.
+  try {
+    await env.DB.prepare(
+      `INSERT INTO group_admin_bootstrap_claims (group_id, group_number, admin_user_id)
+       VALUES ('kya-2000', 'KYA 2000', ?)`,
+    ).bind(userId).run();
+  } catch {
+    return json({ error: 'group_already_bootstrapped' }, 409);
+  }
+  try {
+    await env.DB.prepare(
+      `INSERT INTO auth_users (user_id, group_id, member_number, role, pin_hash, pin_salt, status)
+       VALUES (?, 'kya-2000', 'KYA2000001', 'admin', ?, ?, 'active')`,
+    ).bind(userId, verifier.pinHash, verifier.pinSalt).run();
+  } catch {
+    await env.DB.prepare(
+      `DELETE FROM group_admin_bootstrap_claims WHERE group_id = ? AND admin_user_id = ?`,
+    ).bind('kya-2000', userId).run();
+    return json({ error: 'member_number_already_registered' }, 409);
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
+     VALUES (?, 'kya-2000', 'admin_bootstrap', 'success', datetime('now'))`,
+  ).bind(userId).run();
+  return json({ ok: true, role: 'admin', groupId: 'kya-2000', memberNumber: 'KYA2000001' }, 201);
+}
+
+function constantTimeSecretEqual(candidate: string, expected: string): boolean {
+  const encoder = new TextEncoder();
+  const a = encoder.encode(candidate);
+  const b = encoder.encode(expected);
+  // Include length difference and iterate over the longer input to avoid early exits.
+  let difference = a.length ^ b.length;
+  const length = Math.max(a.length, b.length);
+  for (let i = 0; i < length; i++) difference |= (a[i] ?? 0) ^ (b[i] ?? 0);
+  return difference === 0;
 }
 
 async function login(request: Request, env: Env): Promise<Response> {
@@ -132,7 +211,7 @@ async function login(request: Request, env: Env): Promise<Response> {
     user.lockedUntil = null;
   }
 
-  const correct = await verifyPin(pin, user.pinHash, user.pinSalt);
+  const correct = await verifyPin(pin, user.pinHash, user.pinSalt, env.PIN_PEPPER);
   if (!correct) {
     const attempts = Number(user.failedAttempts || 0) + 1;
     if (attempts >= 5) {
@@ -274,7 +353,7 @@ async function createAuthUser(request: Request, env: Env, claims: JwtClaims): Pr
     `SELECT user_id FROM auth_users WHERE UPPER(REPLACE(member_number, ' ', '')) = ? LIMIT 1`,
   ).bind(memberNumber.replace(/\s/g, '')).first<{ user_id: string }>();
   if (existing) return json({ error: 'member_number_already_registered' }, 409);
-  const verifier = await createPinVerifier(body.pin);
+  const verifier = await createPinVerifier(body.pin, env.PIN_PEPPER);
   const userId = crypto.randomUUID();
   await env.DB.prepare(
     `INSERT INTO auth_users (user_id, group_id, member_number, role, pin_hash, pin_salt, status)
@@ -295,6 +374,11 @@ export default {
     let response: Response;
     if (url.pathname === '/health' && request.method === 'GET') {
       response = json({ ok: true, service: 'ebadsave-vsla-cloudflare', stage: 'authentication-and-passbooks' });
+      return cors(response, request);
+    }
+
+    if (url.pathname === '/v1/auth/bootstrap-admin' && request.method === 'POST') {
+      response = await bootstrapAdmin(request, env);
       return cors(response, request);
     }
 
