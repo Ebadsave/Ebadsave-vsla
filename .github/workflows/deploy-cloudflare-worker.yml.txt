@@ -15,6 +15,7 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     defaults:
       run:
         working-directory: Cloudflare-worker
@@ -27,17 +28,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: Cloudflare-worker/package-lock.json
 
       - name: Install Worker dependencies
-        run: npm install
+        run: npm ci
 
       - name: Type-check Worker
         run: npm run typecheck
 
-      - name: Deploy Worker to Cloudflare
+      - name: Deploy Production Worker to Cloudflare
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy
+          command: deploy --env production
           workingDirectory: Cloudflare-worker
