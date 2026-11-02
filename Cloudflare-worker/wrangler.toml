@@ -2,6 +2,7 @@ name = "ebadsave-vsla"
 main = "src/index.ts"
 compatibility_date = "2026-10-28"
 
+# Default environment (kept unchanged).
 [[r2_buckets]]
 binding = "BACKUPS"
 bucket_name = "ebadsave-vsla"
@@ -14,3 +15,17 @@ migrations_dir = "migrations"
 
 [observability]
 enabled = true
+
+# Named Production environment.
+[env.production]
+name = "ebadsave-vsla-production"
+
+[[env.production.r2_buckets]]
+binding = "BACKUPS"
+bucket_name = "ebadsave-vsla"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "ebadsave-vsla-db"
+database_id = "52a15672-86d8-4547-b95e-d16c63c48222"
+migrations_dir = "migrations"
