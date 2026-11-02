@@ -30,7 +30,7 @@ jobs:
           node-version: 20
 
       - name: Install Worker dependencies
-        run: npm ci
+        run: npm install
 
       - name: Type-check Worker
         run: npm run typecheck
