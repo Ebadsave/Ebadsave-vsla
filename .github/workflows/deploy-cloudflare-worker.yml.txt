@@ -37,10 +37,10 @@ jobs:
       - name: Type-check Worker
         run: npm run typecheck
 
-      - name: Deploy Production Worker to Cloudflare
+      - name: Deploy existing Ebadsave Worker
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy --env production
+          command: deploy
           workingDirectory: Cloudflare-worker
