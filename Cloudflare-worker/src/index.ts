@@ -373,7 +373,19 @@ export default {
 
     let response: Response;
     if (url.pathname === '/health' && request.method === 'GET') {
-      response = json({ ok: true, service: 'ebadsave-vsla-cloudflare', stage: 'authentication-and-passbooks' });
+      response = json({
+  ok: true,
+  service: 'ebadsave-vsla-cloudflare',
+  stage: 'authentication-and-passbooks',
+  bootstrapSecretConfigured: Boolean(
+    env.ADMIN_BOOTSTRAP_SECRET &&
+    env.ADMIN_BOOTSTRAP_SECRET.length >= 32
+  ),
+  pinPepperConfigured: Boolean(
+    env.PIN_PEPPER &&
+    env.PIN_PEPPER.length >= 32
+  ),
+});
       return cors(response, request);
     }
 
