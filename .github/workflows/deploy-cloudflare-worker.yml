@@ -35,6 +35,11 @@ jobs:
       - name: Type-check Worker
         run: npm run typecheck
 
+      - name: Verify Cloudflare authentication
+        run: npx wrangler whoami
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
       - name: Deploy existing Ebadsave Worker
         uses: cloudflare/wrangler-action@v3
         with:
