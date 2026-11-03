@@ -40,8 +40,8 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
-      - name: List Production Worker secret names
-        run: npx wrangler secret list --name ebadsave-vsla --env production
+      - name: List existing Worker secret names
+        run: npx wrangler secret list --name ebadsave-vsla
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
