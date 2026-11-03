@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
-const API = 'https://ebadsave-vsla.info-ebadsave.workers.dev';
+const API = 'https://ebadsave-vsla-cloudflare.info-ebadsave.workers.dev';
 const GROUP = { groupId: 'kya-2000', groupNumber: 'KYA 2000', memberNumber: 'KYA2000001', memberName: 'Twebaze Edwin' };
 
 async function responseJson(response: Response) {
