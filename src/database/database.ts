@@ -531,7 +531,7 @@ const normalizeText = (
 const isValidPasscode = (
   code: string,
 ): boolean => {
-  return /^[A-Za-z1-9./$-]{4}$/.test(code);
+  return /^[0-9]{6,12}$/.test(code);
 };
 
 async function hashPasscode(
@@ -11582,7 +11582,7 @@ function isMemberExecutive(member: {
 }
 
 /**
- * Assigns or replaces a member's personal four-character passcode.
+ * Assigns or replaces a member's personal 6–12 digit PIN.
  *
  * Members without phone numbers may still have a passcode credential,
  * but phone_eligible remains 0 and they cannot authorize app access.
@@ -11595,7 +11595,7 @@ export async function setMemberPasscode(
 ): Promise<{ memberId: number; phoneEligible: boolean }> {
   if (!isValidPasscode(passcode)) {
     throw new Error(
-      'Passcode must be exactly four permitted characters.',
+      'PIN must contain 6–12 digits.',
     );
   }
 
@@ -11891,7 +11891,7 @@ export async function authorizeMemberForAppAccess(
       Exclude<MemberPasscodeVerificationResult, { success: true }>['reason'],
       string
     > = {
-      invalid_passcode: 'Enter a valid four-character passcode.',
+      invalid_passcode: 'Enter a PIN containing 6–12 digits.',
       member_not_found: 'Member not found.',
       member_inactive: 'Only active members can authorize the app.',
       wrong_group: 'This member belongs to a different group.',
