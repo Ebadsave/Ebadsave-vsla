@@ -94,9 +94,17 @@ async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
   // Production groups must use a separately authorized onboarding process.
   const suppliedSecret = request.headers.get('x-admin-bootstrap-secret') ?? '';
   const expectedSecret = env.ADMIN_BOOTSTRAP_SECRET ?? '';
-  if (expectedSecret.length < 32 || !constantTimeSecretEqual(suppliedSecret, expectedSecret)) {
-    return json({ error: 'bootstrap_not_authorized' }, 401);
-  }
+ if (expectedSecret.length < 32) {
+  return json({ error: 'bootstrap_secret_missing_or_too_short' }, 500);
+}
+
+if (!constantTimeSecretEqual(suppliedSecret, expectedSecret)) {
+  return json({
+    error: 'bootstrap_secret_mismatch',
+    suppliedLength: suppliedSecret.length,
+    expectedLength: expectedSecret.length
+  }, 401);
+    }
 
   const body = await readJson(request);
   if (!body || body.groupId !== 'kya-2000' || body.groupNumber !== 'KYA 2000' ||
