@@ -94,10 +94,89 @@ jobs:
             exit 1
           fi
 
-      - name: Build RELEASE APK
+      - name: Prepare permanent Android release signing
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
+          set -euo pipefail
+
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "ERROR: ANDROID_KEYSTORE_BASE64 GitHub Secret is missing."
+            exit 1
+          fi
+
+          KEYSTORE_FILE="$RUNNER_TEMP/ebadsave-vsla-release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_FILE"
+          chmod 600 "$KEYSTORE_FILE"
+
+          if [ ! -s "$KEYSTORE_FILE" ]; then
+            echo "ERROR: The release keystore could not be decoded."
+            exit 1
+          fi
+
+          echo "ANDROID_KEYSTORE_FILE=$KEYSTORE_FILE" >> "$GITHUB_ENV"
+
+          # Configure the generated Expo Android project to use the permanent key.
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import re
+
+          gradle_file = Path("android/app/build.gradle")
+          if not gradle_file.exists():
+              raise SystemExit("ERROR: android/app/build.gradle was not generated.")
+
+          text = gradle_file.read_text()
+          if "signingConfigs.release" in text:
+              raise SystemExit("ERROR: Release signing configuration already exists; refusing to patch twice.")
+
+          marker = re.search(r"(?m)^\s*buildTypes\s*\{", text)
+          if not marker:
+              raise SystemExit("ERROR: Could not find buildTypes block in generated build.gradle.")
+
+          release_signing = """    signingConfigs {
+              release {
+                  storeFile file(System.getenv(\"ANDROID_KEYSTORE_FILE\"))
+                  storePassword System.getenv(\"ANDROID_KEYSTORE_PASSWORD\")
+                  keyAlias System.getenv(\"ANDROID_KEY_ALIAS\")
+                  keyPassword System.getenv(\"ANDROID_KEY_PASSWORD\")
+              }
+          }
+
+          """
+          text = text[:marker.start()] + release_signing + text[marker.start():]
+
+          # Change only the release build type, leaving debug signing untouched.
+          release_match = re.search(r"(?s)(release\s*\{.*?)(signingConfig\s+signingConfigs\.debug)(.*?\n\s*\})", text)
+          if not release_match:
+              raise SystemExit("ERROR: Could not find the release build type's debug signing line.")
+          text = text[:release_match.start(2)] + "signingConfig signingConfigs.release" + text[release_match.end(2):]
+          gradle_file.write_text(text)
+          print("Configured permanent release signing in android/app/build.gradle")
+          PYCODE
+
+      - name: Build RELEASE APK
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
           cd android
-          ./gradlew assembleRelease --no-daemon --stacktrace
+
+          # Retry transient Gradle distribution download failures (for example HTTP 504).
+          for attempt in 1 2 3; do
+            if ./gradlew assembleRelease --no-daemon --stacktrace; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Gradle build/download failed; retrying in 20 seconds (attempt $((attempt + 1))/3)."
+              sleep 20
+            fi
+          done
+          echo "ERROR: Release build failed after 3 attempts."
+          exit 1
 
       - name: Verify APK and check size
         shell: bash
@@ -113,6 +192,32 @@ jobs:
           fi
 
           ls -lh "$APK"
+
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          if [ ! -x "$APKSIGNER" ]; then
+            echo "ERROR: apksigner was not found at $APKSIGNER."
+            exit 1
+          fi
+
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+
+          ACTUAL_CERT_SHA256=$("$APKSIGNER" verify --print-certs "$APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest:/ {print tolower($2); exit}')
+          EXPECTED_CERT_SHA256="16df7c1c99ac0c60da89ef0c6064a7d912f72f409c1a8c5df4a6b8c6340d04a7"
+          if [ "$ACTUAL_CERT_SHA256" != "$EXPECTED_CERT_SHA256" ]; then
+            echo "ERROR: APK was not signed with the approved permanent Ebadsave certificate."
+            echo "Expected SHA-256: $EXPECTED_CERT_SHA256"
+            echo "Actual SHA-256:   ${ACTUAL_CERT_SHA256:-not detected}"
+            exit 1
+          fi
+          echo "SUCCESS: APK signature matches the permanent Ebadsave release certificate."
+
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          PACKAGE_NAME=$("$AAPT" dump badging "$APK" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p" | head -n 1)
+          if [ "$PACKAGE_NAME" != "com.ebadsave.vsla" ]; then
+            echo "ERROR: Unexpected APK package name: ${PACKAGE_NAME:-not detected}"
+            exit 1
+          fi
+          echo "SUCCESS: APK package name is $PACKAGE_NAME."
 
           SIZE=$(stat -c%s "$APK")
           LIMIT=$((30 * 1024 * 1024))
