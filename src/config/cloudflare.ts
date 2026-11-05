@@ -1,5 +1,6 @@
 /** Central Cloudflare Worker configuration for the Ebadsave mobile app. */
-export const CLOUDFLARE_API_BASE_URL = 'https://ebadsave-vsla.info-ebadsave.workers.dev';
+export const CLOUDFLARE_API_BASE_URL =
+  'https://ebadsave-vsla-cloudflare.info-ebadsave.workers.dev';
 
 export const CLOUDFLARE_ENDPOINTS = {
   health: '/health',
