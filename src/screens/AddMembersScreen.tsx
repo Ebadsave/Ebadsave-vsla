@@ -195,7 +195,7 @@ export default function AddMembersScreen({ navigation, route }: Props) {
 
     const cleanPasscode = passcode.trim();
     const cleanConfirmPasscode = confirmPasscode.trim();
-    const passcodePattern = /^[A-Za-z0-9./$-]{4}$/;
+    const passcodePattern = /^\d{6,12}$/;
 
     const normalizedPhone = normalizeInternationalPhone(phone);
 
@@ -207,7 +207,7 @@ export default function AddMembersScreen({ navigation, route }: Props) {
     if (normalizedPhone && !cleanPasscode && (editingMemberId === null || phoneIsNewForMember)) {
       Alert.alert(
         'Passcode Required',
-        'A member with a phone number must have a four-character personal passcode. Members without phone numbers do not need one.',
+        'A member with a phone number must have a 6 to 12 digit numeric PIN. Members without phone numbers do not need one.',
       );
       return;
     }
@@ -221,11 +221,16 @@ export default function AddMembersScreen({ navigation, route }: Props) {
     }
 
     if (cleanPasscode || cleanConfirmPasscode) {
-      if (!passcodePattern.test(cleanPasscode)) {
-        Alert.alert(
-          'Invalid Passcode',
-          'Passcode must contain exactly four characters. Allowed characters are letters, digits 0–9, dot, slash, dollar sign, and hyphen.',
-        );
+      if (!/^\d+$/.test(cleanPasscode)) {
+        Alert.alert('Invalid PIN', 'Only numbers allowed');
+        return;
+      }
+      if (cleanPasscode.length < 6) {
+        Alert.alert('Invalid PIN', 'PIN too short - PIN must be 6 to 12 digits');
+        return;
+      }
+      if (cleanPasscode.length > 12) {
+        Alert.alert('Invalid PIN', 'PIN too long - maximum 12 digits');
         return;
       }
       if (cleanPasscode !== cleanConfirmPasscode) {
@@ -441,19 +446,19 @@ export default function AddMembersScreen({ navigation, route }: Props) {
             />
 
             <Field
-              label={phone.trim() ? (editingMemberId === null ? 'Personal Passcode (required)' : 'Personal Passcode (optional; enter to set/change)') : 'Personal Passcode (not needed without phone)'}
+              label={phone.trim() ? (editingMemberId === null ? 'Personal PIN (required)' : 'Personal PIN (optional; enter to set/change)') : 'Personal PIN (not needed without phone)'}
               value={passcode}
-              onChangeText={(value) => setPasscode(value.slice(0, 4))}
-              placeholder="Exactly 4 characters"
-              keyboardType="default"
+              onChangeText={(value) => setPasscode(value.slice(0, 12))}
+              placeholder="6 to 12 digits"
+              keyboardType="numeric"
               secureTextEntry
               autoCapitalize="none"
             />
 
             <Field
-              label="Confirm Passcode"
+              label="Confirm PIN"
               value={confirmPasscode}
-              onChangeText={(value) => setConfirmPasscode(value.slice(0, 4))}
+              onChangeText={(value) => setConfirmPasscode(value.slice(0, 12))}
               placeholder="Re-enter the same passcode"
               keyboardType="default"
               secureTextEntry
@@ -461,7 +466,7 @@ export default function AddMembersScreen({ navigation, route }: Props) {
             />
 
             <Text style={styles.helperText}>
-              Members with phone numbers must have a four-character personal passcode. Members without phone numbers do not need one and cannot authorize app access. Phone numbers must use international format, for example +256772123456. For an existing member, leave both passcode fields blank to retain an existing passcode; enter a new one when assigning or changing it. Never share passcodes.
+              Members with phone numbers must have a 6 to 12 digit numeric PIN. Members without phone numbers do not need one and cannot authorize app access. Phone numbers must use international format, for example +256772123456. For an existing member, leave both passcode fields blank to retain an existing passcode; enter a new one when assigning or changing it. Never share passcodes.
             </Text>
 
             <Text style={styles.label}>Member Role / Executive Post (choose one)</Text>
@@ -542,7 +547,7 @@ export default function AddMembersScreen({ navigation, route }: Props) {
 
           <View style={styles.card}>
             <Text style={styles.helperText}>
-              To assign a passcode to an existing member, tap Edit and enter a four-character passcode. Each executive can hold only one post, and each post can belong to only one active member.
+              To assign a PIN to an existing member, tap Edit and enter a 6–12 digit PIN. Each executive can hold only one post, and each post can belong to only one active member.
             </Text>
             <View style={styles.listHeader}>
               <Text style={styles.sectionTitle}>Active Members</Text>
@@ -640,7 +645,7 @@ function Field({
         keyboardType={keyboardType || 'default'}
         autoCapitalize={autoCapitalize || 'words'}
         secureTextEntry={secureTextEntry}
-        maxLength={secureTextEntry ? 4 : undefined}
+        maxLength={secureTextEntry ? 12 : undefined}
       />
     </View>
   );

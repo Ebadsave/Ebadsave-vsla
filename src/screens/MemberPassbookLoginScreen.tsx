@@ -22,8 +22,20 @@ export default function MemberPassbookLoginScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(false);
 
   const signIn = async () => {
-    if (!memberNumber.trim() || pin.length !== 4) {
-      Alert.alert('Enter your details', 'Enter your member number and your four-character private PIN.');
+    if (!memberNumber.trim()) {
+      Alert.alert('Enter your details', 'Enter your member number.');
+      return;
+    }
+    if (!/^\d+$/.test(pin)) {
+      Alert.alert('Invalid PIN', 'Only numbers allowed');
+      return;
+    }
+    if (pin.length < 6) {
+      Alert.alert('Invalid PIN', 'PIN too short - PIN must be 6 to 12 digits');
+      return;
+    }
+    if (pin.length > 12) {
+      Alert.alert('Invalid PIN', 'PIN too long - maximum 12 digits');
       return;
     }
     setLoading(true);
@@ -72,14 +84,15 @@ export default function MemberPassbookLoginScreen({ navigation }: Props) {
             <Text style={styles.label}>Private PIN</Text>
             <TextInput
               value={pin}
-              onChangeText={(value) => setPin(value.replace(/\s/g, '').slice(0, 4))}
+              onChangeText={(value) => setPin(value.slice(0, 12))}
               secureTextEntry
+              keyboardType="numeric"
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder="Enter 4-character PIN"
+              placeholder="Enter 6–12 digit PIN"
               placeholderTextColor="#94a3b8"
               style={styles.input}
-              maxLength={4}
+              maxLength={12}
               returnKeyType="done"
               onSubmitEditing={signIn}
               accessibilityLabel="Private PIN"
