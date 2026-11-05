@@ -1,11 +1,30 @@
 import * as SecureStore from 'expo-secure-store';
 import {
   CLOUDFLARE_API_BASE_URL,
+  CLOUDFLARE_ENDPOINTS,
   CLOUDFLARE_REQUEST_TIMEOUT_MS,
   CLOUDFLARE_STORAGE_KEYS,
 } from '../config/cloudflare';
 
 export type CloudflareJson = Record<string, unknown>;
+
+export interface RemotePassbookTransaction {
+  transactionId: string;
+  transactionType: string;
+  amountUgx: number;
+  description?: string;
+  transactionDate: string;
+}
+
+export interface RemoteMemberPassbook {
+  memberNumber: string;
+  memberName: string;
+  totalSavingsUgx: number;
+  loanBalanceUgx: number;
+  loanDueDate: string | null;
+  updatedAt: string;
+  transactions: RemotePassbookTransaction[];
+}
 
 export class CloudflareApiError extends Error {
   status: number;
@@ -33,6 +52,22 @@ async function readResponse(response: Response): Promise<unknown> {
 
 function isObject(value: unknown): value is CloudflareJson {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getGroupIdFromAccessToken(token: string): string {
+  try {
+    const payloadPart = token.split('.')[1];
+    if (!payloadPart) throw new Error('Missing token payload');
+    const normalized = payloadPart.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    const claims = JSON.parse(globalThis.atob(padded)) as { groupId?: unknown };
+    if (typeof claims.groupId !== 'string' || !claims.groupId) {
+      throw new Error('Missing group identity');
+    }
+    return claims.groupId;
+  } catch {
+    throw new CloudflareApiError('Cloudflare returned an unreadable access token.', 502, 'invalid_access_token');
+  }
 }
 
 export async function cloudflareRequest<T = CloudflareJson>(
@@ -90,7 +125,48 @@ export async function cloudflareRequest<T = CloudflareJson>(
 }
 
 export async function checkCloudflareConnection(): Promise<{ ok: boolean; service?: string }> {
-  return cloudflareRequest('/health');
+  return cloudflareRequest(CLOUDFLARE_ENDPOINTS.health);
+}
+
+/** Authenticates a member against Cloudflare and stores the bearer token securely on this phone. */
+export async function signInMemberToCloudflare(
+  memberNumber: string,
+  pin: string,
+): Promise<void> {
+  if (!/^\d{6,12}$/.test(pin)) {
+    throw new CloudflareApiError('PIN must contain 6 to 12 digits.', 400, 'invalid_pin');
+  }
+
+  const result = await cloudflareRequest<{
+    ok?: boolean;
+    tokenType?: string;
+    accessToken?: string;
+    expiresIn?: number;
+    error?: string;
+  }>(CLOUDFLARE_ENDPOINTS.login, {
+    method: 'POST',
+    body: { memberNumber: memberNumber.trim().toUpperCase(), pin },
+  });
+
+  if (!result.accessToken || result.tokenType !== 'Bearer') {
+    throw new CloudflareApiError('Cloudflare did not return a valid sign-in session.', 502, 'invalid_login_response', result);
+  }
+
+  const groupId = getGroupIdFromAccessToken(result.accessToken);
+  await saveCloudflareSession(result.accessToken, groupId);
+}
+
+/** Retrieves only the passbook belonging to the identity in the stored bearer token. */
+export async function getMyRemotePassbook(): Promise<RemoteMemberPassbook> {
+  const result = await cloudflareRequest<{ passbook?: RemoteMemberPassbook }>(
+    CLOUDFLARE_ENDPOINTS.myPassbook,
+    { authenticated: true },
+  );
+  if (!result.passbook || typeof result.passbook.memberNumber !== 'string' ||
+      !Array.isArray(result.passbook.transactions)) {
+    throw new CloudflareApiError('Cloudflare returned an incomplete passbook.', 502, 'invalid_passbook_response', result);
+  }
+  return result.passbook;
 }
 
 export async function saveCloudflareSession(accessToken: string, groupId: string): Promise<void> {
@@ -106,4 +182,18 @@ export async function getCloudflareAccessToken(): Promise<string | null> {
 export async function clearCloudflareSession(): Promise<void> {
   await SecureStore.deleteItemAsync(CLOUDFLARE_STORAGE_KEYS.accessToken);
   await SecureStore.deleteItemAsync(CLOUDFLARE_STORAGE_KEYS.groupId);
+}
+
+export async function signOutCloudflareSession(): Promise<void> {
+  const token = await getCloudflareAccessToken();
+  try {
+    if (token) {
+      await cloudflareRequest(CLOUDFLARE_ENDPOINTS.logout, {
+        method: 'POST',
+        token,
+      });
+    }
+  } finally {
+    await clearCloudflareSession();
+  }
 }
