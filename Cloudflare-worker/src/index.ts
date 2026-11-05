@@ -499,6 +499,6 @@ export default {
       return cors(response, request);
     }
 
-    return cors(json({ error: 'not_found' }, 404), request);
+    return cors(json({ error: 'endpoint_not_found', message: 'The requested Ebadsave service address was not found. Check the app service address or contact Ebadsave support.' }, 404), request);
   },
 };
