@@ -48,7 +48,7 @@ export type RootStackParamList = {
   BackupRestore: undefined;
   CloudflareAdminSetup: undefined;
   MemberPassbookLogin: undefined;
-  MemberPassbook: { memberId: number; groupId: number; currency?: string };
+  MemberPassbook: undefined;
 
   SetupRules: {
     groupId: number;
