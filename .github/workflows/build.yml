@@ -146,11 +146,61 @@ jobs:
           """
           text = text[:marker.start()] + release_signing + text[marker.start():]
 
-          # Change only the release build type, leaving debug signing untouched.
-          release_match = re.search(r"(?s)(release\s*\{.*?)(signingConfig\s+signingConfigs\.debug)(.*?\n\s*\})", text)
+          # Scope the edit to buildTypes.release only. Do not accidentally alter
+          # signingConfigs.release or buildTypes.debug.
+          def block_bounds(source, opening_brace):
+              depth = 0
+              quote = None
+              escaped = False
+              for i in range(opening_brace, len(source)):
+                  ch = source[i]
+                  if quote:
+                      if escaped:
+                          escaped = False
+                      elif ch == "\\":
+                          escaped = True
+                      elif ch == quote:
+                          quote = None
+                      continue
+                  if ch in ("'", '\"'):
+                      quote = ch
+                  elif ch == "{":
+                      depth += 1
+                  elif ch == "}":
+                      depth -= 1
+                      if depth == 0:
+                          return opening_brace, i + 1
+              raise SystemExit("ERROR: Unbalanced Gradle braces while locating signing blocks.")
+
+          build_types_match = re.search(r"\bbuildTypes\s*\{", text)
+          if not build_types_match:
+              raise SystemExit("ERROR: Could not find buildTypes block.")
+          build_open = text.find("{", build_types_match.start())
+          build_start, build_end = block_bounds(text, build_open)
+          build_block = text[build_start:build_end]
+
+          release_match = re.search(r"\brelease\s*\{", build_block)
           if not release_match:
-              raise SystemExit("ERROR: Could not find the release build type's debug signing line.")
-          text = text[:release_match.start(2)] + "signingConfig signingConfigs.release" + text[release_match.end(2):]
+              raise SystemExit("ERROR: Could not find buildTypes.release block.")
+          release_open = build_block.find("{", release_match.start())
+          release_start, release_end = block_bounds(build_block, release_open)
+          release_block = build_block[release_start:release_end]
+
+          release_block, count = re.subn(
+              r"(?m)^(\s*)signingConfig\s+signingConfigs\.debug\s*$",
+              r"\1signingConfig signingConfigs.release",
+              release_block,
+              count=1,
+          )
+          if count == 0:
+              if re.search(r"(?m)^\s*signingConfig\s+signingConfigs\.release\s*$", release_block):
+                  print("Release build type already references signingConfigs.release")
+              else:
+                  # Add the signingConfig directly inside the release block.
+                  release_block = release_block[:-1] + "        signingConfig signingConfigs.release\n    }"
+
+          build_block = build_block[:release_start] + release_block + build_block[release_end:]
+          text = text[:build_start] + build_block + text[build_end:]
           gradle_file.write_text(text)
           print("Configured permanent release signing in android/app/build.gradle")
           PYCODE
