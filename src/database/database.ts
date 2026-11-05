@@ -5005,66 +5005,50 @@ export async function updateMemberRole(
     memberId,
   );
 }
-async function getNextMemberSequence(
+/**
+ * Selects a random, unused three-digit member suffix within this group.
+ * Existing and deleted numbers are both reserved, so a member number is
+ * never repeated or recycled within the same group.
+ */
+async function getRandomMemberSuffix(
   db: SQLite.SQLiteDatabase,
   groupId: number,
 ): Promise<number> {
-  const members =
-    await db.getAllAsync<{
-      member_number: string;
-    }>(
-      `SELECT member_number
-       FROM members
-       WHERE group_id = ?`,
-      groupId,
-    );
+  const members = await db.getAllAsync<{ member_number: string }>(
+    `SELECT member_number FROM members WHERE group_id = ?`,
+    groupId,
+  );
 
-  const deleted =
-    await db.getAllAsync<{
-      member_number: string;
-    }>(
-      `SELECT member_number
-       FROM deleted_member_numbers
-       WHERE group_id = ?`,
-      groupId,
-    );
+  const deleted = await db.getAllAsync<{ member_number: string }>(
+    `SELECT member_number FROM deleted_member_numbers WHERE group_id = ?`,
+    groupId,
+  );
 
   const used = new Set<number>();
 
-  for (const item of [
-    ...members,
-    ...deleted,
-  ]) {
-    const match =
-      item.member_number.match(
-        /(\d{3})$/,
-      );
-
-    if (match) {
-      used.add(Number(match[1]));
-    }
+  for (const item of [...members, ...deleted]) {
+    const match = item.member_number.match(/(\d{3})$/);
+    if (match) used.add(Number(match[1]));
   }
 
-  for (
-    let number = 1;
-    number <= 999;
-    number += 1
-  ) {
-    if (!used.has(number)) {
-      return number;
-    }
+  const available: number[] = [];
+  for (let suffix = 1; suffix <= 999; suffix += 1) {
+    if (!used.has(suffix)) available.push(suffix);
   }
 
-  throw new Error(
-    'This group has reached the 999-member limit.',
-  );
+  if (available.length === 0) {
+    throw new Error('This group has reached the 999-member number limit.');
+  }
+
+  // Random selection from the unused suffixes; no sequential allocation.
+  return available[Math.floor(Math.random() * available.length)];
 }
 
 function createMemberNumber(
   groupNumber: number,
-  sequence: number,
+  randomSuffix: number,
 ): string {
-  return `KYA${String(groupNumber).padStart(4, '0')}${String(sequence).padStart(3, '0')}`;
+  return `KYA${String(groupNumber).padStart(4, '0')}${String(randomSuffix).padStart(3, '0')}`;
 }
 
 export type RequiredMemberNextOfKin = {
@@ -5150,17 +5134,12 @@ export async function registerMember(
     throw new Error('Group not found.');
   }
 
-  const sequence =
-    await getNextMemberSequence(
-      db,
-      groupId,
-    );
+  const randomSuffix = await getRandomMemberSuffix(db, groupId);
 
-  const memberNumber =
-    createMemberNumber(
-      group.group_number,
-      sequence,
-    );
+  const memberNumber = createMemberNumber(
+    group.group_number,
+    randomSuffix,
+  );
 
   const timestamp = now();
 
