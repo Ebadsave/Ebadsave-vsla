@@ -450,7 +450,7 @@ export default function AddMembersScreen({ navigation, route }: Props) {
               value={passcode}
               onChangeText={(value) => setPasscode(value.slice(0, 12))}
               placeholder="6 to 12 digits"
-              keyboardType="numeric"
+              keyboardType="number-pad"
               secureTextEntry
               autoCapitalize="none"
             />
