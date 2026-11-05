@@ -58,14 +58,37 @@ async function responseJson(
   }
 
   if (!response.ok) {
-    const message =
-      data.error ||
-      data.message ||
-      `HTTP ${response.status}`;
+    // Turn technical Worker codes into clear messages ordinary group members can understand.
+    const friendlyMessages: Record<string, string> = {
+      group_already_bootstrapped:
+        'This group already has an administrator account. Do not create it again. Please sign in with the existing administrator member number and PIN, or contact Ebadsave support if you cannot sign in.',
+      member_number_already_registered:
+        'This member number is already registered. Please sign in with the existing account or contact Ebadsave support.',
+      bootstrap_secret_mismatch:
+        'The setup password is not correct. Check the ADMIN_BOOTSTRAP_SECRET given by Ebadsave and try again.',
+      bootstrap_secret_missing_or_too_short:
+        'The administrator setup has not been prepared on the server. Please contact Ebadsave support.',
+      server_pin_pepper_not_configured:
+        'The server is not ready to create the administrator account. Please contact Ebadsave support.',
+      invalid_test_admin_details:
+        'The group or administrator details do not match the approved setup. Please check the details or contact Ebadsave support.',
+      unauthorized:
+        'Your login details could not be verified. Please check your member number and PIN.',
+      not_found:
+        'This setup page could not be reached. Please check your internet connection or contact Ebadsave support.',
+      endpoint_not_found:
+        'This setup service address is not correct or the service is not available. Please contact Ebadsave support.',
+    };
 
-    throw new Error(
-      `Cloudflare error (${response.status}): ${message}`
-    );
+    const code = typeof data.error === 'string' ? data.error : '';
+    const message = friendlyMessages[code] ||
+      (response.status === 404
+        ? 'The requested setup service was not found. Please contact Ebadsave support.'
+        : response.status === 409
+          ? 'This account or group is already registered. Please do not repeat the setup; contact Ebadsave support for help signing in.'
+          : data.message || 'We could not complete the request. Please try again or contact Ebadsave support.');
+
+    throw new Error(message);
   }
 
   return data;
