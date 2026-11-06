@@ -889,6 +889,14 @@ export default {
       return cors(response, request);
     }
 
+    if (
+  url.pathname === '/v1/registrations' &&
+  request.method === 'POST'
+) {
+  response = await createMemberRegistration(request, env);
+  return cors(response, request);
+    }
+    
     if (url.pathname === '/v1/auth/bootstrap-admin' && request.method === 'POST') {
       response = await bootstrapAdmin(request, env);
       return cors(response, request);
