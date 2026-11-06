@@ -136,4 +136,192 @@ export default function MemberRemoteRegistrationScreen() {
 
       <Text style={styles.body}>
         Apply to join an existing Ebadsave VSLA group.
-        Your registration remains pending until
+        Your registration remains pending until the group
+        administrator approves it.
+      </Text>
+
+      <Field
+        label="Group number"
+        value={groupNumber}
+        onChangeText={setGroupNumber}
+        placeholder="KYA 2000"
+      />
+
+      <Field
+        label="Full name"
+        value={fullName}
+        onChangeText={setFullName}
+      />
+
+      <Field
+        label="Gender"
+        value={gender}
+        onChangeText={setGender}
+        placeholder="Female / Male / Other"
+      />
+
+      <Field
+        label="Age"
+        value={age}
+        onChangeText={setAge}
+        keyboardType="number-pad"
+      />
+
+      <Field
+        label="Phone (optional)"
+        value={phone}
+        onChangeText={setPhone}
+        keyboardType="phone-pad"
+      />
+
+      <Field
+        label="Next of kin (optional)"
+        value={nextOfKin}
+        onChangeText={setNextOfKin}
+      />
+
+      <Field
+        label="Cell"
+        value={cell}
+        onChangeText={setCell}
+      />
+
+      <Field
+        label="District"
+        value={district}
+        onChangeText={setDistrict}
+      />
+
+      <Field
+        label="Create PIN (6–12 digits)"
+        value={pin}
+        onChangeText={setPin}
+        keyboardType="number-pad"
+        secureTextEntry
+      />
+
+      <Field
+        label="Confirm PIN"
+        value={confirmPin}
+        onChangeText={setConfirmPin}
+        keyboardType="number-pad"
+        secureTextEntry
+      />
+
+      <TouchableOpacity
+        disabled={submitting}
+        style={[
+          styles.button,
+          submitting && styles.disabled,
+        ]}
+        onPress={() => void submit()}
+      >
+        {submitting ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.buttonText}>
+            Submit registration
+          </Text>
+        )}
+      </TouchableOpacity>
+
+      <Text style={styles.footnote}>
+        Your PIN must remain private. It must never be
+        displayed to the group administrator.
+      </Text>
+    </ScrollView>
+  );
+}
+
+interface FieldProps {
+  label: string;
+  value: string;
+  onChangeText: (value: string) => void;
+  placeholder?: string;
+  keyboardType?: 'default' | 'number-pad' | 'phone-pad';
+  secureTextEntry?: boolean;
+}
+
+function Field(props: FieldProps) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.label}>
+        {props.label}
+      </Text>
+
+      <TextInput
+        style={styles.input}
+        value={props.value}
+        onChangeText={props.onChangeText}
+        placeholder={props.placeholder}
+        keyboardType={props.keyboardType ?? 'default'}
+        secureTextEntry={props.secureTextEntry}
+        autoCapitalize="words"
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    padding: 20,
+    gap: 13,
+    backgroundColor: '#f7faf7',
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  body: {
+    color: '#475569',
+    lineHeight: 21,
+  },
+  field: {
+    gap: 5,
+  },
+  label: {
+    color: '#14532d',
+    fontWeight: '700',
+  },
+  input: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 9,
+    padding: 12,
+    color: '#111827',
+  },
+  button: {
+    backgroundColor: '#16a34a',
+    padding: 16,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  disabled: {
+    opacity: 0.6,
+  },
+  buttonText: {
+    color: '#fff',
+    fontWeight: '800',
+  },
+  footnote: {
+    fontSize: 12,
+    color: '#64748b',
+    lineHeight: 18,
+  },
+  success: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: 24,
+    gap: 16,
+    backgroundColor: '#f0fdf4',
+  },
+  successTitle: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#166534',
+    textAlign: 'center',
+  },
+});
