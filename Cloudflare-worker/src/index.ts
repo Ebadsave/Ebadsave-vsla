@@ -411,6 +411,433 @@ async function syncPassbook(request: Request, env: Env, claims: JwtClaims): Prom
   return json({ ok: true, membersSynced: synced, groupSummarySynced: isRecord(body.groupSummary) });
 }
 
+function cleanRegistrationText(
+  value: unknown,
+  maxLength: number,
+): string | null {
+  if (typeof value !== 'string') return null;
+
+  const cleaned = value.trim();
+
+  return cleaned.length > 0 && cleaned.length <= maxLength
+    ? cleaned
+    : null;
+}
+
+async function createMemberRegistration(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const body = await readJson(request);
+
+  if (
+    !body ||
+    typeof body.groupNumber !== 'string' ||
+    typeof body.pin !== 'string' ||
+    typeof body.age !== 'number' ||
+    !Number.isInteger(body.age) ||
+    body.age < 18 ||
+    body.age > 120
+  ) {
+    return json({ error: 'invalid_registration_details' }, 400);
+  }
+
+  const groupDigits = body.groupNumber
+    .replace(/^KYA\s*/i, '')
+    .trim();
+
+  if (
+    !/^\d{4}$/.test(groupDigits) ||
+    !/^\d{6,12}$/.test(body.pin)
+  ) {
+    return json({ error: 'invalid_group_number_or_pin' }, 400);
+  }
+
+  const fullName = cleanRegistrationText(body.fullName, 160);
+  const gender = cleanRegistrationText(body.gender, 30);
+  const cell = cleanRegistrationText(body.cell, 100);
+  const district = cleanRegistrationText(body.district, 100);
+
+  const phone =
+    body.phone === undefined || body.phone === ''
+      ? null
+      : cleanRegistrationText(body.phone, 40);
+
+  const nextOfKin =
+    body.nextOfKin === undefined || body.nextOfKin === ''
+      ? null
+      : cleanRegistrationText(body.nextOfKin, 160);
+
+  if (
+    !fullName ||
+    !gender ||
+    !cell ||
+    !district ||
+    (body.phone !== undefined && body.phone !== '' && !phone) ||
+    (body.nextOfKin !== undefined &&
+      body.nextOfKin !== '' &&
+      !nextOfKin)
+  ) {
+    return json({
+      error: 'required_registration_fields_missing_or_invalid',
+    }, 400);
+  }
+
+  if (!env.PIN_PEPPER || env.PIN_PEPPER.length < 32) {
+    return json({
+      error: 'server_pin_pepper_not_configured',
+    }, 500);
+  }
+
+  // Resolve the group using trusted server-side records.
+  const groups = await env.DB.prepare(
+    `SELECT group_id AS groupId, group_number AS groupNumber
+     FROM group_admin_bootstrap_claims
+     WHERE REPLACE(REPLACE(UPPER(group_number), 'KYA', ''), ' ', '') = ?
+
+     UNION
+
+     SELECT group_id AS groupId, group_number AS groupNumber
+     FROM passbook_group_summaries
+     WHERE REPLACE(REPLACE(UPPER(group_number), 'KYA', ''), ' ', '') = ?
+
+     LIMIT 2`,
+  )
+    .bind(groupDigits, groupDigits)
+    .all<{ groupId: string; groupNumber: string }>();
+
+  const matches = groups.results ?? [];
+
+  if (matches.length !== 1) {
+    return json({
+      error: matches.length
+        ? 'group_identity_ambiguous'
+        : 'group_not_found',
+    }, 404);
+  }
+
+  const group = matches[0];
+
+  const duplicate = await env.DB.prepare(
+    `SELECT application_id
+     FROM member_registration_applications
+     WHERE group_id = ?
+       AND status = 'pending'
+       AND LOWER(full_name) = LOWER(?)
+       AND COALESCE(phone, '') = COALESCE(?, '')
+     LIMIT 1`,
+  )
+    .bind(group.groupId, fullName, phone)
+    .first<{ application_id: string }>();
+
+  if (duplicate) {
+    return json({
+      error: 'registration_already_pending',
+    }, 409);
+  }
+
+  // Hash the PIN on the server. Never store the plaintext PIN.
+  const verifier = await createPinVerifier(
+    body.pin,
+    env.PIN_PEPPER,
+  );
+
+  const applicationId = crypto.randomUUID();
+
+  await env.DB.prepare(
+    `INSERT INTO member_registration_applications
+     (
+       application_id,
+       group_id,
+       group_number,
+       full_name,
+       gender,
+       age,
+       phone,
+       next_of_kin,
+       cell,
+       district,
+       pin_hash,
+       pin_salt,
+       status
+     )
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+  )
+    .bind(
+      applicationId,
+      group.groupId,
+      `KYA ${groupDigits}`,
+      fullName,
+      gender,
+      body.age,
+      phone,
+      nextOfKin,
+      cell,
+      district,
+      verifier.pinHash,
+      verifier.pinSalt,
+    )
+    .run();
+
+  await env.DB.prepare(
+    `INSERT INTO auth_events
+     (user_id, group_id, event_type, result, created_at)
+     VALUES (?, ?, 'member_self_registration', 'pending', datetime('now'))`,
+  )
+    .bind(applicationId, group.groupId)
+    .run();
+
+  return json({
+    ok: true,
+    applicationId,
+    status: 'pending',
+    message: 'Your application is waiting for administrator approval.',
+  }, 201);
+}
+
+async function listPendingRegistrations(
+  env: Env,
+  claims: JwtClaims,
+): Promise<Response> {
+  if (claims.role !== 'admin') {
+    return json({ error: 'admin_required' }, 403);
+  }
+
+  const rows = await env.DB.prepare(
+    `SELECT
+       application_id AS applicationId,
+       group_number AS groupNumber,
+       full_name AS fullName,
+       gender,
+       age,
+       phone,
+       next_of_kin AS nextOfKin,
+       cell,
+       district,
+       created_at AS createdAt
+     FROM member_registration_applications
+     WHERE group_id = ?
+       AND status = 'pending'
+     ORDER BY created_at ASC
+     LIMIT 200`,
+  )
+    .bind(claims.groupId)
+    .all();
+
+  return json({
+    applications: rows.results ?? [],
+  });
+}
+
+function generateMemberSuffix(): string {
+  const value = new Uint32Array(1);
+  crypto.getRandomValues(value);
+
+  return String((value[0] % 999) + 1).padStart(3, '0');
+}
+
+async function reviewMemberRegistration(
+  request: Request,
+  env: Env,
+  claims: JwtClaims,
+  applicationId: string,
+  decision: 'approve' | 'reject',
+): Promise<Response> {
+  if (claims.role !== 'admin') {
+    return json({ error: 'admin_required' }, 403);
+  }
+
+  const application = await env.DB.prepare(
+    `SELECT
+       application_id AS applicationId,
+       group_id AS groupId,
+       group_number AS groupNumber,
+       full_name AS fullName,
+       pin_hash AS pinHash,
+       pin_salt AS pinSalt,
+       status
+     FROM member_registration_applications
+     WHERE application_id = ?
+       AND group_id = ?
+     LIMIT 1`,
+  )
+    .bind(applicationId, claims.groupId)
+    .first<{
+      applicationId: string;
+      groupId: string;
+      groupNumber: string;
+      fullName: string;
+      pinHash: string | null;
+      pinSalt: string | null;
+      status: string;
+    }>();
+
+  if (!application) {
+    return json({ error: 'registration_not_found' }, 404);
+  }
+
+  if (application.status !== 'pending') {
+    return json({ error: 'registration_already_reviewed' }, 409);
+  }
+
+  if (decision === 'reject') {
+    const body = await readJson(request);
+    const reason = body
+      ? cleanRegistrationText(body.reason, 300)
+      : null;
+
+    if (!reason) {
+      return json({ error: 'rejection_reason_required' }, 400);
+    }
+
+    const updated = await env.DB.prepare(
+      `UPDATE member_registration_applications
+       SET status = 'rejected',
+           rejection_reason = ?,
+           pin_hash = NULL,
+           pin_salt = NULL,
+           reviewed_by = ?,
+           reviewed_at = datetime('now'),
+           updated_at = datetime('now')
+       WHERE application_id = ?
+         AND group_id = ?
+         AND status = 'pending'`,
+    )
+      .bind(reason, claims.sub, applicationId, claims.groupId)
+      .run();
+
+    if (Number(updated.meta?.changes ?? 0) !== 1) {
+      return json({ error: 'registration_already_reviewed' }, 409);
+    }
+
+    await env.DB.prepare(
+      `INSERT INTO auth_events
+       (user_id, group_id, event_type, result, created_at)
+       VALUES (?, ?, 'member_registration_review', 'rejected', datetime('now'))`,
+    )
+      .bind(applicationId, claims.groupId)
+      .run();
+
+    return json({
+      ok: true,
+      status: 'rejected',
+    });
+  }
+
+  if (!application.pinHash || !application.pinSalt) {
+    return json({
+      error: 'pending_pin_verifier_missing',
+    }, 409);
+  }
+
+  const groupDigits = application.groupNumber.replace(/^KYA\s*/i, '');
+
+  let memberNumber = '';
+
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const candidate =
+      `KYA${groupDigits}${generateMemberSuffix()}`;
+
+    const existing = await env.DB.prepare(
+      `SELECT user_id
+       FROM auth_users
+       WHERE UPPER(REPLACE(member_number, ' ', '')) = ?
+       LIMIT 1`,
+    )
+      .bind(candidate)
+      .first<{ user_id: string }>();
+
+    if (!existing) {
+      memberNumber = candidate;
+      break;
+    }
+  }
+
+  if (!memberNumber) {
+    return json({
+      error: 'member_number_allocation_failed',
+    }, 503);
+  }
+
+  const marked = await env.DB.prepare(
+    `UPDATE member_registration_applications
+     SET status = 'approved',
+         member_number = ?,
+         pin_hash = NULL,
+         pin_salt = NULL,
+         reviewed_by = ?,
+         reviewed_at = datetime('now'),
+         updated_at = datetime('now')
+     WHERE application_id = ?
+       AND group_id = ?
+       AND status = 'pending'`,
+  )
+    .bind(memberNumber, claims.sub, applicationId, claims.groupId)
+    .run();
+
+  if (Number(marked.meta?.changes ?? 0) !== 1) {
+    return json({
+      error: 'registration_already_reviewed',
+    }, 409);
+  }
+
+  try {
+    await env.DB.prepare(
+      `INSERT INTO auth_users
+       (user_id, group_id, member_number, role, pin_hash, pin_salt, status)
+       VALUES (?, ?, ?, 'member', ?, ?, 'active')`,
+    )
+      .bind(
+        crypto.randomUUID(),
+        claims.groupId,
+        memberNumber,
+        application.pinHash,
+        application.pinSalt,
+      )
+      .run();
+  } catch {
+    // Restore pending state if account creation fails.
+    await env.DB.prepare(
+      `UPDATE member_registration_applications
+       SET status = 'pending',
+           member_number = NULL,
+           pin_hash = ?,
+           pin_salt = ?,
+           reviewed_by = NULL,
+           reviewed_at = NULL,
+           updated_at = datetime('now')
+       WHERE application_id = ?
+         AND group_id = ?
+         AND status = 'approved'`,
+    )
+      .bind(
+        application.pinHash,
+        application.pinSalt,
+        applicationId,
+        claims.groupId,
+      )
+      .run();
+
+    return json({
+      error: 'member_account_creation_failed',
+    }, 409);
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO auth_events
+     (user_id, group_id, event_type, result, created_at)
+     VALUES (?, ?, 'member_registration_review', 'approved', datetime('now'))`,
+  )
+    .bind(applicationId, claims.groupId)
+    .run();
+
+  return json({
+    ok: true,
+    status: 'approved',
+    memberNumber,
+  });
+    }
+
 async function createAuthUser(request: Request, env: Env, claims: JwtClaims): Promise<Response> {
   if (claims.role !== 'admin') return json({ error: 'admin_required' }, 403);
   const body = await readJson(request);
