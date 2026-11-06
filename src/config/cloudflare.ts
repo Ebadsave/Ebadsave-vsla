@@ -8,6 +8,8 @@ export const CLOUDFLARE_ENDPOINTS = {
   logout: '/v1/auth/logout',
   bootstrapAdmin: '/v1/auth/bootstrap-admin',
   users: '/v1/auth/users',
+  registrations: '/v1/registrations',
+  pendingRegistrations: '/v1/registrations/pending',
   myPassbook: '/v1/passbook/me',
   syncPassbook: '/v1/passbook/sync',
   backups: '/v1/backups',
