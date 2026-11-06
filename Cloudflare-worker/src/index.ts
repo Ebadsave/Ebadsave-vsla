@@ -292,6 +292,24 @@ async function syncPassbook(request: Request, env: Env, claims: JwtClaims): Prom
     return json({ error: 'members_array_required_max_500' }, 400);
   }
   const db = env.DB;
+
+  // Preflight every member before writing anything. This prevents a missing
+  // authentication account from causing a partial group synchronisation.
+  const missingMemberNumbers: string[] = [];
+  for (const item of body.members) {
+    if (!isRecord(item) || typeof item.memberNumber !== 'string') {
+      return json({ error: 'invalid_member_record' }, 400);
+    }
+    const normalized = normalizeMemberNumber(item.memberNumber);
+    const identity = await db.prepare(
+      `SELECT user_id FROM auth_users WHERE group_id = ? AND UPPER(REPLACE(member_number, ' ', '')) = ? AND status = 'active' LIMIT 1`,
+    ).bind(claims.groupId, normalized.replace(/\s/g, '')).first<{ user_id: string }>();
+    if (!identity) missingMemberNumbers.push(normalized);
+  }
+  if (missingMemberNumbers.length) {
+    return json({ error: 'member_auth_account_missing', missingMemberNumbers }, 409);
+  }
+
   let synced = 0;
   for (const item of body.members) {
     if (!isRecord(item) || typeof item.memberNumber !== 'string' || typeof item.memberName !== 'string' ||
@@ -342,8 +360,54 @@ async function syncPassbook(request: Request, env: Env, claims: JwtClaims): Prom
     }
     synced++;
   }
+
+  // Store the group-level figures alongside the individual passbooks.
+  if (isRecord(body.groupSummary)) {
+    const summary = body.groupSummary;
+    const numericFields = [
+      'totalSavingsUgx', 'availableLoanFundUgx', 'outstandingLoansUgx',
+      'insuranceFundUgx', 'finesFundUgx', 'registeredMembers', 'activeMembers',
+      'totalExpenditureUgx', 'previousPeriodExpenditureUgx',
+    ];
+    for (const field of numericFields) {
+      if (!Number.isSafeInteger(summary[field]) || (summary[field] as number) < 0) {
+        return json({ error: 'invalid_group_summary', field }, 400);
+      }
+    }
+    if (typeof summary.groupNumber !== 'string' || typeof summary.groupName !== 'string' ||
+        typeof summary.currency !== 'string' || typeof summary.reportingPeriod !== 'string' ||
+        typeof summary.previousReportingPeriod !== 'string') {
+      return json({ error: 'invalid_group_summary' }, 400);
+    }
+    await db.prepare(
+      `INSERT INTO passbook_group_summaries
+       (group_id, group_number, group_name, currency, total_savings_ugx,
+        available_loan_fund_ugx, outstanding_loans_ugx, insurance_fund_ugx,
+        fines_fund_ugx, registered_members, active_members, total_expenditure_ugx,
+        previous_period_expenditure_ugx, reporting_period, previous_reporting_period, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(group_id) DO UPDATE SET
+        group_number = excluded.group_number, group_name = excluded.group_name,
+        currency = excluded.currency, total_savings_ugx = excluded.total_savings_ugx,
+        available_loan_fund_ugx = excluded.available_loan_fund_ugx,
+        outstanding_loans_ugx = excluded.outstanding_loans_ugx,
+        insurance_fund_ugx = excluded.insurance_fund_ugx, fines_fund_ugx = excluded.fines_fund_ugx,
+        registered_members = excluded.registered_members, active_members = excluded.active_members,
+        total_expenditure_ugx = excluded.total_expenditure_ugx,
+        previous_period_expenditure_ugx = excluded.previous_period_expenditure_ugx,
+        reporting_period = excluded.reporting_period,
+        previous_reporting_period = excluded.previous_reporting_period, updated_at = datetime('now')`,
+    ).bind(
+      claims.groupId, summary.groupNumber, summary.groupName, summary.currency,
+      summary.totalSavingsUgx, summary.availableLoanFundUgx, summary.outstandingLoansUgx,
+      summary.insuranceFundUgx, summary.finesFundUgx, summary.registeredMembers,
+      summary.activeMembers, summary.totalExpenditureUgx, summary.previousPeriodExpenditureUgx,
+      summary.reportingPeriod, summary.previousReportingPeriod,
+    ).run();
+  }
+
   await audit(env, claims.sub, claims.groupId, 'passbook_sync', 'success');
-  return json({ ok: true, membersSynced: synced });
+  return json({ ok: true, membersSynced: synced, groupSummarySynced: isRecord(body.groupSummary) });
 }
 
 async function createAuthUser(request: Request, env: Env, claims: JwtClaims): Promise<Response> {
@@ -499,6 +563,6 @@ export default {
       return cors(response, request);
     }
 
-    return cors(json({ error: 'endpoint_not_found', message: 'The requested Ebadsave service address was not found. Check the app service address or contact Ebadsave support.' }, 404), request);
+    return cors(json({ error: 'not_found' }, 404), request);
   },
 };
