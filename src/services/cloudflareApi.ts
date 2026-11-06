@@ -237,4 +237,202 @@ export async function getMyRemotePassbook(): Promise<RemoteMemberPassbook> {
     typeof result.passbook.memberNumber !== 'string' ||
     !Array.isArray(result.passbook.transactions)
   ) {
-    throw new Cloudflare
+    throw new CloudflareApiError(
+      'Cloudflare returned an incomplete passbook.',
+      502,
+      'invalid_passbook_response',
+      result,
+    );
+  }
+
+  return result.passbook;
+}
+
+export async function saveCloudflareSession(
+  accessToken: string,
+  groupId: string,
+): Promise<void> {
+  if (!accessToken || !groupId) {
+    throw new Error('Cloudflare session details are incomplete.');
+  }
+
+  await SecureStore.setItemAsync(
+    CLOUDFLARE_STORAGE_KEYS.accessToken,
+    accessToken,
+  );
+
+  await SecureStore.setItemAsync(
+    CLOUDFLARE_STORAGE_KEYS.groupId,
+    groupId,
+  );
+}
+
+export async function getCloudflareAccessToken(): Promise<string | null> {
+  return SecureStore.getItemAsync(
+    CLOUDFLARE_STORAGE_KEYS.accessToken,
+  );
+}
+
+export async function clearCloudflareSession(): Promise<void> {
+  await SecureStore.deleteItemAsync(
+    CLOUDFLARE_STORAGE_KEYS.accessToken,
+  );
+
+  await SecureStore.deleteItemAsync(
+    CLOUDFLARE_STORAGE_KEYS.groupId,
+  );
+}
+
+export async function signOutCloudflareSession(): Promise<void> {
+  const token = await getCloudflareAccessToken();
+
+  try {
+    if (token) {
+      await cloudflareRequest(CLOUDFLARE_ENDPOINTS.logout, {
+        method: 'POST',
+        token,
+      });
+    }
+  } finally {
+    await clearCloudflareSession();
+  }
+}
+
+// Remote member registration
+
+export interface RemoteRegistrationInput {
+  groupNumber: string;
+  fullName: string;
+  gender: string;
+  age: number;
+  phone?: string;
+  nextOfKin?: string;
+  cell: string;
+  district: string;
+  pin: string;
+}
+
+export interface PendingMemberRegistration {
+  applicationId: string;
+  groupNumber: string;
+  fullName: string;
+  gender: string;
+  age: number;
+  phone: string | null;
+  nextOfKin: string | null;
+  cell: string;
+  district: string;
+  createdAt: string;
+}
+
+export async function submitRemoteMemberRegistration(
+  input: RemoteRegistrationInput,
+): Promise<{
+  applicationId: string;
+  status: 'pending';
+}> {
+  if (!/^\d{6,12}$/.test(input.pin)) {
+    throw new CloudflareApiError(
+      'PIN must contain 6 to 12 digits.',
+      400,
+      'invalid_pin',
+    );
+  }
+
+  const result = await cloudflareRequest<{
+    ok?: boolean;
+    applicationId?: string;
+    status?: string;
+  }>(CLOUDFLARE_ENDPOINTS.registrations, {
+    method: 'POST',
+    body: input,
+  });
+
+  if (
+    result.ok !== true ||
+    typeof result.applicationId !== 'string' ||
+    result.status !== 'pending'
+  ) {
+    throw new CloudflareApiError(
+      'Cloudflare did not confirm the pending registration.',
+      502,
+      'invalid_registration_response',
+      result,
+    );
+  }
+
+  return {
+    applicationId: result.applicationId,
+    status: 'pending',
+  };
+}
+
+export async function getPendingMemberRegistrations(): Promise<
+  PendingMemberRegistration[]
+> {
+  const result = await cloudflareRequest<{
+    applications?: PendingMemberRegistration[];
+  }>(CLOUDFLARE_ENDPOINTS.pendingRegistrations, {
+    authenticated: true,
+  });
+
+  return Array.isArray(result.applications)
+    ? result.applications
+    : [];
+}
+
+export async function approveRemoteMemberRegistration(
+  applicationId: string,
+): Promise<{ memberNumber: string }> {
+  const result = await cloudflareRequest<{
+    ok?: boolean;
+    memberNumber?: string;
+  }>(
+    `${CLOUDFLARE_ENDPOINTS.registrations}/${applicationId}/approve`,
+    {
+      method: 'POST',
+      body: {},
+      authenticated: true,
+    },
+  );
+
+  if (
+    result.ok !== true ||
+    typeof result.memberNumber !== 'string'
+  ) {
+    throw new CloudflareApiError(
+      'Cloudflare did not confirm member approval.',
+      502,
+      'invalid_approval_response',
+      result,
+    );
+  }
+
+  return { memberNumber: result.memberNumber };
+}
+
+export async function rejectRemoteMemberRegistration(
+  applicationId: string,
+  reason: string,
+): Promise<void> {
+  const result = await cloudflareRequest<{
+    ok?: boolean;
+    status?: string;
+  }>(
+    `${CLOUDFLARE_ENDPOINTS.registrations}/${applicationId}/reject`,
+    {
+      method: 'POST',
+      body: { reason },
+      authenticated: true,
+    },
+  );
+
+  if (result.ok !== true || result.status !== 'rejected') {
+    throw new CloudflareApiError(
+      'Cloudflare did not confirm application rejection.',
+      502,
+      'invalid_rejection_response',
+      result,
+    );
+  }
+}
