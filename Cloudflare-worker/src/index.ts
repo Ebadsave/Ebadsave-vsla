@@ -38,6 +38,7 @@ export interface Env extends AuthEnv {
   DB: D1Database;
   JWT_HS256_SECRET: string;
   ADMIN_BOOTSTRAP_SECRET: string;
+  PIN_PEPPER: string;
 }
 
 type JwtRole = AuthRole;
