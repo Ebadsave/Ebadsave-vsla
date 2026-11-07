@@ -1,4 +1,4 @@
-name: Cloudflare D1 Migrations
+name: Apply Ebadsave D1 Migrations
 
 on:
   workflow_dispatch:
