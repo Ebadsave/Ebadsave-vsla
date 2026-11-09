@@ -47,4 +47,18 @@ jobs:
           JWT_HS256_SECRET: ${{ secrets.JWT_HS256_SECRET }}
           PIN_PEPPER: ${{ secrets.PIN_PEPPER }}
         run: |
-          set
+          set -euo pipefail
+          test -n "$ADMIN_BOOTSTRAP_SECRET"
+          test -n "$JWT_HS256_SECRET"
+          test -n "$PIN_PEPPER"
+          printf '%s' "$ADMIN_BOOTSTRAP_SECRET" | npx wrangler secret put ADMIN_BOOTSTRAP_SECRET --name ebadsave-vsla-cloudflare
+          printf '%s' "$JWT_HS256_SECRET" | npx wrangler secret put JWT_HS256_SECRET --name ebadsave-vsla-cloudflare
+          printf '%s' "$PIN_PEPPER" | npx wrangler secret put PIN_PEPPER --name ebadsave-vsla-cloudflare
+
+      - name: Deploy existing Ebadsave Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --name ebadsave-vsla-cloudflare
+          workingDirectory: Cloudflare-worker
