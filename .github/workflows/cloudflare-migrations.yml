@@ -1,36 +1,17 @@
-name: Apply Ebadsave D1 Migration 0006
+name: Ebadsave D1 Migrations - Temporarily Disabled
 
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - "Cloudflare-worker/migrations/0006_remote_member_registrations.sql"
-      - ".github/workflows/cloudflare-migrations.yml"
+workflow_dispatch:
 
 permissions:
-  contents: read
+contents: read
 
 jobs:
-  apply-migration:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install Wrangler
-        run: npm install --no-save wrangler@4.86.0
-        working-directory: Cloudflare-worker
-
-      - name: Apply migration 0006 to remote D1
-        run: npx wrangler d1 migrations apply ebadsave-vsla-db --remote
-        working-directory: Cloudflare-worker
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+disabled:
+runs-on: ubuntu-latest
+steps:
+- name: Migration protection
+run: |
+echo "D1 migrations are temporarily disabled."
+echo "Existing database tables and records are preserved."
+echo "Do not apply migrations until Cloudflare API access is resolved."
