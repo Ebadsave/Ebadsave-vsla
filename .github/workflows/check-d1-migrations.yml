@@ -1,39 +1,28 @@
-name: Check Ebadsave D1 Migration Status
+name: Check Ebadsave D1 Migrations
 
-'on':
+on:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  migration-status:
+  check-migrations:
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: Cloudflare-worker
-
     steps:
-      - name: Download repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: Cloudflare-worker/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Check Cloudflare authentication
-        run: npx wrangler whoami
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
       - name: Check remote D1 migrations
-        run: npx wrangler d1 migrations list ebadsave-vsla-db --remote
+        working-directory: Cloudflare-worker
+        run: |
+          npm install --no-save wrangler@4.86.0
+          npx wrangler d1 migrations list ebadsave-vsla-db --remote
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
