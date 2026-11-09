@@ -1,6 +1,6 @@
 name: Deploy Ebadsave Cloudflare Worker
 
-'on':
+on:
 push:
 branches:
 - main
