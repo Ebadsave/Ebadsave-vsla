@@ -1,17 +1,14 @@
-name: Ebadsave D1 Migrations - Temporarily Disabled
+name: Ebadsave D1 Migrations - Disabled
 
-on:
-workflow_dispatch:
+'on':
+  workflow_dispatch:
 
 permissions:
-contents: read
+  contents: read
 
 jobs:
-disabled:
-runs-on: ubuntu-latest
-steps:
-- name: Migration protection
-run: |
-echo "D1 migrations are temporarily disabled."
-echo "Existing database tables and records are preserved."
-echo "Do not apply migrations until Cloudflare API access is resolved."
+  disabled:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm migrations are paused
+        run: echo "D1 migrations are temporarily paused. Existing database records are preserved."
