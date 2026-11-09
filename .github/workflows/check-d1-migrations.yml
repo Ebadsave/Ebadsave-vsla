@@ -1,6 +1,6 @@
 name: Check Ebadsave D1 Migration Status
 
-on:
+'on':
   workflow_dispatch:
 
 permissions:
