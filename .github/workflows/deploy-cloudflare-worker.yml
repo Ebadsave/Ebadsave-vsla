@@ -43,10 +43,10 @@ jobs:
       - name: Set Cloudflare Secrets
         shell: bash
         env:
-          ADMIN_BOOTSTRAP_SECRET: ${{ secrets.ADMIN_BOOTSTRAP_SECRET }}
-          JWT_HS256_SECRET: ${{ secrets.JWT_HS256_SECRET }}
-          PIN_PEPPER: ${{ secrets.PIN_PEPPER }}
-        run: |
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  ADMIN_BOOTSTRAP_SECRET: ${{ secrets.ADMIN_BOOTSTRAP_SECRET }}
+  JWT_HS256_SECRET: ${{ secrets.JWT_HS256_SECRET }}
+  PIN_PEPPER: ${{ secrets.PIN_PEPPER }}
           set -euo pipefail
           test -n "$ADMIN_BOOTSTRAP_SECRET"
           test -n "$JWT_HS256_SECRET"
