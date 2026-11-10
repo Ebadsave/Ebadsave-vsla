@@ -1,73 +1,130 @@
 import * as FileSystem from 'expo-file-system';
-import * as Crypto from 'expo-crypto';
-import * as CryptoJS from 'crypto-js';
+import * as MailComposer from 'expo-mail-composer';
+import * as SecureStore from 'expo-secure-store';
+import { getCloudflareAccessToken, getCloudflareSessionGroupId } from '../services/cloudflareApi';
+import { uploadGroupDatabaseBackupToCloud } from '../screens/backup';
 import {
+  createDatabaseBackup,
   createGroupDatabaseBackup,
-  restoreGroupDatabaseBackup,
-} from '../database/database';
-import { CLOUDFLARE_API_BASE_URL } from '../config/cloudflare';
-import {
-  clearCloudflareSession,
-  getCloudflareAccessToken,
-  getCloudflareSessionGroupId,
-  saveCloudflareSession,
-} from '../services/cloudflareApi';
+  getAllGroups,
+  restoreDatabaseBackup as restoreDatabaseBackupJson,
+} from './database';
+
+const MAX_LOCAL_BACKUP_FILES = 2;
 
 const REQUIRED_BACKUP_TABLES = [
-  'groups', 'group_registration_attempts', 'members', 'deleted_member_numbers',
-  'member_next_of_kin', 'next_of_kin_change_history', 'next_of_kin_benefits',
-  'group_rules', 'vsla_setup_rules', 'group_meetings', 'member_credentials',
-  'member_auth_attempts', 'member_transaction_signatures', 'app_access_sessions',
-  'app_access_authorizers', 'meeting_attendance', 'meeting_closures',
-  'financial_accounts', 'financial_collections', 'financial_collection_items',
-  'financial_transactions', 'financial_transaction_reversals', 'receipts',
-  'notification_queue', 'notification_delivery', 'meeting_audit_records',
-  'sync_queue', 'member_passbook_records', 'member_statement_records',
+  'groups',
+  'group_registration_attempts',
+  'members',
+  'deleted_member_numbers',
+  'member_next_of_kin',
+  'next_of_kin_change_history',
+  'next_of_kin_benefits',
+  'group_rules',
+  'vsla_setup_rules',
+  'group_meetings',
+  'member_credentials',
+  'member_auth_attempts',
+  'member_transaction_signatures',
+  'app_access_sessions',
+  'app_access_authorizers',
+  'meeting_attendance',
+  'meeting_closures',
+  'financial_accounts',
+  'financial_collections',
+  'financial_collection_items',
+  'financial_transactions',
+  'financial_transaction_reversals',
+  'receipts',
+  'notification_queue',
+  'notification_delivery',
+  'meeting_audit_records',
+  'sync_queue',
+  'member_passbook_records',
+  'member_statement_records',
   'loan_interest_charges',
 ] as const;
 
-const CLOUD_BACKUP_VERSION = 1;
-const PBKDF2_ITERATIONS = 120_000;
+const AUTO_BACKUP_CONSENT_KEY = 'ebadsave_auto_cloud_backup_consent';
+const AUTO_BACKUP_PASSPHRASE_KEY = 'ebadsave_auto_cloud_backup_passphrase';
 
-export interface CloudBackupFileInfo {
-  objectId: string;
+export async function getAutomaticCloudBackupConsent(): Promise<boolean> {
+  return (await SecureStore.getItemAsync(AUTO_BACKUP_CONSENT_KEY)) === 'true';
+}
+
+export async function setAutomaticCloudBackupConsent(
+  consent: boolean,
+): Promise<{ success: boolean; message: string }> {
+  try {
+    await SecureStore.setItemAsync(AUTO_BACKUP_CONSENT_KEY, consent ? 'true' : 'false');
+    return { success: true, message: consent ? 'Automatic Cloudflare backup enabled.' : 'Automatic cloud backup disabled.' };
+  } catch (error) {
+    return { success: false, message: error instanceof Error ? error.message : 'Could not save backup consent.' };
+  }
+}
+
+export async function saveAutomaticCloudBackupPassphrase(
+  passphrase: string,
+): Promise<void> {
+  const value = passphrase.trim();
+  if (value.length < 12) throw new Error('Cloud backup passphrase must contain at least 12 characters.');
+  await SecureStore.setItemAsync(AUTO_BACKUP_PASSPHRASE_KEY, value);
+}
+
+export async function runAutomaticCloudBackup(_force = false): Promise<{
+  success: boolean;
+  skipped: boolean;
+  message: string;
+  error?: string;
+}> {
+  try {
+    if (!(await getAutomaticCloudBackupConsent())) {
+      return { success: true, skipped: true, message: 'Automatic cloud backup is disabled.' };
+    }
+
+    const [token, cloudGroupId, passphrase] = await Promise.all([
+      getCloudflareAccessToken(),
+      getCloudflareSessionGroupId(),
+      SecureStore.getItemAsync(AUTO_BACKUP_PASSPHRASE_KEY),
+    ]);
+    if (!token) throw new Error('Cloudflare administrator session is missing. Sign in again.');
+    if (!cloudGroupId) throw new Error('Cloudflare group identity is missing. Sign in again.');
+    if (!passphrase || passphrase.length < 12) throw new Error('Automatic backup passphrase is missing. Enter it in Backup & Restore.');
+
+    // The Worker group identity is expected to end in the group's four-digit KYA number.
+    const match = cloudGroupId.match(/(\d{4})$/);
+    if (!match) throw new Error('Cannot match the Cloudflare account to a local KYA group.');
+    const groupNumber = match[1];
+    const groups = await getAllGroups();
+    const group = groups.find((item) => String(item.group_number).replace(/^KYA\s*/i, '').padStart(4, '0') === groupNumber);
+    if (!group) throw new Error(`Local group KYA ${groupNumber} was not found. No backup was uploaded.`);
+
+    const result = await uploadGroupDatabaseBackupToCloud(group.id, passphrase);
+    if (!result.success) throw new Error(result.error || result.message || 'Cloudflare did not confirm the upload.');
+
+    return { success: true, skipped: false, message: result.message };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown automatic backup error.';
+    return { success: false, skipped: false, message: 'Automatic Cloudflare backup failed; it will be retried.', error: message };
+  }
+}
+
+export interface BackupFileInfo {
   name: string;
-  createdAt: string;
-  backupCreatedAt: string;
-  fileUrl: string;
-  vaultId: string;
-  bytes?: number;
+  path: string;
+  size: number;
+  timestamp: string;
 }
 
 interface BackupEnvelope {
   version: 1;
   created_at: string;
   tables: Record<string, unknown[]>;
-  group_number?: string | number;
-}
-
-interface EncryptedCloudEnvelope {
-  format: 'EBADSAVE_ENCRYPTED_CLOUD_BACKUP';
-  version: 1;
-  created_at: string;
-  salt: string;
-  iv: string;
-  ciphertext: string;
-  mac: string;
-}
-
-interface JwtPayload {
-  sub?: string;
-  groupId?: string;
-  role?: string;
-  exp?: number;
 }
 
 function getDocumentsDirectory(): string {
   const directory = FileSystem.documentDirectory || FileSystem.cacheDirectory;
-  if (!directory) {
-    throw new Error('Device storage is unavailable. The backup was not saved.');
-  }
+  if (!directory) throw new Error('Device storage is unavailable. The backup was not saved.');
   return directory;
 }
 
@@ -80,7 +137,7 @@ function parseAndValidateBackup(contents: string): BackupEnvelope {
   try {
     parsed = JSON.parse(contents);
   } catch {
-    throw new Error('The backup is not valid JSON. No data was changed.');
+    throw new Error('The selected backup is not valid JSON. No data was changed.');
   }
 
   if (!parsed || typeof parsed !== 'object') {
@@ -92,8 +149,7 @@ function parseAndValidateBackup(contents: string): BackupEnvelope {
     backup.version !== 1 ||
     typeof backup.created_at !== 'string' ||
     !backup.tables ||
-    typeof backup.tables !== 'object' ||
-    Array.isArray(backup.tables)
+    typeof backup.tables !== 'object'
   ) {
     throw new Error('This is not a supported Ebadsave VSLA backup. No data was changed.');
   }
@@ -106,276 +162,37 @@ function parseAndValidateBackup(contents: string): BackupEnvelope {
       `The backup is incomplete. Missing or invalid tables: ${missing.join(', ')}. No data was changed.`,
     );
   }
-
   return backup as BackupEnvelope;
 }
 
-function requirePassphrase(passphrase: string): string {
-  const normalized = passphrase.trim();
-  if (normalized.length < 12) {
-    throw new Error('Use a cloud backup passphrase with at least 12 characters.');
-  }
-  return normalized;
-}
-
-function randomBytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function deriveEncryptionKey(passphrase: string, saltHex: string): CryptoJS.lib.WordArray {
-  return CryptoJS.PBKDF2(passphrase, CryptoJS.enc.Hex.parse(saltHex), {
-    keySize: 256 / 32,
-    iterations: PBKDF2_ITERATIONS,
-    hasher: CryptoJS.algo.SHA256,
-  });
-}
-
-function deriveAuthenticationKey(passphrase: string, saltHex: string): CryptoJS.lib.WordArray {
-  return CryptoJS.PBKDF2(
-    passphrase,
-    CryptoJS.enc.Utf8.parse(`Ebadsave-HMAC:${saltHex}`),
-    {
-      keySize: 256 / 32,
-      iterations: PBKDF2_ITERATIONS,
-      hasher: CryptoJS.algo.SHA256,
-    },
+async function pruneLocalBackupFiles(keep = MAX_LOCAL_BACKUP_FILES): Promise<void> {
+  const directory = getDocumentsDirectory();
+  const names = await FileSystem.readDirectoryAsync(directory);
+  const candidates = names.filter(
+    (name) => name.startsWith('ebadsave_backup_') && name.endsWith('.json'),
   );
-}
 
-function authenticatedPayload(envelope: Omit<EncryptedCloudEnvelope, 'mac'>): string {
-  return [
-    envelope.format,
-    envelope.version,
-    envelope.created_at,
-    envelope.salt,
-    envelope.iv,
-    envelope.ciphertext,
-  ].join('|');
-}
-
-function constantTimeEquals(left: string, right: string): boolean {
-  if (left.length !== right.length) return false;
-  let difference = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
-  }
-  return difference === 0;
-}
-
-async function encryptBackupForCloud(
-  contents: string,
-  passphraseInput: string,
-): Promise<EncryptedCloudEnvelope> {
-  const passphrase = requirePassphrase(passphraseInput);
-  const salt = randomBytesToHex(await Crypto.getRandomBytesAsync(16));
-  const iv = randomBytesToHex(await Crypto.getRandomBytesAsync(16));
-  const key = deriveEncryptionKey(passphrase, salt);
-
-  const encrypted = CryptoJS.AES.encrypt(contents, key, {
-    iv: CryptoJS.enc.Hex.parse(iv),
-    mode: CryptoJS.mode.CBC,
-    padding: CryptoJS.pad.Pkcs7,
-  });
-
-  const backup = parseAndValidateBackup(contents);
-  const unsignedEnvelope: Omit<EncryptedCloudEnvelope, 'mac'> = {
-    format: 'EBADSAVE_ENCRYPTED_CLOUD_BACKUP',
-    version: CLOUD_BACKUP_VERSION as 1,
-    created_at: backup.created_at,
-    salt,
-    iv,
-    ciphertext: encrypted.toString(),
-  };
-
-  return {
-    ...unsignedEnvelope,
-    mac: CryptoJS.HmacSHA256(
-      authenticatedPayload(unsignedEnvelope),
-      deriveAuthenticationKey(passphrase, salt),
-    ).toString(CryptoJS.enc.Hex),
-  };
-}
-
-function decryptCloudBackup(encryptedContents: string, passphraseInput: string): string {
-  const passphrase = requirePassphrase(passphraseInput);
-  let envelope: Partial<EncryptedCloudEnvelope>;
-
-  try {
-    envelope = JSON.parse(encryptedContents) as Partial<EncryptedCloudEnvelope>;
-  } catch {
-    throw new Error('The internet backup file is damaged or unsupported.');
-  }
-
-  if (
-    envelope.format !== 'EBADSAVE_ENCRYPTED_CLOUD_BACKUP' ||
-    envelope.version !== CLOUD_BACKUP_VERSION ||
-    typeof envelope.salt !== 'string' ||
-    typeof envelope.iv !== 'string' ||
-    typeof envelope.ciphertext !== 'string' ||
-    typeof envelope.mac !== 'string'
-  ) {
-    throw new Error('This is not a supported encrypted Ebadsave cloud backup.');
-  }
-
-  const unsignedEnvelope: Omit<EncryptedCloudEnvelope, 'mac'> = {
-    format: envelope.format,
-    version: envelope.version,
-    created_at: envelope.created_at || '',
-    salt: envelope.salt,
-    iv: envelope.iv,
-    ciphertext: envelope.ciphertext,
-  };
-
-  const expectedMac = CryptoJS.HmacSHA256(
-    authenticatedPayload(unsignedEnvelope),
-    deriveAuthenticationKey(passphrase, envelope.salt),
-  ).toString(CryptoJS.enc.Hex);
-
-  if (!constantTimeEquals(expectedMac, envelope.mac)) {
-    throw new Error('The passphrase is incorrect or the cloud backup has been altered.');
-  }
-
-  let plaintext = '';
-  try {
-    plaintext = CryptoJS.AES.decrypt(
-      envelope.ciphertext,
-      deriveEncryptionKey(passphrase, envelope.salt),
-      {
-        iv: CryptoJS.enc.Hex.parse(envelope.iv),
-        mode: CryptoJS.mode.CBC,
-        padding: CryptoJS.pad.Pkcs7,
-      },
-    ).toString(CryptoJS.enc.Utf8);
-  } catch {
-    throw new Error('The passphrase is incorrect or the cloud backup is damaged.');
-  }
-
-  if (!plaintext) {
-    throw new Error('The passphrase is incorrect or the cloud backup is damaged.');
-  }
-
-  parseAndValidateBackup(plaintext);
-  return plaintext;
-}
-
-function decodeJwtPayload(token: string): JwtPayload {
-  try {
-    const payloadPart = token.split('.')[1];
-    if (!payloadPart) throw new Error('Missing token payload');
-    const normalized = payloadPart.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
-    const decoded = globalThis.atob(padded);
-    return JSON.parse(decodeURIComponent(
-      Array.from(decoded, (character) =>
-        `%${character.charCodeAt(0).toString(16).padStart(2, '0')}`,
-      ).join(''),
-    )) as JwtPayload;
-  } catch {
-    throw new Error('Cloudflare returned an unreadable login token.');
-  }
-}
-
-async function cloudflareBinaryRequest(
-  path: string,
-  method: 'GET' | 'POST',
-  body?: Uint8Array,
-  extraHeaders: Record<string, string> = {},
-): Promise<Response> {
-  const token = await getCloudflareAccessToken();
-  if (!token) throw new Error('Sign in to Cloudflare before performing this operation.');
-
-  const response = await fetch(`${CLOUDFLARE_API_BASE_URL}${path}`, {
-    method,
-    headers: {
-      authorization: `Bearer ${token}`,
-      ...extraHeaders,
-    },
-    body: body ? body as unknown as BodyInit : undefined,
-  });
-
-  if (!response.ok) {
-    let code = `Cloudflare request failed (${response.status}).`;
-    try {
-      const payload = await response.json() as { error?: string };
-      if (payload.error) code = payload.error;
-    } catch {
-      // Keep the HTTP status message when the response is not JSON.
-    }
-    throw new Error(code);
-  }
-  return response;
-}
-
-function utf8ToBytes(value: string): Uint8Array {
-  const wordArray = CryptoJS.enc.Utf8.parse(value);
-  const bytes = new Uint8Array(wordArray.sigBytes);
-  for (let index = 0; index < wordArray.sigBytes; index += 1) {
-    bytes[index] = (wordArray.words[index >>> 2] >>> (24 - (index % 4) * 8)) & 0xff;
-  }
-  return bytes;
-}
-
-async function assertCloudflareGroupMatches(groupNumber: string): Promise<string> {
-  const cloudGroupId = await getCloudflareSessionGroupId();
-  if (!cloudGroupId) throw new Error('Cloudflare group session is missing. Sign in again.');
-  const match = cloudGroupId.match(/(\d{4})$/);
-  if (!match || match[1] !== groupNumber) {
-    throw new Error('The signed-in Cloudflare administrator does not belong to this group.');
-  }
-  return cloudGroupId;
-}
-
-function bytesToUtf8(bytes: Uint8Array): string {
-  const words: number[] = [];
-  for (let index = 0; index < bytes.length; index += 1) {
-    words[index >>> 2] = (words[index >>> 2] || 0) |
-      (bytes[index] << (24 - (index % 4) * 8));
-  }
-  return CryptoJS.enc.Utf8.stringify(
-    CryptoJS.lib.WordArray.create(words, bytes.length),
+  const details = await Promise.all(
+    candidates.map(async (name) => {
+      const path = `${directory}${name}`;
+      let createdAt = 0;
+      try {
+        const contents = await FileSystem.readAsStringAsync(path, {
+          encoding: FileSystem.EncodingType.UTF8,
+        });
+        const parsed = JSON.parse(contents) as { created_at?: string };
+        createdAt = parsed.created_at ? new Date(parsed.created_at).getTime() : 0;
+      } catch {
+        // Invalid/legacy files sort behind valid backups.
+      }
+      if (!Number.isFinite(createdAt)) createdAt = 0;
+      return { name, path, createdAt };
+    }),
   );
-}
 
-export async function signInCloudflareBackupAdmin(
-  memberNumber: string,
-  pin: string,
-): Promise<void> {
-  const response = await fetch(`${CLOUDFLARE_API_BASE_URL}/v1/auth/login`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({ memberNumber: memberNumber.trim().toUpperCase(), pin }),
-  });
-
-  const payload = await response.json() as {
-    accessToken?: string;
-    error?: string;
-  };
-
-  if (!response.ok || !payload.accessToken) {
-    throw new Error(payload.error || `Cloudflare sign-in failed (${response.status}).`);
-  }
-
-  const claims = decodeJwtPayload(payload.accessToken);
-  if (claims.role !== 'admin' || !claims.groupId) {
-    throw new Error('This account is not authorized as a group administrator.');
-  }
-
-  await saveCloudflareSession(payload.accessToken, claims.groupId);
-}
-
-export async function signOutCloudflareBackupAdmin(): Promise<void> {
-  const token = await getCloudflareAccessToken();
-  if (token) {
-    try {
-      await fetch(`${CLOUDFLARE_API_BASE_URL}/v1/auth/logout`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}` },
-      });
-    } finally {
-      await clearCloudflareSession();
-    }
-  } else {
-    await clearCloudflareSession();
+  details.sort((a, b) => b.createdAt - a.createdAt || b.name.localeCompare(a.name));
+  for (const oldBackup of details.slice(Math.max(0, keep))) {
+    await FileSystem.deleteAsync(oldBackup.path, { idempotent: true });
   }
 }
 
@@ -389,13 +206,14 @@ export async function exportGroupDatabaseBackup(groupId: number): Promise<{
 }> {
   try {
     const json = await createGroupDatabaseBackup(groupId);
-    const parsed = parseAndValidateBackup(json);
+    const parsed = JSON.parse(json) as BackupEnvelope & {
+      group_number?: string | number;
+    };
+    parseAndValidateBackup(json);
     if (!parsed.group_number) throw new Error('The group backup has no KYA group identity.');
 
-    const groupNumber = String(parsed.group_number).replace(/^KYA\s*/i, '');
-    const fileName = `ebadsave_group_${groupNumber}_${makeTimestamp()}.json`;
+    const fileName = `ebadsave_group_${String(parsed.group_number).replace(/^KYA\s*/i, '')}_${makeTimestamp()}.json`;
     const filePath = `${getDocumentsDirectory()}${fileName}`;
-
     await FileSystem.writeAsStringAsync(filePath, json, {
       encoding: FileSystem.EncodingType.UTF8,
     });
@@ -403,14 +221,22 @@ export async function exportGroupDatabaseBackup(groupId: number): Promise<{
     const saved = await FileSystem.readAsStringAsync(filePath, {
       encoding: FileSystem.EncodingType.UTF8,
     });
+    const verified = JSON.parse(saved) as { group_number?: string | number };
     parseAndValidateBackup(saved);
+
+    if (
+      String(verified.group_number ?? '').replace(/^KYA\s*/i, '') !==
+      String(parsed.group_number).replace(/^KYA\s*/i, '')
+    ) {
+      throw new Error('The saved backup group identity did not verify.');
+    }
 
     return {
       success: true,
-      message: 'Group-only backup created and verified locally.',
+      message: 'Group-only backup created and verified.',
       filePath,
       fileName,
-      groupNumber: `KYA ${groupNumber}`,
+      groupNumber: String(parsed.group_number),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown group backup error.';
@@ -418,113 +244,170 @@ export async function exportGroupDatabaseBackup(groupId: number): Promise<{
   }
 }
 
-export async function uploadGroupDatabaseBackupToCloud(
-  groupId: number,
-  passphrase: string,
-): Promise<{ success: boolean; message: string; error?: string }> {
-  try {
-    const json = await createGroupDatabaseBackup(groupId);
-    const backup = parseAndValidateBackup(json);
-    if (!backup.group_number) throw new Error('The group backup has no KYA group identity.');
-
-    const groupNumber = String(backup.group_number).replace(/^KYA\s*/i, '');
-    if (!/^\d{4}$/.test(groupNumber)) throw new Error('The group number in the backup is invalid.');
-
-    const cloudGroupId = await assertCloudflareGroupMatches(groupNumber);
-    const envelope = await encryptBackupForCloud(json, passphrase);
-    const bytes = utf8ToBytes(JSON.stringify(envelope));
-
-    const response = await cloudflareBinaryRequest('/v1/backups', 'POST', bytes, {
-      'content-type': 'application/octet-stream',
-      'x-backup-encrypted': 'true',
-      'x-backup-id': `bkp-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`,
-      'x-group-id': cloudGroupId,
-      'x-group-number': groupNumber,
-    });
-
-    const result = await response.json() as { backupId?: string; bytes?: number };
-    if (!result.backupId) throw new Error('Cloudflare did not confirm the backup upload.');
-
-    return {
-      success: true,
-      message: `Encrypted group backup uploaded and confirmed by Cloudflare (${result.bytes ?? bytes.length} bytes).`,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown Cloudflare backup error.';
-    return { success: false, message: 'Cloud backup failed.', error: message };
-  }
-}
-
-export async function listCloudGroupBackups(
-  _passphrase: string,
-  groupNumberInput: string,
-): Promise<{
+export async function exportDatabaseBackup(): Promise<{
   success: boolean;
   message: string;
-  backups: CloudBackupFileInfo[];
+  filePath?: string;
+  fileName?: string;
   error?: string;
 }> {
   try {
-    const requested = groupNumberInput.trim().toUpperCase().replace(/\s/g, '');
-    if (!/^KYA\d{4}$/.test(requested)) throw new Error('Enter a valid group number, for example KYA2000.');
+    const json = await createDatabaseBackup();
+    parseAndValidateBackup(json);
 
-    const requestedGroupNumber = requested.slice(3);
-    await assertCloudflareGroupMatches(requestedGroupNumber);
-    const response = await cloudflareBinaryRequest('/v1/backups', 'GET');
-    const payload = await response.json() as {
-      backups?: Array<{ backupId: string; bytes?: number; createdAt: string }>;
-    };
+    const now = new Date();
+    const fileName = `ebadsave_backup_${makeTimestamp()}.json`;
+    const filePath = `${getDocumentsDirectory()}${fileName}`;
+    await FileSystem.writeAsStringAsync(filePath, json, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
 
-    const backups = (payload.backups ?? []).map((item) => ({
-      objectId: item.backupId,
-      name: `${requested} — encrypted cloud backup`,
-      createdAt: item.createdAt,
-      backupCreatedAt: item.createdAt,
-      fileUrl: '',
-      vaultId: '',
-      bytes: item.bytes,
-    }));
+    const info = await FileSystem.getInfoAsync(filePath);
+    if (!info.exists || !('size' in info) || Number(info.size) <= 0) {
+      throw new Error('The backup file could not be verified after saving.');
+    }
+
+    const savedContents = await FileSystem.readAsStringAsync(filePath, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
+    parseAndValidateBackup(savedContents);
+    await pruneLocalBackupFiles(MAX_LOCAL_BACKUP_FILES);
 
     return {
       success: true,
-      message: backups.length ? `${backups.length} cloud backup(s) found.` : 'No cloud backups found for this authenticated group.',
-      backups,
+      message: `Verified local database backup created at ${now.toLocaleString()}. Only the two newest local backup files are retained.`,
+      filePath,
+      fileName,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown Cloudflare list error.';
-    return { success: false, message: 'Could not list cloud backups.', backups: [], error: message };
+    const message = error instanceof Error ? error.message : 'Unknown backup error.';
+    return { success: false, message: 'Backup failed.', error: message };
   }
 }
 
-export async function restoreCloudGroupDatabaseBackup(
-  backup: CloudBackupFileInfo,
-  passphrase: string,
-  expectedGroupNumber: string,
+export async function emailBackupFile(
+  filePath: string,
+  fileName: string,
 ): Promise<{ success: boolean; message: string; error?: string }> {
   try {
-    const response = await cloudflareBinaryRequest(
-      `/v1/backups/${encodeURIComponent(backup.objectId)}`,
-      'GET',
-    );
-    const encryptedBytes = new Uint8Array(await response.arrayBuffer());
-    const encryptedContents = bytesToUtf8(encryptedBytes);
-    const plaintext = decryptCloudBackup(encryptedContents, passphrase);
-    const parsed = parseAndValidateBackup(plaintext);
-
-    const actualGroup = String(parsed.group_number ?? '').replace(/^KYA\s*/i, '');
-    const expectedGroup = expectedGroupNumber.trim().toUpperCase().replace(/^KYA\s*/i, '');
-    await assertCloudflareGroupMatches(expectedGroup);
-    if (!actualGroup || actualGroup !== expectedGroup) {
-      throw new Error('The downloaded backup belongs to a different group. No data was changed.');
+    const available = await MailComposer.isAvailableAsync();
+    if (!available) {
+      return {
+        success: false,
+        message: 'Email is not available on this device.',
+        error: 'EMAIL_NOT_AVAILABLE',
+      };
     }
 
-    await restoreGroupDatabaseBackup(plaintext, expectedGroup);
+    const info = await FileSystem.getInfoAsync(filePath);
+    if (!info.exists) {
+      return {
+        success: false,
+        message: 'The backup file could not be found.',
+        error: 'BACKUP_NOT_FOUND',
+      };
+    }
+
+    const result = await MailComposer.composeAsync({
+      subject: `Ebadsave VSLA Backup - ${new Date().toLocaleDateString()}`,
+      body: `Please find attached your Ebadsave VSLA backup.\n\nFile: ${fileName}\nCreated: ${new Date().toLocaleString()}\n\nKeep this file safe. Restoring a backup replaces current records with the records in that backup.`,
+      attachments: [filePath],
+    });
+
+    if (result.status === 'sent') return { success: true, message: 'Backup email sent.' };
+    if (result.status === 'saved') return { success: true, message: 'Backup email saved as a draft.' };
+    return { success: false, message: 'Email was not sent.', error: result.status };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown email error.';
+    return { success: false, message: 'Could not email the backup.', error: message };
+  }
+}
+
+export async function listBackupFiles(): Promise<BackupFileInfo[]> {
+  try {
+    const directory = getDocumentsDirectory();
+    const names = await FileSystem.readDirectoryAsync(directory);
+    const backups = names.filter(
+      (name) => name.startsWith('ebadsave_backup_') && name.endsWith('.json'),
+    );
+
+    const details = await Promise.all(
+      backups.map(async (name) => {
+        const path = `${directory}${name}`;
+        const info = await FileSystem.getInfoAsync(path);
+        let timestamp = 'Unknown';
+        try {
+          const content = await FileSystem.readAsStringAsync(path, {
+            encoding: FileSystem.EncodingType.UTF8,
+          });
+          const parsed = JSON.parse(content) as { created_at?: string };
+          if (parsed.created_at) timestamp = new Date(parsed.created_at).toLocaleString();
+        } catch {
+          // Keep invalid files visible for identification/removal.
+        }
+        return {
+          name,
+          path,
+          size: info.exists && 'size' in info ? Number(info.size) : 0,
+          timestamp,
+        };
+      }),
+    );
+
+    return details.sort((a, b) => b.name.localeCompare(a.name));
+  } catch {
+    return [];
+  }
+}
+
+export async function restoreDatabaseBackup(filePath: string): Promise<{
+  success: boolean;
+  message: string;
+  tablesRestored?: number;
+  error?: string;
+}> {
+  try {
+    const info = await FileSystem.getInfoAsync(filePath);
+    if (!info.exists) throw new Error('The selected backup file does not exist.');
+
+    const contents = await FileSystem.readAsStringAsync(filePath, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
+    if (!contents.trim()) {
+      throw new Error('The selected backup file is empty. No data was changed.');
+    }
+
+    const validated = parseAndValidateBackup(contents);
+    await restoreDatabaseBackupJson(JSON.stringify(validated));
+
     return {
       success: true,
-      message: `Group KYA ${actualGroup} was restored and its backup integrity was verified.`,
+      message: `Backup restored successfully (${REQUIRED_BACKUP_TABLES.length} required tables validated).`,
+      tablesRestored: REQUIRED_BACKUP_TABLES.length,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown cloud recovery error.';
-    return { success: false, message: 'Group recovery failed.', error: message };
+    const message = error instanceof Error ? error.message : 'Unknown restore error.';
+    return { success: false, message: 'Backup restore failed.', error: message };
   }
+}
+
+export async function deleteBackupFile(
+  filePath: string,
+): Promise<{ success: boolean; message: string; error?: string }> {
+  try {
+    const info = await FileSystem.getInfoAsync(filePath);
+    if (!info.exists) return { success: false, message: 'Backup file not found.' };
+    await FileSystem.deleteAsync(filePath, { idempotent: false });
+    return { success: true, message: 'Backup file deleted.' };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown deletion error.';
+    return { success: false, message: 'Could not delete backup file.', error: message };
+  }
+}
+
+export function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return 'Unknown size';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
