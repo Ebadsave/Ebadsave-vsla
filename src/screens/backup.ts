@@ -1,18 +1,15 @@
 import * as FileSystem from 'expo-file-system';
 import * as Crypto from 'expo-crypto';
 import * as CryptoJS from 'crypto-js';
-import * as SecureStore from 'expo-secure-store';
 import {
   createGroupDatabaseBackup,
   restoreGroupDatabaseBackup,
 } from '../database/database';
-import {
-  CLOUDFLARE_API_BASE_URL,
-  CLOUDFLARE_STORAGE_KEYS,
-} from '../config/cloudflare';
+import { CLOUDFLARE_API_BASE_URL } from '../config/cloudflare';
 import {
   clearCloudflareSession,
   getCloudflareAccessToken,
+  getCloudflareSessionGroupId,
   saveCloudflareSession,
 } from '../services/cloudflareApi';
 
@@ -318,6 +315,16 @@ function utf8ToBytes(value: string): Uint8Array {
   return bytes;
 }
 
+async function assertCloudflareGroupMatches(groupNumber: string): Promise<string> {
+  const cloudGroupId = await getCloudflareSessionGroupId();
+  if (!cloudGroupId) throw new Error('Cloudflare group session is missing. Sign in again.');
+  const match = cloudGroupId.match(/(\d{4})$/);
+  if (!match || match[1] !== groupNumber) {
+    throw new Error('The signed-in Cloudflare administrator does not belong to this group.');
+  }
+  return cloudGroupId;
+}
+
 function bytesToUtf8(bytes: Uint8Array): string {
   const words: number[] = [];
   for (let index = 0; index < bytes.length; index += 1) {
@@ -423,6 +430,7 @@ export async function uploadGroupDatabaseBackupToCloud(
     const groupNumber = String(backup.group_number).replace(/^KYA\s*/i, '');
     if (!/^\d{4}$/.test(groupNumber)) throw new Error('The group number in the backup is invalid.');
 
+    const cloudGroupId = await assertCloudflareGroupMatches(groupNumber);
     const envelope = await encryptBackupForCloud(json, passphrase);
     const bytes = utf8ToBytes(JSON.stringify(envelope));
 
@@ -430,7 +438,7 @@ export async function uploadGroupDatabaseBackupToCloud(
       'content-type': 'application/octet-stream',
       'x-backup-encrypted': 'true',
       'x-backup-id': `bkp-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`,
-      'x-group-id': await SecureStore.getItemAsync(CLOUDFLARE_STORAGE_KEYS.groupId) || '',
+      'x-group-id': cloudGroupId,
       'x-group-number': groupNumber,
     });
 
@@ -460,6 +468,8 @@ export async function listCloudGroupBackups(
     const requested = groupNumberInput.trim().toUpperCase().replace(/\s/g, '');
     if (!/^KYA\d{4}$/.test(requested)) throw new Error('Enter a valid group number, for example KYA2000.');
 
+    const requestedGroupNumber = requested.slice(3);
+    await assertCloudflareGroupMatches(requestedGroupNumber);
     const response = await cloudflareBinaryRequest('/v1/backups', 'GET');
     const payload = await response.json() as {
       backups?: Array<{ backupId: string; bytes?: number; createdAt: string }>;
@@ -503,6 +513,7 @@ export async function restoreCloudGroupDatabaseBackup(
 
     const actualGroup = String(parsed.group_number ?? '').replace(/^KYA\s*/i, '');
     const expectedGroup = expectedGroupNumber.trim().toUpperCase().replace(/^KYA\s*/i, '');
+    await assertCloudflareGroupMatches(expectedGroup);
     if (!actualGroup || actualGroup !== expectedGroup) {
       throw new Error('The downloaded backup belongs to a different group. No data was changed.');
     }

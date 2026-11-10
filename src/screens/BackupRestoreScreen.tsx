@@ -12,8 +12,8 @@ View,
 import * as DocumentPicker from 'expo-document-picker';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 
-import { getAutomaticCloudBackupConsent, setAutomaticCloudBackupConsent, runAutomaticCloudBackup } from '../database/backup';
-import { registerAutomaticBackupTask, unregisterAutomaticBackupTask } from '../services/backupBackground';
+import { getAutomaticCloudBackupConsent, setAutomaticCloudBackupConsent, saveAutomaticCloudBackupPassphrase, runAutomaticCloudBackup } from '../database/backup';
+import { initializeAutomaticBackupTask, unregisterAutomaticBackupTask } from '../services/backupBackground';
 import { getAllGroups, type GroupRecord } from '../database/database';
 import { exportGroupDatabaseBackup, uploadGroupDatabaseBackupToCloud, listCloudGroupBackups, restoreCloudGroupDatabaseBackup, signInCloudflareBackupAdmin, signOutCloudflareBackupAdmin, type CloudBackupFileInfo } from './backup';
 
@@ -189,11 +189,17 @@ const handleCloudBackupConsent = async () => {
   const nextValue = !cloudBackupConsent;
   try {
     setChangingConsent(true);
+    if (nextValue) {
+      if (!cloudAdminSignedIn) throw new Error('Sign in as the group administrator before enabling automatic backups.');
+      if (selectedGroupId === null) throw new Error('Select the group to back up.');
+      if (recoveryPassphrase.trim().length < 12) throw new Error('Enter a cloud backup passphrase of at least 12 characters first.');
+      await saveAutomaticCloudBackupPassphrase(recoveryPassphrase);
+    }
     const saved = await setAutomaticCloudBackupConsent(nextValue);
     if (!saved.success) throw new Error(saved.message);
     if (nextValue) {
       setCloudBackupConsent(true);
-      await registerAutomaticBackupTask();
+      await initializeAutomaticBackupTask();
       setCloudBackupStatus('Consent enabled. Starting the first encrypted cloud backup.');
       const result = await runAutomaticCloudBackup(true);
       setCloudBackupStatus(result.message);
@@ -204,6 +210,10 @@ const handleCloudBackupConsent = async () => {
       setCloudBackupStatus('Automatic cloud uploads are disabled. Local backups remain available.');
     }
   } catch (error) {
+    if (nextValue) {
+      await setAutomaticCloudBackupConsent(false).catch(() => undefined);
+      setCloudBackupConsent(false);
+    }
     setCloudBackupStatus('Could not update the automatic backup setting.');
     Alert.alert('Automatic Backup', error instanceof Error ? error.message : 'Could not update setting.');
   } finally { setChangingConsent(false); }
@@ -486,7 +496,19 @@ Data Backup & Restore
     <View style={styles.infoBox}><Text style={styles.infoText}>Cloudflare backup requires an active group administrator account. Backups are encrypted on this device before upload.</Text></View>
   </View>
 
-
+  <View style={styles.section}>
+    <Text style={styles.sectionTitle}>Automatic Cloudflare Backup</Text>
+    <Text style={styles.bodyText}>{cloudBackupStatus}</Text>
+    <TouchableOpacity
+      accessibilityRole="button"
+      style={[styles.button, cloudBackupConsent ? styles.importButton : styles.primaryButton, changingConsent && styles.disabledButton]}
+      onPress={() => void handleCloudBackupConsent()}
+      disabled={changingConsent || cloudBackupConsent === null}
+    >
+      {changingConsent ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{cloudBackupConsent ? 'Disable Automatic Backups' : 'Enable Automatic Backups'}</Text>}
+    </TouchableOpacity>
+    <Text style={styles.bodyText}>When enabled, encrypted group backups are scheduled approximately every six hours. Android controls the exact run time. Failed uploads remain failed and are retried on a later background run or when connectivity returns while the app is active.</Text>
+  </View>
 
 <View style={styles.section}>
   <Text style={styles.sectionTitle}>Group Cloud Backup & Recovery</Text>
