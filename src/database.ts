@@ -1,15 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 import * as FileSystem from 'expo-file-system';
 import * as Crypto from 'expo-crypto';
-import {
-  BACK4APP_APPLICATION_ID,
-  BACK4APP_JAVASCRIPT_KEY,
-  BACK4APP_SERVER_URL,
-} from '../config/back4app';
-function generateLocalId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
-}
-
 export type GroupRecord = {
   id: number;
   group_number: number;
@@ -20,7 +11,7 @@ export type GroupRecord = {
   status: string;
   created_at: string;
   last_activity_at: string;
-  back4app_registration_id?: string | null;
+  
   /** Legacy local column retained for existing database compatibility. */
   firebase_registration_id?: string | null;
   onboarding_mode?: 'new' | 'existing';
