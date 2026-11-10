@@ -1300,8 +1300,17 @@ export default function FinancialTransactionsScreen() {
 
           {outstandingFineTotal > 0 && (
             <>
+              <View style={{backgroundColor:'#fef2f2',borderColor:'#dc2626',borderWidth:1.5,borderRadius:10,padding:12,marginTop:10}}>
+                <Text style={{color:'#b91c1c',fontWeight:'900',fontSize:14}}>⚠ OUTSTANDING FINE — PAYMENT NEEDED</Text>
+                <Text style={{color:'#991b1b',fontWeight:'900',fontSize:20,marginTop:5}}>{currency} {formatMoney(outstandingFineTotal)}</Text>
+                <View style={{flexDirection:'row',gap:8,marginTop:10}}>
+                  <TouchableOpacity onPress={() => setFinePayment(String(outstandingFineTotal))} style={{flex:1,backgroundColor:'#dc2626',borderRadius:8,padding:11,alignItems:'center'}}><Text style={{color:'#fff',fontWeight:'900'}}>PAY FINE</Text></TouchableOpacity>
+                  <TouchableOpacity onPress={() => setFinePayment('')} style={{flex:1,backgroundColor:'#fff',borderColor:'#dc2626',borderWidth:1,borderRadius:8,padding:11,alignItems:'center'}}><Text style={{color:'#991b1b',fontWeight:'900'}}>CONTINUE</Text></TouchableOpacity>
+                </View>
+                <Text style={{color:'#991b1b',fontSize:11,marginTop:7}}>Continue leaves the fine outstanding; it is not cancelled.</Text>
+              </View>
               <Text style={styles.fieldLabel}>
-                Fine payment
+                Fine payment (optional)
               </Text>
 
               <TextInput

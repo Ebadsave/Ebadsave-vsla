@@ -42,6 +42,7 @@ type Dashboard = {
   insuranceFund: number;
   fundBalance: number;
   loansOut: number;
+  outstandingFines: number;
   members: number;
   currency: string;
   openMeetingId: number | null;
@@ -59,6 +60,7 @@ const emptyDashboard: Dashboard = {
   insuranceFund: 0,
   fundBalance: 0,
   loansOut: 0,
+  outstandingFines: 0,
   members: 0,
   currency: '',
   openMeetingId: null,
@@ -248,7 +250,8 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
     { title: 'Fund Balance', value: money(dashboard.currency, dashboard.fundBalance), icon: 'F', action: () => navigateWithGroup('FinancialTransactions') },
     { title: 'Expenditure', value: money(dashboard.currency, Math.abs(dashboard.expenditureFund)), icon: 'E', action: () => navigateWithGroup('Expenditure') },
     { title: 'Insurance Fund', value: money(dashboard.currency, dashboard.insuranceFund), icon: 'I', action: () => navigateWithGroup('Insurance') },
-    { title: 'Fines Fund', value: money(dashboard.currency, dashboard.fines), icon: 'N', action: () => navigateWithGroup('Fines') },
+    { title: 'Fines Fund (Collected)', value: money(dashboard.currency, dashboard.fines), icon: 'N', action: () => navigateWithGroup('Fines') },
+    { title: 'Outstanding Fines', value: money(dashboard.currency, dashboard.outstandingFines), icon: '!', action: () => navigateWithGroup('Fines') },
   ];
 
   return (

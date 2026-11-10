@@ -10,7 +10,7 @@ import type { RootStackParamList } from '../../App';
 import {
   canManageHistoricalEntries, editHistoricalEntry, getGroupById,
   getHistoricalExtraEntries, getHistoricalFinancialSummary, getHistoricalFinancialTransactions,
-  getMemberLoanBalance, getMembersByGroupId, getVSLASetupRules,
+  getMemberLoanBalance, getMembersByGroupId, getVSLASetupRules, getGroupOnboardingLock,
   recordHistoricalExtraEntry, recordHistoricalFinancialTransaction, softDeleteHistoricalEntry,
   type HistoricalExtraRecord, type HistoricalFinancialTransactionRecord,
 } from '../database/database';
@@ -60,6 +60,7 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
   const [memberPickerVisible, setMemberPickerVisible] = useState(false);
   const [memberListTab, setMemberListTab] = useState<'current' | 'finished'>('current');
   const [canAdmin, setCanAdmin] = useState(false);
+  const [historicalLocked, setHistoricalLocked] = useState(false);
   const [type, setType] = useState<EntryType>('savings');
   const [date, setDate] = useState('');
   const [amount, setAmount] = useState('');
@@ -85,11 +86,13 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [group, loadedMembers, oldRows, extraRows, baseSummary, rules, admin] = await Promise.all([
+      const [group, loadedMembers, oldRows, extraRows, baseSummary, rules, admin, onboardingLock] = await Promise.all([
         getGroupById(groupId), getMembersByGroupId(groupId), getHistoricalFinancialTransactions(groupId, 10000),
         getHistoricalExtraEntries(groupId, 10000), getHistoricalFinancialSummary(groupId), getVSLASetupRules(groupId),
         executiveMemberId ? canManageHistoricalEntries(groupId, executiveMemberId) : Promise.resolve(false),
+        getGroupOnboardingLock(groupId),
       ]);
+      setHistoricalLocked(onboardingLock.onboarding_locked);
       if (!group) throw new Error('The selected group could not be found.');
       setGroupName(group.group_name || ''); setGroupNumber(`KYA ${group.group_number}`);
       const memberList = (loadedMembers as MemberOption[]).slice().sort((a,b) => a.full_name.localeCompare(b.full_name));
@@ -152,6 +155,7 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
   const resetForm = () => { setEditing(null); setAmount(''); setDate(''); setDueDate(''); setInterest('0'); setLenderName(''); setReference(''); setNotes(''); setShareCount('1'); setFineReason('late'); };
 
   const save = async () => {
+    if (historicalLocked) { Alert.alert('Historical setup locked', 'The first meeting has been closed. New historical entries are no longer allowed.'); return; }
     if (type !== 'external_loan' && !selectedMemberId) { Alert.alert('Choose a member', 'Tap a member photo first.'); return; }
     const iso = toIsoDate(date);
     if (!iso) { Alert.alert('Date is not correct', 'Enter date as DD-MM-YYYY, for example 17-04-2025.'); return; }
@@ -214,6 +218,7 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
     if (entry.member_id) void getMemberLoanBalance(groupId, entry.member_id).then(v => setPreviousBalance(v.balance)).catch(() => setPreviousBalance(0));
   };
   const beginEdit = async (entry: Entry) => {
+    if (historicalLocked) { Alert.alert('Historical records locked', 'After the first meeting closes, historical records can only be viewed.'); return; }
     if (!canAdmin) { Alert.alert('Admin only', 'Only the group administrator can edit entries.'); return; }
     setPendingEdit(entry); setPasscodeEntry('');
     const stored = await AsyncStorage.getItem(`@ebadsave/historical_records_passcode_${groupId}`);
@@ -229,7 +234,7 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
     const entry = pendingEdit; setPasscodeVisible(false); setPendingEdit(null); setPasscodeEntry('');
     if (entry) openEditForm(entry);
   };
-  const askDelete = (entry: Entry) => { if (!canAdmin) { Alert.alert('Admin only', 'Only the group administrator can delete entries.'); return; } setDeleteTarget(entry); };
+  const askDelete = (entry: Entry) => { if (historicalLocked) { Alert.alert('Historical records locked', 'After the first meeting closes, historical records can only be viewed.'); return; } if (!canAdmin) { Alert.alert('Admin only', 'Only the group administrator can delete entries.'); return; } setDeleteTarget(entry); };
   const confirmDelete = async () => {
     if (!deleteTarget || !executiveMemberId) return;
     try { await softDeleteHistoricalEntry(groupId, deleteTarget.kind, deleteTarget.id, executiveMemberId); setDeleteTarget(null); await loadData(); }
@@ -239,6 +244,7 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
   if (loading && !groupName) return <SafeAreaView style={styles.center}><ActivityIndicator size="large" color="#166534"/><Text style={styles.help}>Loading group records…</Text></SafeAreaView>;
   return <SafeAreaView style={styles.safe}><KeyboardAvoidingView style={styles.safe} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      {historicalLocked && <View style={{backgroundColor:'#fee2e2',borderColor:'#ef4444',borderWidth:1,borderRadius:10,padding:12,marginBottom:12}}><Text style={{color:'#991b1b',fontWeight:'900'}}>HISTORICAL SETUP LOCKED</Text><Text style={{color:'#991b1b',marginTop:4}}>The first meeting has been closed. New historical entries are disabled; existing records remain available for viewing.</Text></View>}
       <View style={styles.header}><Text style={styles.eyebrow}>EBADSAVE • KYAMUSONI TUTUNGUKYE</Text><Text style={styles.title}>{groupName}</Text><Text style={styles.groupNo}>{groupNumber}</Text><Text style={styles.subtitle}>Tap the big picture buttons. Enter what is written in the passbook.</Text></View>
       
       <Text style={styles.sectionTitle}>📊 Imported history totals</Text>
@@ -285,7 +291,7 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
         {type === 'insurance' && <View style={styles.balanceBox}><Text style={styles.balanceLabel}>🛡️ INSURANCE / WELFARE FUND (Separate from loan fund)</Text><Text style={styles.help}>This contribution is recorded separately and NOT added to loan cash box.</Text></View>}
         <Text style={styles.label}>📅 Date (DD-MM-YYYY)</Text><TextInput value={date} onChangeText={setDate} style={styles.input} placeholder="DD-MM-YYYY" keyboardType="numbers-and-punctuation"/>
         <Text style={styles.label}>Notes (optional)</Text><TextInput value={notes} onChangeText={setNotes} style={[styles.input,styles.notes]} placeholder="Optional note" multiline/>
-        <TouchableOpacity onPress={save} disabled={saving} style={[styles.saveButton,{backgroundColor:labels[type].color},saving&&styles.disabled]}><Text style={styles.saveIcon}>{saving?'⏳':'💾'}</Text><Text style={styles.saveText}>{saving?'Saving…':editing?'Save Changes':'Save Entry'}</Text></TouchableOpacity>
+        <TouchableOpacity onPress={save} disabled={saving || historicalLocked} style={[styles.saveButton,{backgroundColor:labels[type].color},saving&&styles.disabled]}><Text style={styles.saveIcon}>{saving?'⏳':'💾'}</Text><Text style={styles.saveText}>{saving?'Saving…':editing?'Save Changes':'Save Entry'}</Text></TouchableOpacity>
         {editing && <TouchableOpacity onPress={resetForm} style={styles.cancelEdit}><Text style={styles.cancelEditText}>Cancel edit</Text></TouchableOpacity>}
       </View>
 
