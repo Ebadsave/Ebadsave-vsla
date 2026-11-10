@@ -273,6 +273,10 @@ export async function getCloudflareAccessToken(): Promise<string | null> {
   );
 }
 
+export async function getCloudflareSessionGroupId(): Promise<string | null> {
+  return SecureStore.getItemAsync(CLOUDFLARE_STORAGE_KEYS.groupId);
+}
+
 export async function clearCloudflareSession(): Promise<void> {
   await SecureStore.deleteItemAsync(
     CLOUDFLARE_STORAGE_KEYS.accessToken,
