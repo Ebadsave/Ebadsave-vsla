@@ -1,6 +1,9 @@
 import * as SQLite from 'expo-sqlite';
 import * as FileSystem from 'expo-file-system';
 import * as Crypto from 'expo-crypto';
+function generateLocalId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
 export type GroupRecord = {
   id: number;
   group_number: number;
