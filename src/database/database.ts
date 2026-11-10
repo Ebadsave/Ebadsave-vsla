@@ -15,7 +15,6 @@ export type GroupRecord = {
   status: string;
   created_at: string;
   last_activity_at: string;
-  back4app_registration_id?: string | null;
   /** Legacy local column retained for existing database compatibility. */
   firebase_registration_id?: string | null;
   onboarding_mode?: 'new' | 'existing';
