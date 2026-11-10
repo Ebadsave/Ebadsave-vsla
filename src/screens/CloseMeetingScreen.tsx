@@ -21,7 +21,7 @@ import {
   getMeetingCashReconciliation,
   getOpenMeeting,
 } from '../database/database';
-import { exportDatabaseBackup } from '../database/backup';
+import { exportDatabaseBackup, runAutomaticCloudBackup } from '../database/backup';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CloseMeeting'>;
 
@@ -186,10 +186,23 @@ export default function CloseMeetingScreen({ route, navigation }: Props) {
             const latestCashCheck = await getMeetingCashReconciliation(meetingId, cashAmount);
             if (!latestCashCheck.balanced) throw new Error('Cash no longer balances. Recheck the cash before closing.');
             const receipt = await verifyBackupBeforeClose();
+            // Trigger the Cloudflare automatic backup ONLY after closeMeeting
+            // has completed successfully. The pre-close local backup above
+            // remains unchanged and is still required to close the meeting.
             await closeMeeting(meetingId, executiveMemberId, cashAmount, true, receipt);
-            Alert.alert('Meeting Closed', 'The meeting has been closed successfully. Existing-group onboarding is now locked and cannot be reopened to add opening savings.', [
-              { text: 'OK', onPress: () => navigation.navigate('Home') },
-            ]);
+
+            const cloudBackup = await runAutomaticCloudBackup(true);
+            const cloudBackupStatus = cloudBackup.success && !cloudBackup.skipped
+              ? `\n\n${cloudBackup.message}`
+              : cloudBackup.skipped
+                ? '\n\nCloud backup was not run because automatic backup is disabled or not configured.'
+                : `\n\nCloud backup failed: ${cloudBackup.error || cloudBackup.message}\nThe meeting remains successfully closed. The backup can be retried when connectivity and authorization are available.`;
+
+            Alert.alert(
+              'Meeting Closed',
+              `The meeting has been closed successfully. Existing-group onboarding is now locked and cannot be reopened to add opening savings.${cloudBackupStatus}`,
+              [{ text: 'OK', onPress: () => navigation.navigate('Home') }],
+            );
           } catch (error) {
             Alert.alert('Unable to Close Meeting', error instanceof Error ? error.message : 'The meeting could not be closed.');
           } finally {
