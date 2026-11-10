@@ -1,8 +1,8 @@
 name = "ebadsave-vsla-cloudflare"
 main = "src/index.ts"
 compatibility_date = "2026-10-28"
-
 account_id = "87e654c1fa87fd0c10c5d325a09be19d"
+
 [[r2_buckets]]
 binding = "BACKUPS"
 bucket_name = "ebadsave-vsla"
