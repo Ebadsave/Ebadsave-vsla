@@ -586,8 +586,7 @@ const GROUP_SELECT = `
     country,
     status,
     created_at,
-    last_activity_at,
-    back4app_registration_id
+    last_activity_at
   FROM groups
 `;
 
@@ -980,7 +979,6 @@ status TEXT NOT NULL DEFAULT 'active',
       created_at TEXT NOT NULL,
       last_activity_at TEXT NOT NULL,
       firebase_registration_id TEXT,
-      back4app_registration_id TEXT,
       onboarding_mode TEXT NOT NULL DEFAULT 'new' CHECK (onboarding_mode IN ('new', 'existing')),
       onboarding_locked INTEGER NOT NULL DEFAULT 0 CHECK (onboarding_locked IN (0, 1)),
       onboarding_locked_at TEXT
@@ -1347,7 +1345,7 @@ status TEXT NOT NULL DEFAULT 'active',
       amount REAL NOT NULL CHECK (amount > 0), transaction_date TEXT NOT NULL, fine_reason TEXT NOT NULL DEFAULT '',
       lender_name TEXT NOT NULL DEFAULT '', interest_amount REAL NOT NULL DEFAULT 0, due_date TEXT,
       source_reference TEXT NOT NULL DEFAULT '', source_notes TEXT NOT NULL DEFAULT '', is_deleted INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL, edited_at TEXT, edited_by_member_id INTEGER, back4app_object_id TEXT,
+      created_at TEXT NOT NULL, edited_at TEXT, edited_by_member_id INTEGER,
       FOREIGN KEY (group_id) REFERENCES groups(id), FOREIGN KEY (member_id) REFERENCES members(id),
       FOREIGN KEY (transaction_id) REFERENCES financial_transactions(id)
     );
@@ -2098,7 +2096,6 @@ status TEXT NOT NULL DEFAULT 'active',
   await refreshGroupDormancy(db);
 
   await addColumnIfMissing(db, 'groups', 'firebase_registration_id', 'TEXT'); // legacy column; no longer used for registration
-  await addColumnIfMissing(db, 'groups', 'back4app_registration_id', 'TEXT');
   await addColumnIfMissing(db, 'groups', 'onboarding_mode', "TEXT NOT NULL DEFAULT 'new'");
   await addColumnIfMissing(db, 'groups', 'onboarding_locked', 'INTEGER NOT NULL DEFAULT 0');
   await addColumnIfMissing(db, 'groups', 'onboarding_locked_at', 'TEXT');
@@ -2436,7 +2433,7 @@ export type HistoricalExtraRecord = {
   transaction_id: number | null; entry_type: HistoricalExtraType; amount: number; transaction_date: string;
   fine_reason: string; lender_name: string; interest_amount: number; due_date: string | null;
   source_reference: string; source_notes: string; is_deleted: number; created_at: string;
-  edited_at: string | null; back4app_object_id: string | null;
+  edited_at: string | null;
 };
 export type HistoricalEditInput = {
   amount: number; transaction_date: string; fine_reason?: string; lender_name?: string;
@@ -2582,32 +2579,6 @@ export async function getHistoricalExtraEntries(groupId: number, limit = 100): P
   );
 }
 
-async function writeBack4AppFine(groupId: number, entryId: number, memberId: number | null, amount: number, date: string, reason: string, sourceReference: string): Promise<void> {
-  const db = await getDatabase();
-  const group = await db.getFirstAsync<{ group_number: string; group_name: string }>('SELECT group_number, group_name FROM groups WHERE id = ? LIMIT 1', groupId);
-  const member = memberId ? await db.getFirstAsync<{ full_name: string; member_number: string }>('SELECT full_name, member_number FROM members WHERE id = ? AND group_id = ? LIMIT 1', memberId, groupId) : null;
-  const response = await fetch(`${BACK4APP_SERVER_URL}/classes/Fines`, {
-    method: 'POST',
-    headers: { 'X-Parse-Application-Id': BACK4APP_APPLICATION_ID, 'X-Parse-JavaScript-Key': BACK4APP_JAVASCRIPT_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ groupNumber: String(group?.group_number ?? groupId), groupName: group?.group_name ?? '', localGroupId: groupId, localEntryId: entryId, memberId, memberName: member?.full_name ?? '', memberNumber: member?.member_number ?? '', amount, reason, transactionDate: date, sourceReference, isDeleted: false, app: 'Ebadsave-vsla' }),
-  });
-  const body = await response.json().catch(() => ({} as any));
-  if (!response.ok) throw new Error(body?.error || `Back4App Fines sync failed (${response.status}).`);
-  if (body?.objectId) await db.runAsync('UPDATE historical_extra_entries SET back4app_object_id = ? WHERE id = ? AND group_id = ?', String(body.objectId), entryId, groupId);
-}
-
-async function syncBack4AppFineState(groupId: number, entryId: number, isDeleted: boolean): Promise<void> {
-  const db = await getDatabase();
-  const row = await db.getFirstAsync<any>('SELECT * FROM historical_extra_entries WHERE id = ? AND group_id = ? LIMIT 1', entryId, groupId);
-  if (!row || row.entry_type !== 'fine' || !row.back4app_object_id) return;
-  const group = await db.getFirstAsync<{ group_number: string; group_name: string }>('SELECT group_number, group_name FROM groups WHERE id = ? LIMIT 1', groupId);
-  const member = row.member_id ? await db.getFirstAsync<{ full_name: string; member_number: string }>('SELECT full_name, member_number FROM members WHERE id = ? AND group_id = ? LIMIT 1', row.member_id, groupId) : null;
-  await fetch(`${BACK4APP_SERVER_URL}/classes/Fines/${row.back4app_object_id}`, {
-    method: 'PUT', headers: { 'X-Parse-Application-Id': BACK4APP_APPLICATION_ID, 'X-Parse-JavaScript-Key': BACK4APP_JAVASCRIPT_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ groupNumber: String(group?.group_number ?? groupId), groupName: group?.group_name ?? '', localGroupId: groupId, localEntryId: entryId, memberId: row.member_id, memberName: member?.full_name ?? '', memberNumber: member?.member_number ?? '', amount: Number(row.amount), reason: row.fine_reason || 'other', transactionDate: row.transaction_date, sourceReference: row.source_reference, isDeleted, editedAt: now(), app: 'Ebadsave-vsla' }),
-  });
-}
-
 export async function recordHistoricalExtraEntry(groupId: number, input: HistoricalExtraInput): Promise<{ id: number; cloudSynced: boolean }> {
   const db = await getDatabase();
   const historicalLock = await db.getFirstAsync<{ onboarding_locked: number }>('SELECT onboarding_locked FROM groups WHERE id = ? LIMIT 1', groupId);
@@ -2648,12 +2619,7 @@ export async function recordHistoricalExtraEntry(groupId: number, input: Histori
     if (input.member_id != null) await addPassbookEntry(db, groupId, input.member_id, null, transaction.lastInsertRowId, input.entry_type === 'fine' ? 'fine' : 'insurance_contribution', amount, input.entry_type === 'fine' ? `Fine: ${input.fine_reason || 'other'}` : 'Insurance contribution', `${date}T12:00:00.000Z`);
     await db.runAsync('UPDATE groups SET last_activity_at = ? WHERE id = ?', timestamp, groupId);
   });
-  let cloudSynced = true;
-  if (input.entry_type === 'fine') {
-    try { await writeBack4AppFine(groupId, id, input.member_id ?? null, amount, date, normalizeText(input.fine_reason || 'other'), sourceReference); }
-    catch { cloudSynced = false; }
-  }
-  return { id, cloudSynced };
+  return { id, cloudSynced: false };
 }
 
 export async function editHistoricalEntry(groupId: number, entryKind: 'standard' | 'extra', entryId: number, input: HistoricalEditInput, editorMemberId: number): Promise<void> {
@@ -2693,7 +2659,6 @@ export async function editHistoricalEntry(groupId: number, entryKind: 'standard'
       if (row.member_id != null) await db.runAsync('UPDATE member_passbook_records SET amount = ?, created_at = ?, description = ? WHERE transaction_id = ? AND group_id = ?', amount, `${date}T12:00:00.000Z`, `${row.entry_type} (edited on ${timestamp.slice(0, 10)})`, row.transaction_id, groupId);
     }
   });
-  if (entryKind === 'extra') { try { await syncBack4AppFineState(groupId, entryId, false); } catch { /* Local audit remains authoritative until the next cloud sync. */ } }
 }
 
 export async function softDeleteHistoricalEntry(groupId: number, entryKind: 'standard' | 'extra', entryId: number, adminMemberId: number): Promise<void> {
@@ -2723,7 +2688,6 @@ export async function softDeleteHistoricalEntry(groupId: number, entryKind: 'sta
       }
     }
   });
-  if (entryKind === 'extra') { try { await syncBack4AppFineState(groupId, entryId, true); } catch { /* Preserve the local soft-delete if the device is offline. */ } }
 }
 
 async function rebuildHistoricalPassbookBalance(db: SQLite.SQLiteDatabase, groupId: number, memberId: number): Promise<void> {
@@ -3217,15 +3181,6 @@ export async function createGroup(
   country: string,
   isTestGroup: boolean = false,
 ): Promise<number> {
-  if (!isTestGroup) {
-    const registered = await registerGroupWithBack4App({
-      groupName,
-      district,
-      country,
-    });
-    return registered.id;
-  }
-
   const db = await getDatabase();
 
   const cleanName =
@@ -3309,243 +3264,15 @@ export async function registerGroup(input: {
   country: string;
   isTestGroup?: boolean;
 }): Promise<GroupRecord> {
-  // Test groups stay local. Production KYA numbers are reserved by Back4App Cloud Code.
-  if (input.isTestGroup === true) {
-    const groupId = await createGroup(
-      input.groupName,
-      input.district,
-      input.country,
-      true,
-    );
-    const testGroup = await getGroupById(groupId);
-    if (!testGroup) throw new Error('Test group was created but could not be loaded.');
-    return testGroup;
-  }
-
-  return registerGroupWithBack4App(input);
-}
-
-type Back4AppCloudResult<T> = { result?: T };
-
-async function callBack4AppFunction<T>(
-  functionName: string,
-  params: Record<string, unknown>,
-): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(`${BACK4APP_SERVER_URL}/functions/${functionName}`, {
-      method: 'POST',
-      headers: {
-        'X-Parse-Application-Id': BACK4APP_APPLICATION_ID,
-        'X-Parse-Javascript-Key': BACK4APP_JAVASCRIPT_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(params),
-    });
-  } catch (error) {
-    throw new Error('Could not reach Back4App. Check your internet connection and try again.');
-  }
-
-  const responseText = await response.text();
-  let payload: unknown = {};
-  if (responseText) {
-    try {
-      payload = JSON.parse(responseText);
-    } catch {
-      payload = { error: responseText };
-    }
-  }
-
-  if (!response.ok) {
-    const details = payload as { error?: string; code?: number };
-    throw new Error(
-      details.error
-        ? `Back4App registration error${details.code ? ` (${details.code})` : ''}: ${details.error}`
-        : `Back4App request failed (${response.status}).`,
-    );
-  }
-
-  const cloudPayload = payload as Back4AppCloudResult<T>;
-  if (!cloudPayload || !Object.prototype.hasOwnProperty.call(cloudPayload, 'result')) {
-    throw new Error(`Back4App Cloud Code function "${functionName}" returned an invalid response.`);
-  }
-  return cloudPayload.result as T;
-}
-
-function legacyRegistrationId(group: GroupRecord): string {
-  const identity = [
-    parseGroupNumber(group.group_number),
-    group.group_name,
-    group.district,
-    group.country,
-  ].join('_').toLowerCase().replace(/[^a-z0-9_-]+/g, '_').slice(0, 180);
-  return `legacy_${identity}`;
-}
-
-async function syncExistingGroupsToBack4App(groups: GroupRecord[]): Promise<void> {
-  const productionGroups = groups
-    .map((group) => ({
-      groupNumber: parseGroupNumber(group.group_number),
-      groupName: group.group_name,
-      district: group.district,
-      country: group.country,
-      status: group.status,
-      lastActivityAt: group.last_activity_at,
-      registrationId: group.back4app_registration_id || legacyRegistrationId(group),
-    }))
-    .filter((group) => group.groupNumber >= GROUP_START && group.groupNumber <= GROUP_END);
-
-  // Small batches avoid oversized Cloud Code requests on devices with many local groups.
-  for (let index = 0; index < productionGroups.length; index += 100) {
-    await callBack4AppFunction<{ synced: number }>(
-      'syncKyaGroupReservations',
-      { groups: productionGroups.slice(index, index + 100) },
-    );
-  }
-}
-
-/**
- * Production registration is coordinated through Back4App, never Firebase.
- * The local SQLite record is only marked active after Back4App finalizes the reservation.
- */
-async function getOrCreatePendingGroupRegistration(
-  localDb: SQLite.SQLiteDatabase,
-  groupName: string,
-  district: string,
-  country: string,
-  timestamp: string,
-): Promise<{ id: string; created_at: string }> {
-  const pending = await localDb.getFirstAsync<{ id: string; created_at: string }>(
-    `SELECT id, created_at FROM group_registration_attempts
-     WHERE status = 'pending' AND group_name = ? AND district = ? AND country = ?
-     ORDER BY created_at DESC LIMIT 1`,
-    groupName,
-    district,
-    country,
+  const groupId = await createGroup(
+    input.groupName,
+    input.district,
+    input.country,
+    input.isTestGroup === true,
   );
-  if (pending) return pending;
-
-  const id = generateLocalId();
-  await localDb.runAsync(
-    `INSERT INTO group_registration_attempts (
-      id, group_name, district, country, status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
-    id,
-    groupName,
-    district,
-    country,
-    timestamp,
-    timestamp,
-  );
-  return { id, created_at: timestamp };
-}
-
-export async function registerGroupWithBack4App(input: {
-  groupName: string;
-  district: string;
-  country: string;
-}): Promise<GroupRecord> {
-  const cleanName = normalizeText(input.groupName);
-  const cleanDistrict = normalizeText(input.district);
-  const cleanCountry = normalizeText(input.country);
-
-  if (!cleanName) throw new Error('Group name is required.');
-  if (!cleanDistrict) throw new Error('District is required.');
-  if (!cleanCountry) throw new Error('Country is required.');
-
-  const localDb = await getDatabase();
-  const timestamp = now();
-  const pending = await getOrCreatePendingGroupRegistration(
-    localDb,
-    cleanName,
-    cleanDistrict,
-    cleanCountry,
-    timestamp,
-  );
-  const registrationId = pending.id;
-
-  // Sync numbers already stored on this device first, preventing a migrated local
-  // production group from being assigned to a different group in the cloud registry.
-  const existingGroups = await getAllGroups();
-  await syncExistingGroupsToBack4App(existingGroups);
-
-  const reservation = await callBack4AppFunction<{ groupNumber: number; registrationId: string }>(
-    'reserveKyaGroupNumber',
-    {
-      registrationId,
-      groupName: cleanName,
-      district: cleanDistrict,
-      country: cleanCountry,
-      createdAt: pending.created_at,
-    },
-  );
-  const groupNumber = Number(reservation?.groupNumber);
-  if (!Number.isInteger(groupNumber) || groupNumber < GROUP_START || groupNumber > GROUP_END) {
-    throw new Error('Back4App did not return a valid KYA group number.');
-  }
-
-  await localDb.runAsync(
-    `UPDATE group_registration_attempts
-     SET group_number = ?, updated_at = ?
-     WHERE id = ?`,
-    groupNumber,
-    now(),
-    registrationId,
-  );
-
-  let localGroup = await localDb.getFirstAsync<{ id: number; status: string }>(
-    `SELECT id, status FROM groups WHERE back4app_registration_id = ? LIMIT 1`,
-    registrationId,
-  );
-
-  if (!localGroup) {
-    const createdAt = pending.created_at || now();
-    const result = await localDb.runAsync(
-      `INSERT INTO groups (
-        group_number, group_name, district, country, status,
-        created_at, last_activity_at, back4app_registration_id
-      ) VALUES (?, ?, ?, ?, 'pending_registration', ?, ?, ?)`,
-      groupNumber,
-      cleanName,
-      cleanDistrict,
-      cleanCountry,
-      createdAt,
-      now(),
-      registrationId,
-    );
-    localGroup = { id: Number(result.lastInsertRowId), status: 'pending_registration' };
-  }
-
-  const groupId = localGroup.id;
-  await ensureFinancialAccountsForGroup(localDb, groupId);
-  await insertDefaultConstitution(localDb, groupId);
-  await createDefaultVSLASetupRules(localDb, groupId);
-
-  await callBack4AppFunction<{ groupNumber: number; status: string }>(
-    'finalizeKyaGroupRegistration',
-    {
-      registrationId,
-      groupNumber,
-      groupName: cleanName,
-      district: cleanDistrict,
-      country: cleanCountry,
-    },
-  );
-
-  await localDb.runAsync(
-    `UPDATE groups SET status = 'active', last_activity_at = ? WHERE id = ?`,
-    now(),
-    groupId,
-  );
-  await localDb.runAsync(
-    `UPDATE group_registration_attempts SET status = 'completed', updated_at = ? WHERE id = ?`,
-    now(),
-    registrationId,
-  );
-
-  const result = await getGroupById(groupId);
-  if (!result) throw new Error('Group was registered but could not be loaded.');
-  return result;
+  const group = await getGroupById(groupId);
+  if (!group) throw new Error('Group was created but could not be loaded.');
+  return group;
 }
 
 export async function deleteGroup(
