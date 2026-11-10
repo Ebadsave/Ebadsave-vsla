@@ -23,6 +23,7 @@ import {
   getVSLASetupRules,
   refreshLoanApplicationDecision,
   saveLoanGuarantorSignature,
+  saveLoanBorrowerSignature,
   type LoanInterestMethod,
   type LoanPolicySettings,
   type VSLASetupRuleRecord,
@@ -117,6 +118,8 @@ export default function LoanDisbursementScreen() {
   const [selectedGuarantorIds, setSelectedGuarantorIds] = useState<number[]>([]);
   const [signatureFlow, setSignatureFlow] = useState<{ applicationId: number; memberIds: number[]; index: number; requestedAmount: number; borrowerName: string } | null>(null);
   const [guarantorPasscode, setGuarantorPasscode] = useState('');
+  const [borrowerPasscode, setBorrowerPasscode] = useState('');
+  const [signatureStep, setSignatureStep] = useState<'borrower' | 'guarantor'>('borrower');
   const [signatureSaving, setSignatureSaving] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
   const [memberSavings, setMemberSavings] = useState(0);
@@ -369,6 +372,8 @@ export default function LoanDisbursementScreen() {
         requestedAmount,
         borrowerName: selectedMember?.full_name ?? 'Member',
       });
+      setSignatureStep('borrower');
+      setBorrowerPasscode('');
       setGuarantorPasscode('');
     } catch (error) {
       Alert.alert('Loan Application Failed', error instanceof Error ? error.message : 'Unable to save or disburse this loan.');
@@ -379,6 +384,19 @@ export default function LoanDisbursementScreen() {
 
   const confirmGuarantorSignature = async () => {
     if (!signatureFlow || signatureSaving) return;
+    if (signatureStep === 'borrower') {
+      if (!borrowerPasscode.trim()) { Alert.alert('Borrower PIN Required', 'The borrower must enter their own PIN to sign the loan agreement.'); return; }
+      setSignatureSaving(true);
+      try {
+        const borrower = members.find((member) => member.id === selectedMemberId);
+        if (!borrower) throw new Error('Borrower record could not be found.');
+        await saveLoanBorrowerSignature(signatureFlow.applicationId, borrower.id, borrowerPasscode.trim());
+        setBorrowerPasscode('');
+        setSignatureStep('guarantor');
+      } catch (error) { Alert.alert('Borrower Signature', error instanceof Error ? error.message : 'Unable to verify borrower PIN.'); }
+      finally { setSignatureSaving(false); }
+      return;
+    }
     const guarantorId = signatureFlow.memberIds[signatureFlow.index];
     if (!guarantorId || !guarantorPasscode.trim()) {
       Alert.alert('Passcode Required', 'Enter this guarantor’s passcode.');
@@ -723,20 +741,20 @@ export default function LoanDisbursementScreen() {
           </View>
         </Modal>
 
-        <Modal visible={signatureFlow !== null} transparent animationType="fade" onRequestClose={() => {}}>
+        <Modal visible={signatureFlow !== null} transparent animationType="fade" onRequestClose={() => Alert.alert('Loan signatures pending', 'Complete the borrower and guarantor confirmations before leaving this step.')}>
           <View style={styles.modalBackdrop}>
             <View style={styles.reasonCard}>
-              <Text style={styles.cardTitle}>Guarantor Confirmation</Text>
+              <Text style={styles.cardTitle}>{signatureStep === 'borrower' ? 'Borrower Agreement Signature' : 'Guarantor Confirmation'}</Text>
               <Text style={styles.infoText}>
-                {signatureFlow ? guarantorMembers.find((member) => member.id === signatureFlow.memberIds[signatureFlow.index])?.full_name ?? 'Selected guarantor' : ''}
+                {signatureStep === 'borrower' ? signatureFlow?.borrowerName : (signatureFlow ? guarantorMembers.find((member) => member.id === signatureFlow.memberIds[signatureFlow.index])?.full_name ?? 'Selected guarantor' : '')}
               </Text>
               <Text style={styles.smallNote}>
-                {signatureFlow ? `${signatureFlow.index + 1} of ${signatureFlow.memberIds.length}` : ''}
+                {signatureStep === 'borrower' ? 'The borrower must personally review and sign first.' : (signatureFlow ? `${signatureFlow.index + 1} of ${signatureFlow.memberIds.length} guarantors` : '')}
               </Text>
               <TextInput
                 style={styles.input}
-                value={guarantorPasscode}
-                onChangeText={setGuarantorPasscode}
+                value={signatureStep === 'borrower' ? borrowerPasscode : guarantorPasscode}
+                onChangeText={signatureStep === 'borrower' ? setBorrowerPasscode : setGuarantorPasscode}
                 placeholder="Passcode"
                 placeholderTextColor="#6b7280"
                 secureTextEntry
@@ -749,8 +767,12 @@ export default function LoanDisbursementScreen() {
                 onPress={() => { void confirmGuarantorSignature(); }}
                 disabled={signatureSaving}
               >
-                <Text style={styles.buttonText}>{signatureSaving ? 'Confirming…' : 'Confirm Guarantee'}</Text>
+                <Text style={styles.buttonText}>{signatureSaving ? 'Confirming…' : signatureStep === 'borrower' ? 'NEXT — SIGN LOAN AGREEMENT' : 'NEXT — CONFIRM GUARANTEE'}</Text>
               </TouchableOpacity>
+              <TouchableOpacity style={styles.cancelButton} disabled={signatureSaving} onPress={() => { if (signatureStep === 'guarantor' && signatureFlow && signatureFlow.index > 0) { setSignatureFlow({ ...signatureFlow, index: signatureFlow.index - 1 }); setGuarantorPasscode(''); } else if (signatureStep === 'guarantor') { setSignatureStep('borrower'); setGuarantorPasscode(''); } else Alert.alert('Loan application saved', 'You can return to complete the borrower and guarantor signatures.'); }}>
+                <Text style={styles.cancelButtonText}>BACK</Text>
+              </TouchableOpacity>
+              {signatureStep === 'guarantor' && <Text style={styles.smallNote}>NEXT: confirm each guarantor in order. Each person must enter their own PIN.</Text>}
             </View>
           </View>
         </Modal>
