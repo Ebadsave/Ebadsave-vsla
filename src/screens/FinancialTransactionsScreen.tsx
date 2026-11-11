@@ -25,7 +25,6 @@ import {
   getMembersByGroupId,
   getOpenMeeting,
   getVSLASetupRules,
-  recordFine,
   recordFinePayment,
   recordInsuranceContribution,
   recordLoanRepayment,
@@ -115,7 +114,6 @@ export default function FinancialTransactionsScreen() {
   const [meetingTransactions, setMeetingTransactions] = useState<any[]>([]);
 
   const [showMembers, setShowMembers] = useState(false);
-  const [showFineTypes, setShowFineTypes] = useState(false);
 
   const [shares, setShares] = useState('');
   const [loanRepayment, setLoanRepayment] = useState('');
@@ -123,21 +121,7 @@ export default function FinancialTransactionsScreen() {
   const [insurance, setInsurance] = useState('');
   const [finePayment, setFinePayment] = useState('');
 
-  const [newFineAmount, setNewFineAmount] = useState('');
 
-  const [fineType, setFineType] = useState('Absence fine');
-  const [recordingFine, setRecordingFine] = useState(false);
-
-  const fineTypes = useMemo(
-    () => [
-      'Absence fine',
-      'Late fine',
-      'Non-saving fine',
-      'Non-loan repayment fine',
-      'Non-insurance contribution fine',
-    ],
-    [],
-  );
 
   const selectedMember = useMemo(
     () =>
@@ -201,52 +185,6 @@ export default function FinancialTransactionsScreen() {
     insuranceAmount +
     finePaymentAmount;
 
-  const getSetupFineAmount = useCallback(
-    (type: string): number => {
-      if (!setupRules) {
-        return 0;
-      }
-
-      switch (type) {
-        case 'Absence fine':
-          return Number(setupRules.absence_fine) || 0;
-
-        case 'Late fine':
-          return Number(setupRules.late_fine) || 0;
-
-        case 'Non-saving fine':
-          return (
-            Number(setupRules.non_saving_fine) || 0
-          );
-
-        case 'Non-loan repayment fine':
-          return (
-            Number(
-              setupRules.non_loan_repayment_fine,
-            ) || 0
-          );
-
-        case 'Non-insurance contribution fine':
-          return (
-            Number(
-              setupRules.non_insurance_contribution,
-            ) || 0
-          );
-
-        default:
-          return 0;
-      }
-    },
-    [setupRules],
-  );
-
-  useEffect(() => {
-    const amount = getSetupFineAmount(fineType);
-
-    setNewFineAmount(
-      amount > 0 ? String(amount) : '',
-    );
-  }, [fineType, getSetupFineAmount]);
 
   const loadMemberFinancialData = useCallback(
     async (memberId: number) => {
@@ -693,72 +631,6 @@ export default function FinancialTransactionsScreen() {
       );
     };
 
-  const recordNewFine = async () => {
-    if (!meetingId) {
-      Alert.alert(
-        'Meeting not started',
-        'Start the meeting before recording a fine.',
-      );
-
-      return;
-    }
-
-    if (!selectedMemberId) {
-      Alert.alert(
-        'Member required',
-        'Select a member before recording a fine.',
-      );
-
-      return;
-    }
-
-    const amount =
-      getSetupFineAmount(fineType);
-
-    if (
-      !Number.isFinite(amount) ||
-      amount <= 0
-    ) {
-      Alert.alert(
-        'Fine not configured',
-        'This fine does not have a valid amount in Setup Rules.',
-      );
-
-      return;
-    }
-
-    setRecordingFine(true);
-
-    try {
-      await recordFine(
-        groupId,
-        amount,
-        fineType,
-        selectedMemberId,
-        meetingId,
-      );
-
-      await loadMemberFinancialData(
-        selectedMemberId,
-      );
-
-      Alert.alert(
-        'Fine recorded',
-        `${fineType}: ${currency} ${formatMoney(
-          amount,
-        )}`,
-      );
-    } catch (error) {
-      Alert.alert(
-        'Fine failed',
-        error instanceof Error
-          ? error.message
-          : 'Unable to record the fine.',
-      );
-    } finally {
-      setRecordingFine(false);
-    }
-  };
 
   const goToNextMember = () => {
     if (
@@ -803,13 +675,12 @@ export default function FinancialTransactionsScreen() {
       return;
     }
 
-    navigation.navigate(
-      'Expenditure',
-      {
-        groupId,
-        meetingId,
-      },
-    );
+    navigation.navigate('LoanDisbursement', {
+      groupId,
+      meetingId,
+      executiveMemberId,
+      currency,
+    });
   };
 
   const handleBack = () => {
@@ -980,21 +851,25 @@ export default function FinancialTransactionsScreen() {
           <Text style={styles.sectionTitle}>Transactions This Meeting</Text>
           {meetingTransactions.length === 0 ? (
             <Text style={styles.emptyText}>No transactions available to undo.</Text>
-          ) : meetingTransactions.map((transaction) => {
-            const member = members.find((item) => item.id === Number(transaction.member_id));
-            return (
-              <View key={transaction.id} style={styles.transactionUndoRow}>
-                <View style={styles.transactionUndoDetails}>
-                  <Text style={styles.memberSavingsName}>{member?.full_name ?? 'Group transaction'}</Text>
-                  <Text style={styles.memberSavingsNumber}>{String(transaction.transaction_type).replace(/_/g, ' ')}</Text>
-                  <Text style={styles.transactionAmount}>{currency} {formatMoney(Math.abs(Number(transaction.amount) || 0))}</Text>
-                </View>
-                <TouchableOpacity style={styles.undoButton} onPress={() => handleUndoTransaction(transaction)} disabled={saving || endingMeeting}>
-                  <Text style={styles.undoButtonText}>Undo</Text>
-                </TouchableOpacity>
-              </View>
-            );
-          })}
+          ) : (
+            <ScrollView style={styles.transactionRecordsBox} nestedScrollEnabled showsVerticalScrollIndicator>
+              {meetingTransactions.map((transaction) => {
+                const member = members.find((item) => item.id === Number(transaction.member_id));
+                return (
+                  <View key={transaction.id} style={styles.transactionUndoRow}>
+                    <View style={styles.transactionUndoDetails}>
+                      <Text style={styles.memberSavingsName} numberOfLines={2}>{member?.full_name ?? 'Group transaction'}</Text>
+                      <Text style={styles.memberSavingsNumber} numberOfLines={2}>{String(transaction.transaction_type).replace(/_/g, ' ')}</Text>
+                      <Text style={styles.transactionAmount}>{currency} {formatMoney(Math.abs(Number(transaction.amount) || 0))}</Text>
+                    </View>
+                    <TouchableOpacity style={styles.undoButton} onPress={() => handleUndoTransaction(transaction)} disabled={saving || endingMeeting}>
+                      <Text style={styles.undoButtonText}>Undo</Text>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          )}
         </View>
 
         {/* MEMBER */}
@@ -1300,118 +1175,10 @@ export default function FinancialTransactionsScreen() {
           )}
         </View>
 
-        {/* NEW FINE */}
+        {/* Fines are assessed automatically from the saved Setup Rules. */}
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>
-            Record New Fine
-          </Text>
-
-          <Text style={styles.fieldLabel}>
-            Fine type
-          </Text>
-
-          <TouchableOpacity
-            style={styles.selector}
-            onPress={() =>
-              setShowFineTypes(
-                (value) => !value,
-              )
-            }
-            disabled={recordingFine}
-          >
-            <Text style={styles.selectorText}>
-              {fineType}
-            </Text>
-
-            <Text style={styles.arrow}>
-              {showFineTypes
-                ? '▲'
-                : '▼'}
-            </Text>
-          </TouchableOpacity>
-
-          {showFineTypes && (
-            <View
-              style={
-                styles.optionsBox
-              }
-            >
-              {fineTypes.map(
-                (type) => (
-                  <TouchableOpacity
-                    key={type}
-                    style={
-                      styles.option
-                    }
-                    onPress={() => {
-                      setFineType(type);
-                      setShowFineTypes(false);
-                    }}
-                  >
-                    <Text
-                      style={
-                        styles.optionText
-                      }
-                    >
-                      {type}
-                    </Text>
-                  </TouchableOpacity>
-                ),
-              )}
-            </View>
-          )}
-
-          <Text style={styles.fieldLabel}>
-            Fine amount
-          </Text>
-
-          <TextInput
-            style={[
-              styles.input,
-              styles.disabledInput,
-            ]}
-            value={
-              newFineAmount
-                ? `${currency} ${formatMoney(
-                    Number(newFineAmount),
-                  )}`
-                : ''
-            }
-            editable={false}
-            placeholder="Not configured"
-            placeholderTextColor="#888"
-          />
-
-          <Text style={styles.helperText}>
-            Fine amount is automatically taken from
-            VSLA Setup Rules and cannot be edited here.
-          </Text>
-
-          <TouchableOpacity
-            style={[
-              styles.secondaryButton,
-              recordingFine &&
-                styles.disabledButton,
-            ]}
-            onPress={() =>
-              void recordNewFine()
-            }
-            disabled={recordingFine}
-          >
-            {recordingFine ? (
-              <ActivityIndicator
-                color="#ffffff"
-              />
-            ) : (
-              <Text
-                style={
-                  styles.secondaryButtonText
-                }
-              >
-                Record Fine
-              </Text>
-            )}
-          </TouchableOpacity>
+          <Text style={styles.sectionTitle}>Automatic Fines</Text>
+          <Text style={styles.helperText}>Fines are assessed automatically from attendance, savings, insurance and loan-repayment rules. Only actual fine payments can be entered manually here.</Text>
         </View>
 
         {/* PAYMENT SUMMARY */}
@@ -1554,7 +1321,7 @@ export default function FinancialTransactionsScreen() {
           <Text
             style={styles.nextButtonText}
           >
-            Next: Expenditure
+            Next: Loan Disbursement
           </Text>
         </TouchableOpacity>
 
@@ -1988,7 +1755,8 @@ const styles = StyleSheet.create({
   memberSavingsNumber: { color: '#6b7280', fontSize: 12, marginTop: 3 },
   memberSavingsTotal: { color: '#166534', fontWeight: '800', fontSize: 14 },
   memberSavingsToday: { color: '#dc2626', fontWeight: '800', fontSize: 13, marginTop: 3 },
-  transactionUndoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#e5e7eb', gap: 8 },
+  transactionRecordsBox: { maxHeight: 280, borderWidth: 1, borderColor: '#d1d5db', borderRadius: 10, paddingHorizontal: 10, backgroundColor: '#f9fafb' },
+  transactionUndoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#e5e7eb', gap: 8, width: '100%' },
   transactionUndoDetails: { flex: 1 },
   transactionAmount: { color: '#111827', fontSize: 13, fontWeight: '700', marginTop: 3 },
   undoButton: { backgroundColor: '#fee2e2', borderRadius: 8, paddingHorizontal: 13, paddingVertical: 9 },

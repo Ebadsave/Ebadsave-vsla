@@ -192,15 +192,30 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
   };
 
   const currentMeeting = async () => {
-    if (!requireGroup()) return;
+    if (!requireExecutive()) return;
     const meeting = await getOpenMeeting(activeGroup!.id);
     if (!meeting) {
       Alert.alert('No Current Meeting', 'There is no open meeting. Start a new meeting first.');
       return;
     }
+    navigation.navigate('MeetingRollCall', {
+      groupId: activeGroup!.id,
+      meetingId: meeting.id,
+      executiveMemberId: executiveMemberId!,
+    });
+  };
+
+  const openFinancialTransactions = async () => {
+    if (!requireExecutive()) return;
+    const meeting = await getOpenMeeting(activeGroup!.id);
+    if (!meeting) {
+      Alert.alert('No Current Meeting', 'Start a new meeting before opening its financial transactions.');
+      return;
+    }
     navigation.navigate('FinancialTransactions', {
       groupId: activeGroup!.id,
       meetingId: meeting.id,
+      executiveMemberId: executiveMemberId!,
       currency: dashboard.currency,
     });
   };
@@ -234,6 +249,17 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
     navigation.navigate('NewMeeting', {
       groupId: activeGroup!.id,
       executiveMemberId: executiveMemberId!,
+    });
+  };
+
+  const openLoanDisbursement = async () => {
+    if (!requireExecutive()) return;
+    const meeting = await getOpenMeeting(activeGroup!.id);
+    navigation.navigate('LoanDisbursement', {
+      groupId: activeGroup!.id,
+      meetingId: meeting?.id ?? 0,
+      executiveMemberId: executiveMemberId!,
+      currency: dashboard.currency,
     });
   };
 
@@ -314,6 +340,16 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
               <Text style={styles.cardValue}>{card.value}</Text>
             </TouchableOpacity>
           ))}
+        </View>
+
+        <View style={styles.navigationSection}>
+          <Text style={styles.sectionTitle}>Quick Navigation</Text>
+          <TouchableOpacity style={styles.actionButton} onPress={openLoanDisbursement}>
+            <Text style={styles.actionButtonText}>Loan Disbursement</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionButton} onPress={openFinancialTransactions}>
+            <Text style={styles.actionButtonText}>Financial Transactions</Text>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.meetingPanel}>

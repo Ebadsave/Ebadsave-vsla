@@ -877,6 +877,17 @@ export default function LoanDisbursementScreen() {
             </View>
           </View>
         </Modal>
+
+        {activeMeetingId ? (
+          <TouchableOpacity
+            accessibilityRole="button"
+            style={[styles.disburseButton, { marginTop: 14 }]}
+            onPress={() => navigation.navigate('Expenditure', { groupId, meetingId: activeMeetingId })}
+            disabled={saving || signatureSaving}
+          >
+            <Text style={styles.buttonText}>NEXT: EXPENDITURE →</Text>
+          </TouchableOpacity>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
