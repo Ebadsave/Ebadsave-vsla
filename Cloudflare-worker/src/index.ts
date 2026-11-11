@@ -32,6 +32,7 @@ interface D1PreparedStatement {
 }
 interface D1Database {
   prepare(query: string): D1PreparedStatement;
+  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
 }
 export interface Env extends AuthEnv {
   BACKUPS: R2Bucket;
@@ -88,6 +89,87 @@ async function audit(env: Env, actorId: string, groupId: string, action: string,
     `INSERT INTO audit_events (actor_id, group_id, action, result, backup_id, created_at)
      VALUES (?, ?, ?, ?, ?, datetime('now'))`,
   ).bind(actorId, groupId, action, result, backupId ?? null).run();
+}
+
+/**
+ * One-time, tightly scoped KYA 2000 administrator handover.
+ * It requires the server-side bootstrap secret, verifies the existing member
+ * identity, provisions/updates that member's authentication record, and
+ * demotes the previous administrator in one D1 batch. No passbook or
+ * transaction rows are modified.
+ */
+async function transferKya2000Admin(request: Request, env: Env): Promise<Response> {
+  const suppliedSecret = request.headers.get('x-admin-bootstrap-secret') ?? '';
+  const expectedSecret = env.ADMIN_BOOTSTRAP_SECRET ?? '';
+  if (expectedSecret.length < 32) return json({ error: 'bootstrap_secret_missing_or_too_short' }, 500);
+  if (!constantTimeSecretEqual(suppliedSecret, expectedSecret)) return json({ error: 'bootstrap_secret_mismatch' }, 401);
+  if (!env.PIN_PEPPER || env.PIN_PEPPER.length < 32) return json({ error: 'server_pin_pepper_not_configured' }, 500);
+
+  const body = await readJson(request);
+  if (!body || body.groupId !== 'kya-2000' || body.groupNumber !== 'KYA 2000' ||
+      body.previousAdminMemberNumber !== 'KYA2000001' ||
+      body.newAdminMemberNumber !== 'KYA2000217' || body.newAdminName !== 'Twebaze Edwin' ||
+      typeof body.newPin !== 'string' || !/^\d{6,12}$/.test(body.newPin)) {
+    return json({ error: 'invalid_kya2000_admin_transfer_details' }, 400);
+  }
+
+  // Confirm the target is already a member; never create a membership here.
+  const passbookMember = await env.DB.prepare(
+    `SELECT member_number AS memberNumber, member_name AS memberName
+     FROM passbook_accounts WHERE group_id = 'kya-2000'
+       AND UPPER(REPLACE(member_number, ' ', '')) = 'KYA2000217' LIMIT 1`,
+  ).first<{ memberNumber: string; memberName: string }>();
+  const approvedApplication = await env.DB.prepare(
+    `SELECT member_number AS memberNumber, full_name AS memberName
+     FROM member_registration_applications WHERE group_id = 'kya-2000' AND status = 'approved'
+       AND UPPER(REPLACE(member_number, ' ', '')) = 'KYA2000217' LIMIT 1`,
+  ).first<{ memberNumber: string; memberName: string }>();
+  const member = passbookMember ?? approvedApplication;
+  if (!member || member.memberName.trim().toLocaleLowerCase() !== 'twebaze edwin') {
+    return json({ error: 'existing_member_not_verified', detail: 'KYA2000217 must match Twebaze Edwin in the existing group membership/passbook records.' }, 409);
+  }
+
+  const previousAdmin = await env.DB.prepare(
+    `SELECT user_id AS userId FROM auth_users
+     WHERE group_id = 'kya-2000' AND UPPER(REPLACE(member_number, ' ', '')) = 'KYA2000001'
+       AND status = 'active' LIMIT 1`,
+  ).first<{ userId: string }>();
+  if (!previousAdmin) return json({ error: 'previous_admin_account_not_found' }, 409);
+
+  const existingTarget = await env.DB.prepare(
+    `SELECT user_id AS userId FROM auth_users
+     WHERE group_id = 'kya-2000' AND UPPER(REPLACE(member_number, ' ', '')) = 'KYA2000217' LIMIT 1`,
+  ).first<{ userId: string }>();
+  const targetUserId = existingTarget?.userId ?? 'KYA2000217';
+  const verifier = await createPinVerifier(body.newPin, env.PIN_PEPPER);
+
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO auth_users (user_id, group_id, member_number, role, pin_hash, pin_salt, failed_attempts, locked_until, status)
+         VALUES (?, 'kya-2000', 'KYA2000217', 'admin', ?, ?, 0, NULL, 'active')
+         ON CONFLICT(group_id, member_number) DO UPDATE SET
+           role = 'admin', pin_hash = excluded.pin_hash, pin_salt = excluded.pin_salt,
+           failed_attempts = 0, locked_until = NULL, status = 'active', updated_at = datetime('now')`,
+      ).bind(targetUserId, verifier.pinHash, verifier.pinSalt),
+      env.DB.prepare(
+        `UPDATE auth_users SET role = 'member', failed_attempts = 0, locked_until = NULL, updated_at = datetime('now')
+         WHERE user_id = ? AND group_id = 'kya-2000' AND UPPER(REPLACE(member_number, ' ', '')) = 'KYA2000001'`,
+      ).bind(previousAdmin.userId),
+      env.DB.prepare(
+        `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
+         VALUES (?, 'kya-2000', 'admin_transfer', 'success', datetime('now'))`,
+      ).bind(targetUserId),
+      env.DB.prepare(
+        `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
+         VALUES (?, 'kya-2000', 'admin_demoted', 'success', datetime('now'))`,
+      ).bind(previousAdmin.userId),
+    ]);
+  } catch {
+    return json({ error: 'admin_transfer_failed_no_success_confirmation' }, 500);
+  }
+
+  return json({ ok: true, groupId: 'kya-2000', newAdmin: { name: 'Twebaze Edwin', memberNumber: 'KYA2000217', role: 'admin' }, previousAdmin: { memberNumber: 'KYA2000001', role: 'member' }, pinSet: true, financialRecordsChanged: false }, 200);
 }
 
 async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
@@ -897,6 +979,11 @@ export default {
   return cors(response, request);
     }
     
+    if (url.pathname === '/v1/auth/transfer-kya2000-admin' && request.method === 'POST') {
+      response = await transferKya2000Admin(request, env);
+      return cors(response, request);
+    }
+
     if (url.pathname === '/v1/auth/bootstrap-admin' && request.method === 'POST') {
       response = await bootstrapAdmin(request, env);
       return cors(response, request);
@@ -909,6 +996,12 @@ export default {
 
     const claims = await verifyAccessToken(request, env) as JwtClaims | null;
     if (!claims) return cors(json({ error: 'unauthorized' }, 401), request);
+    const currentIdentity = await env.DB.prepare(
+      `SELECT role, status FROM auth_users WHERE user_id = ? AND group_id = ? LIMIT 1`,
+    ).bind(claims.sub, claims.groupId).first<{ role: JwtRole; status: string }>();
+    if (!currentIdentity || currentIdentity.status !== 'active') return cors(json({ error: 'unauthorized' }, 401), request);
+    // Never trust a stale role embedded in a still-valid JWT after a role change.
+    claims.role = currentIdentity.role;
 
     if (url.pathname === '/v1/auth/logout' && request.method === 'POST') {
       await env.DB.prepare(
