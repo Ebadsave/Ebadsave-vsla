@@ -515,14 +515,24 @@ export default function LoanDisbursementScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <TouchableOpacity
-          accessibilityRole="button"
-          style={styles.backToMeetingButton}
-          onPress={() => navigation.goBack()}
-          disabled={saving}
-        >
-          <Text style={styles.backToMeetingText}>← Back</Text>
-        </TouchableOpacity>
+        <View style={styles.navigationActions}>
+          <TouchableOpacity
+            accessibilityRole="button"
+            style={styles.backToMeetingButton}
+            onPress={() => navigation.goBack()}
+            disabled={saving}
+          >
+            <Text style={styles.backToMeetingText}>← Back to Meeting</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            accessibilityRole="button"
+            style={styles.homeNavigationButton}
+            onPress={() => navigation.navigate('Home')}
+            disabled={saving}
+          >
+            <Text style={styles.homeNavigationText}>⌂ Home</Text>
+          </TouchableOpacity>
+        </View>
 
         <Text style={styles.title}>Loan Disbursement</Text>
         <Text style={styles.smallNote}>{activeMeetingId ? `Open meeting #${activeMeetingId}` : "No open meeting — start a meeting before issuing a loan."}</Text>
@@ -894,6 +904,9 @@ const styles = StyleSheet.create({
   warning: { color: '#991b1b', backgroundColor: '#fef2f2', padding: 10, borderRadius: 8, fontSize: 12, lineHeight: 18, marginTop: 10 },
   warningTitle: { color: '#991b1b', fontWeight: '800', marginBottom: 5 },
   warningBody: { color: '#991b1b', fontSize: 12, lineHeight: 18 },
+  navigationActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 10 },
+  homeNavigationButton: { alignSelf: 'flex-start', backgroundColor: '#16a34a', borderColor: '#16a34a', borderWidth: 1, borderRadius: 9, paddingVertical: 10, paddingHorizontal: 13 },
+  homeNavigationText: { color: '#ffffff', fontSize: 14, fontWeight: '800' },
   backToMeetingButton: { alignSelf: 'flex-start', backgroundColor: '#ffffff', borderColor: '#16a34a', borderWidth: 1, borderRadius: 9, paddingVertical: 10, paddingHorizontal: 13, marginBottom: 14 },
   backToMeetingText: { color: '#166534', fontSize: 14, fontWeight: '800' },
   sectionTitle: { fontSize: 16, fontWeight: '800', color: '#166534', marginTop: 12, marginBottom: 8 },
