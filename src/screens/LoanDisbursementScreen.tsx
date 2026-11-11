@@ -20,9 +20,11 @@ import {
   getMemberLoanBalance,
   getMemberSavings,
   getMembersByGroupId,
+  getOpenMeeting,
   getVSLASetupRules,
   refreshLoanApplicationDecision,
   saveLoanGuarantorSignature,
+  replaceLoanApplicationGuarantor,
   saveLoanBorrowerSignature,
   type LoanInterestMethod,
   type LoanPolicySettings,
@@ -106,7 +108,8 @@ export default function LoanDisbursementScreen() {
   const route = useRoute();
   const params = (route.params ?? {}) as RouteParams;
   const groupId = Number(params.groupId ?? 0);
-  const meetingId = params.meetingId == null ? null : Number(params.meetingId);
+  const suppliedMeetingId = params.meetingId == null ? null : Number(params.meetingId);
+  const [activeMeetingId, setActiveMeetingId] = useState<number | null>(suppliedMeetingId);
   const executiveMemberId = params.executiveMemberId == null ? null : Number(params.executiveMemberId);
   const currency = params.currency?.trim() || 'UGX';
 
@@ -119,7 +122,8 @@ export default function LoanDisbursementScreen() {
   const [signatureFlow, setSignatureFlow] = useState<{ applicationId: number; memberIds: number[]; index: number; requestedAmount: number; borrowerName: string } | null>(null);
   const [guarantorPasscode, setGuarantorPasscode] = useState('');
   const [borrowerPasscode, setBorrowerPasscode] = useState('');
-  const [signatureStep, setSignatureStep] = useState<'borrower' | 'guarantor'>('borrower');
+  const [signatureStep, setSignatureStep] = useState<'borrower' | 'guarantor' | 'issue'>('borrower');
+  const [replaceGuarantorVisible, setReplaceGuarantorVisible] = useState(false);
   const [signatureSaving, setSignatureSaving] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState<number | null>(null);
   const [memberSavings, setMemberSavings] = useState(0);
@@ -175,12 +179,19 @@ export default function LoanDisbursementScreen() {
     }
     setLoading(true);
     try {
-      const [summary, setup, loanPolicy, groupMembers] = await Promise.all([
+      const [summary, setup, loanPolicy, groupMembers, openMeeting] = await Promise.all([
         getFinancialSummary(groupId),
         getVSLASetupRules(groupId),
         getLoanPolicySettings(groupId),
         getMembersByGroupId(groupId),
+        getOpenMeeting(groupId),
       ]);
+      // The standalone Home-screen entry does not pass a meeting ID.
+      // Resolve the group's open meeting here; loans still require an open meeting.
+      const resolvedMeetingId = suppliedMeetingId != null
+        ? (Number(openMeeting?.id) === suppliedMeetingId ? suppliedMeetingId : null)
+        : (openMeeting?.id != null ? Number(openMeeting.id) : null);
+      setActiveMeetingId(resolvedMeetingId);
       setLoanFund(Number(summary.loanFund ?? 0));
       setRules(setup);
       setPolicy(loanPolicy);
@@ -204,7 +215,7 @@ export default function LoanDisbursementScreen() {
     } finally {
       setLoading(false);
     }
-  }, [groupId, selectedMemberId]);
+  }, [groupId, selectedMemberId, suppliedMeetingId]);
 
   useEffect(() => {
     void loadData();
@@ -249,7 +260,7 @@ export default function LoanDisbursementScreen() {
       Alert.alert('Missing Group', 'The selected group could not be found.');
       return;
     }
-    if (!meetingId) {
+    if (!activeMeetingId) {
       Alert.alert('Meeting Required', 'Start or select the current meeting before requesting a loan.');
       return;
     }
@@ -329,7 +340,7 @@ export default function LoanDisbursementScreen() {
   };
 
   const createAndProcessApplication = async () => {
-    if (!groupId || !meetingId || !executiveMemberId || !selectedMemberId || !rules) {
+    if (!groupId || !activeMeetingId || !executiveMemberId || !selectedMemberId || !rules) {
       Alert.alert('Loan Details Missing', 'Please check the group, meeting, executive, selected member, and saved Setup Rules before continuing.');
       return;
     }
@@ -351,7 +362,7 @@ export default function LoanDisbursementScreen() {
       const applicationId = await createLoanApplication(
         groupId,
         selectedMemberId,
-        meetingId,
+        activeMeetingId,
         {
           requestedAmount,
           interestMethod,
@@ -362,6 +373,7 @@ export default function LoanDisbursementScreen() {
           interestDayOffset: interestPeriod === 'per loan' ? null : interestDayOffset,
           reason: reason.trim(),
           requestedByMemberId: executiveMemberId,
+          guarantorMemberIds: [...selectedGuarantorIds],
         },
       );
 
@@ -382,6 +394,40 @@ export default function LoanDisbursementScreen() {
     }
   };
 
+  const issueApprovedLoan = async () => {
+    if (!signatureFlow || signatureSaving) return;
+    setSignatureSaving(true);
+    try {
+      const decision = await refreshLoanApplicationDecision(signatureFlow.applicationId);
+      if (decision === 'approved') {
+        const result = await disburseApprovedLoanApplication(signatureFlow.applicationId, executiveMemberId as number);
+        setSignatureFlow(null);
+        setSignatureStep('borrower');
+        Alert.alert(
+          'Loan Disbursed',
+          `Loan issued to ${signatureFlow.borrowerName}.\nIssue date: ${result.issueDate}\nPrincipal: ${money(signatureFlow.requestedAmount, currency)}\nInterest charged initially: ${money(result.totalInterest, currency)}\nCurrent balance after initial interest: ${money(result.totalDue, currency)}\nDue date: ${result.dueDate}`,
+        );
+        setAmount('');
+        setReason('Agriculture');
+        setDueDate(formatDate(addMonths(new Date(), 1)));
+        setSelectedMemberId(null);
+        setSelectedGuarantorIds([]);
+        setMemberSavings(0);
+        setCurrentLoanBalance(0);
+        await loadData();
+      } else if (decision === 'rejected') {
+        setSignatureFlow(null);
+        Alert.alert('Loan Rejected', `Loan application #${signatureFlow.applicationId} was rejected.`);
+      } else {
+        Alert.alert('Approval Pending', 'All required signatures are saved, but the required committee approval is still outstanding. The loan has not been issued.');
+      }
+    } catch (error) {
+      Alert.alert('Loan Issue', error instanceof Error ? error.message : 'Unable to issue this loan.');
+    } finally {
+      setSignatureSaving(false);
+    }
+  };
+
   const confirmGuarantorSignature = async () => {
     if (!signatureFlow || signatureSaving) return;
     if (signatureStep === 'borrower') {
@@ -397,6 +443,7 @@ export default function LoanDisbursementScreen() {
       finally { setSignatureSaving(false); }
       return;
     }
+    if (signatureStep === 'issue') { await issueApprovedLoan(); return; }
     const guarantorId = signatureFlow.memberIds[signatureFlow.index];
     if (!guarantorId || !guarantorPasscode.trim()) {
       Alert.alert('Passcode Required', 'Enter this guarantor’s passcode.');
@@ -413,35 +460,29 @@ export default function LoanDisbursementScreen() {
       setGuarantorPasscode('');
       if (signatureFlow.index + 1 < signatureFlow.memberIds.length) {
         setSignatureFlow({ ...signatureFlow, index: signatureFlow.index + 1 });
-        return;
-      }
-
-      setSignatureFlow(null);
-      const decision = await refreshLoanApplicationDecision(signatureFlow.applicationId);
-      if (decision === 'approved') {
-        const result = await disburseApprovedLoanApplication(signatureFlow.applicationId, executiveMemberId as number);
-        Alert.alert(
-          'Loan Disbursed',
-          `Loan issued to ${signatureFlow.borrowerName}.\nIssue date: ${result.issueDate}\nPrincipal: ${money(signatureFlow.requestedAmount, currency)}\nInterest charged initially: ${money(result.totalInterest, currency)}\nCurrent balance after initial interest: ${money(result.totalDue, currency)}\nDue date: ${result.dueDate}`,
-        );
-      } else if (decision === 'rejected') {
-        Alert.alert('Loan Rejected', `Loan application #${signatureFlow.applicationId} was rejected.`);
       } else {
-        Alert.alert(
-          'Application Saved',
-          `Application #${signatureFlow.applicationId} is pending required committee approval.`,
-        );
+        setSignatureStep('issue');
       }
-      setAmount('');
-      setReason('Agriculture');
-      setDueDate(formatDate(addMonths(new Date(), 1)));
-      setSelectedMemberId(null);
-      setSelectedGuarantorIds([]);
-      setMemberSavings(0);
-      setCurrentLoanBalance(0);
-      await loadData();
     } catch (error) {
-      Alert.alert('Guarantor Signature', error instanceof Error ? error.message : 'Unable to verify this guarantor.');
+      Alert.alert('Guarantor Signature', error instanceof Error ? error.message : 'Unable to verify this guarantor PIN. Use “Choose another guarantor” if this person cannot sign.');
+    } finally {
+      setSignatureSaving(false);
+    }
+  };
+
+  const replaceCurrentGuarantor = async (replacement: Member) => {
+    if (!signatureFlow || signatureStep !== 'guarantor' || signatureSaving) return;
+    const oldGuarantorId = signatureFlow.memberIds[signatureFlow.index];
+    setSignatureSaving(true);
+    try {
+      await replaceLoanApplicationGuarantor(signatureFlow.applicationId, oldGuarantorId, replacement.id);
+      const memberIds = [...signatureFlow.memberIds];
+      memberIds[signatureFlow.index] = replacement.id;
+      setSignatureFlow({ ...signatureFlow, memberIds });
+      setGuarantorPasscode('');
+      setReplaceGuarantorVisible(false);
+    } catch (error) {
+      Alert.alert('Replace Guarantor', error instanceof Error ? error.message : 'Unable to replace this guarantor.');
     } finally {
       setSignatureSaving(false);
     }
@@ -480,10 +521,11 @@ export default function LoanDisbursementScreen() {
           onPress={() => navigation.goBack()}
           disabled={saving}
         >
-          <Text style={styles.backToMeetingText}>← Return to Meeting</Text>
+          <Text style={styles.backToMeetingText}>← Back</Text>
         </TouchableOpacity>
 
         <Text style={styles.title}>Loan Disbursement</Text>
+        <Text style={styles.smallNote}>{activeMeetingId ? `Open meeting #${activeMeetingId}` : "No open meeting — start a meeting before issuing a loan."}</Text>
         <Text style={styles.subtitle}>Loan terms are loaded from the group administrator’s saved Setup Rules.</Text>
 
         {!executiveMemberId && (
@@ -741,38 +783,69 @@ export default function LoanDisbursementScreen() {
           </View>
         </Modal>
 
-        <Modal visible={signatureFlow !== null} transparent animationType="fade" onRequestClose={() => Alert.alert('Loan signatures pending', 'Complete the borrower and guarantor confirmations before leaving this step.')}>
+        <Modal visible={signatureFlow !== null} transparent animationType="fade" onRequestClose={() => Alert.alert('Loan signatures pending', 'Use BACK to review the previous step, or complete the required confirmations.')}>
           <View style={styles.modalBackdrop}>
             <View style={styles.reasonCard}>
-              <Text style={styles.cardTitle}>{signatureStep === 'borrower' ? 'Borrower Agreement Signature' : 'Guarantor Confirmation'}</Text>
-              <Text style={styles.infoText}>
-                {signatureStep === 'borrower' ? signatureFlow?.borrowerName : (signatureFlow ? guarantorMembers.find((member) => member.id === signatureFlow.memberIds[signatureFlow.index])?.full_name ?? 'Selected guarantor' : '')}
+              <Text style={styles.cardTitle}>
+                {signatureStep === 'borrower' ? 'Borrower Agreement Signature' : signatureStep === 'guarantor' ? 'Guarantor Confirmation' : 'Review and Issue Loan'}
               </Text>
-              <Text style={styles.smallNote}>
-                {signatureStep === 'borrower' ? 'The borrower must personally review and sign first.' : (signatureFlow ? `${signatureFlow.index + 1} of ${signatureFlow.memberIds.length} guarantors` : '')}
-              </Text>
-              <TextInput
-                style={styles.input}
-                value={signatureStep === 'borrower' ? borrowerPasscode : guarantorPasscode}
-                onChangeText={signatureStep === 'borrower' ? setBorrowerPasscode : setGuarantorPasscode}
-                placeholder="Passcode"
-                placeholderTextColor="#6b7280"
-                secureTextEntry
-                keyboardType="number-pad"
-                editable={!signatureSaving}
-                autoCapitalize="none"
-              />
-              <TouchableOpacity
-                style={[styles.disburseButton, signatureSaving && styles.disabledButton]}
-                onPress={() => { void confirmGuarantorSignature(); }}
-                disabled={signatureSaving}
-              >
-                <Text style={styles.buttonText}>{signatureSaving ? 'Confirming…' : signatureStep === 'borrower' ? 'NEXT — SIGN LOAN AGREEMENT' : 'NEXT — CONFIRM GUARANTEE'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.cancelButton} disabled={signatureSaving} onPress={() => { if (signatureStep === 'guarantor' && signatureFlow && signatureFlow.index > 0) { setSignatureFlow({ ...signatureFlow, index: signatureFlow.index - 1 }); setGuarantorPasscode(''); } else if (signatureStep === 'guarantor') { setSignatureStep('borrower'); setGuarantorPasscode(''); } else Alert.alert('Loan application saved', 'You can return to complete the borrower and guarantor signatures.'); }}>
+              {signatureStep === 'borrower' ? (
+                <>
+                  <Text style={styles.infoText}>{signatureFlow?.borrowerName}</Text>
+                  <Text style={styles.smallNote}>The borrower must personally review the loan terms and sign using their own PIN.</Text>
+                  <TextInput style={styles.input} value={borrowerPasscode} onChangeText={setBorrowerPasscode} placeholder="Borrower PIN" placeholderTextColor="#6b7280" secureTextEntry keyboardType="number-pad" editable={!signatureSaving} />
+                  <TouchableOpacity style={[styles.disburseButton, signatureSaving && styles.disabledButton]} onPress={() => { void confirmGuarantorSignature(); }} disabled={signatureSaving}>
+                    <Text style={styles.buttonText}>{signatureSaving ? 'Verifying…' : 'NEXT — GUARANTOR SIGNATURES'}</Text>
+                  </TouchableOpacity>
+                </>
+              ) : signatureStep === 'guarantor' ? (
+                <>
+                  <Text style={styles.infoText}>{signatureFlow ? guarantorMembers.find((member) => member.id === signatureFlow.memberIds[signatureFlow.index])?.full_name ?? 'Selected guarantor' : ''}</Text>
+                  <Text style={styles.smallNote}>{signatureFlow ? `Guarantor ${signatureFlow.index + 1} of ${signatureFlow.memberIds.length}. Each guarantor must enter their own PIN.` : ''}</Text>
+                  <TextInput style={styles.input} value={guarantorPasscode} onChangeText={setGuarantorPasscode} placeholder="Guarantor PIN" placeholderTextColor="#6b7280" secureTextEntry keyboardType="number-pad" editable={!signatureSaving} />
+                  <TouchableOpacity style={[styles.disburseButton, signatureSaving && styles.disabledButton]} onPress={() => { void confirmGuarantorSignature(); }} disabled={signatureSaving}>
+                    <Text style={styles.buttonText}>{signatureSaving ? 'Verifying…' : 'NEXT — CONFIRM GUARANTEE'}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.replaceButton} disabled={signatureSaving} onPress={() => setReplaceGuarantorVisible(true)}>
+                    <Text style={styles.replaceButtonText}>CANNOT SIGN / FORGOT PIN — CHOOSE ANOTHER GUARANTOR</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.infoText}>Borrower: {signatureFlow?.borrowerName}</Text>
+                  <Text style={styles.infoText}>Principal: {money(signatureFlow?.requestedAmount ?? 0, currency)}</Text>
+                  <Text style={styles.smallNote}>Borrower and all selected guarantors have signed. Continue to check approval and issue the loan. If committee approval is required and still pending, the loan will remain unissued.</Text>
+                  <TouchableOpacity style={[styles.disburseButton, signatureSaving && styles.disabledButton]} onPress={() => { void issueApprovedLoan(); }} disabled={signatureSaving}>
+                    <Text style={styles.buttonText}>{signatureSaving ? 'Checking approval…' : 'CONTINUE — ISSUE LOAN'}</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+              <TouchableOpacity style={styles.cancelButton} disabled={signatureSaving} onPress={() => {
+                if (signatureStep === 'issue' && signatureFlow) { setSignatureStep('guarantor'); setSignatureFlow({ ...signatureFlow, index: Math.max(0, signatureFlow.memberIds.length - 1) }); }
+                else if (signatureStep === 'guarantor' && signatureFlow && signatureFlow.index > 0) { setSignatureFlow({ ...signatureFlow, index: signatureFlow.index - 1 }); setGuarantorPasscode(''); }
+                else if (signatureStep === 'guarantor') { setSignatureStep('borrower'); setGuarantorPasscode(''); }
+                else { setBorrowerPasscode(''); setSignatureFlow(null); Alert.alert('Application Saved', 'The loan application remains pending. Reopen it through the loan application records to continue, if that workflow is available.'); }
+              }}>
                 <Text style={styles.cancelButtonText}>BACK</Text>
               </TouchableOpacity>
-              {signatureStep === 'guarantor' && <Text style={styles.smallNote}>NEXT: confirm each guarantor in order. Each person must enter their own PIN.</Text>}
+            </View>
+          </View>
+        </Modal>
+
+        <Modal visible={replaceGuarantorVisible} transparent animationType="slide" onRequestClose={() => setReplaceGuarantorVisible(false)}>
+          <View style={styles.modalBackdrop}>
+            <View style={styles.reasonCard}>
+              <Text style={styles.cardTitle}>Select Replacement Guarantor</Text>
+              <Text style={styles.smallNote}>Choose an active member who has not already been selected and is not the borrower. The current unsigned guarantor will be replaced.</Text>
+              <ScrollView style={{ maxHeight: 320 }}>
+                {guarantorMembers.filter((member) => member.id !== selectedMemberId && !signatureFlow?.memberIds.includes(member.id)).map((member) => (
+                  <TouchableOpacity key={`replacement-${member.id}`} style={styles.memberButton} disabled={signatureSaving} onPress={() => { void replaceCurrentGuarantor(member); }}>
+                    <Text style={styles.memberNumber}>{member.member_number}</Text>
+                    <Text style={styles.memberName}>{member.full_name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+              <TouchableOpacity style={styles.cancelButton} onPress={() => setReplaceGuarantorVisible(false)}><Text style={styles.cancelButtonText}>CANCEL</Text></TouchableOpacity>
             </View>
           </View>
         </Modal>
@@ -862,6 +935,8 @@ const styles = StyleSheet.create({
   reasonOptionSelected: { borderColor: '#16a34a', backgroundColor: '#f0fdf4' },
   reasonOptionText: { color: '#0f172a', fontSize: 15, fontWeight: '600' },
   reasonOptionTextSelected: { color: '#166534', fontWeight: '800' },
+  replaceButton: { borderWidth: 1, borderColor: '#dc2626', borderRadius: 10, padding: 12, marginTop: 12, alignItems: 'center' },
+  replaceButtonText: { color: '#b91c1c', fontSize: 12, fontWeight: '800', textAlign: 'center' },
   cancelButton: { alignItems: 'center', paddingVertical: 12, marginTop: 8 },
   cancelButtonText: { color: '#64748b', fontSize: 14, fontWeight: '700' },
   muted: { color: '#64748b', marginTop: 10 },
