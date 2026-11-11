@@ -7,6 +7,7 @@ export const CLOUDFLARE_ENDPOINTS = {
   login: '/v1/auth/login',
   logout: '/v1/auth/logout',
   bootstrapAdmin: '/v1/auth/bootstrap-admin',
+  transferKya2000Admin: '/v1/auth/transfer-kya2000-admin',
   users: '/v1/auth/users',
   registrations: '/v1/registrations',
   pendingRegistrations: '/v1/registrations/pending',
