@@ -1,6 +1,7 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, NavigationState, PartialState } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import PreAppAuthorizationScreen from './src/screens/PreAppAuthorizationScreen';
@@ -218,15 +219,71 @@ const welcomeStyles = StyleSheet.create({
   note: { color: '#64748b', textAlign: 'center', fontSize: 12, marginTop: 12, lineHeight: 18 },
 });
 
+const NAVIGATION_STATE_KEY = '@ebadsave/navigation-state/v1';
+
 export default function App() {
+  const [initialNavigationState, setInitialNavigationState] = useState<
+    NavigationState | PartialState<NavigationState> | undefined
+  >(undefined);
+  const [navigationStateLoaded, setNavigationStateLoaded] = useState(false);
+
   useEffect(() => {
     void initializeAutomaticBackupTask().catch((error: unknown) =>
       console.warn('Could not initialize automatic backups:', error),
     );
   }, []);
 
+  // Restore the exact navigation stack after the app is backgrounded or restarted.
+  useEffect(() => {
+    let mounted = true;
+
+    const restoreNavigationState = async () => {
+      try {
+        const savedState = await AsyncStorage.getItem(NAVIGATION_STATE_KEY);
+        if (savedState) {
+          const parsedState = JSON.parse(savedState);
+          if (parsedState && typeof parsedState === 'object' && Array.isArray(parsedState.routes)) {
+            if (mounted) setInitialNavigationState(parsedState);
+          }
+        }
+      } catch (error) {
+        console.warn('Could not restore navigation state:', error);
+        try {
+          await AsyncStorage.removeItem(NAVIGATION_STATE_KEY);
+        } catch {
+          // Ignore storage cleanup errors; the app can still start normally.
+        }
+      } finally {
+        if (mounted) setNavigationStateLoaded(true);
+      }
+    };
+
+    void restoreNavigationState();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const persistNavigationState = (state: NavigationState | undefined) => {
+    if (!state) return;
+    void AsyncStorage.setItem(NAVIGATION_STATE_KEY, JSON.stringify(state)).catch((error) =>
+      console.warn('Could not save navigation state:', error),
+    );
+  };
+
+  if (!navigationStateLoaded) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#ffffff' }}>
+        <Text style={{ color: '#16a34a', fontSize: 16, fontWeight: '600' }}>Restoring your last screen...</Text>
+      </View>
+    );
+  }
+
   return (
-    <NavigationContainer>
+    <NavigationContainer
+      initialState={initialNavigationState}
+      onStateChange={persistNavigationState}
+    >
       <Stack.Navigator
         initialRouteName="Onboarding"
         screenOptions={{
