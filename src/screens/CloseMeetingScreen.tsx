@@ -193,14 +193,14 @@ export default function CloseMeetingScreen({ route, navigation }: Props) {
 
             const cloudBackup = await runAutomaticCloudBackup(true);
             const cloudBackupStatus = cloudBackup.success && !cloudBackup.skipped
-              ? `\n\n${cloudBackup.message}`
+              ? `\n\nCloudflare: ${cloudBackup.message}`
               : cloudBackup.skipped
-                ? '\n\nCloud backup was not run because automatic backup is disabled or not configured.'
-                : `\n\nCloud backup failed: ${cloudBackup.error || cloudBackup.message}\nThe meeting remains successfully closed. The backup can be retried when connectivity and authorization are available.`;
+                ? '\n\nLocal backup: verified. Cloudflare upload was skipped because automatic cloud backup is not enabled. To enable it, open Data Backup & Restore, sign in as the group administrator, save a passphrase of at least 12 characters, and enable Automatic Cloudflare Backup.'
+                : `\n\nLocal backup: verified. Cloudflare upload failed: ${cloudBackup.error || cloudBackup.message}. The meeting is closed and its local records are safe; retry the cloud upload from Data Backup & Restore when connectivity and administrator authorization are available.`;
 
             Alert.alert(
               'Meeting Closed',
-              `The meeting has been closed successfully. Existing-group onboarding is now locked and cannot be reopened to add opening savings.${cloudBackupStatus}`,
+              `The meeting has been closed successfully. Its verified local backup is saved.${cloudBackupStatus}`,
               [{ text: 'OK', onPress: () => navigation.navigate('Home') }],
             );
           } catch (error) {
