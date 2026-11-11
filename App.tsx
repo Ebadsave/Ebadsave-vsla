@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { AppState, AppStateStatus, Pressable, StyleSheet, Text, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
-import { NavigationContainer, NavigationState, PartialState } from '@react-navigation/native';
+import { createNavigationContainerRef, NavigationContainer, NavigationState, PartialState } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import PreAppAuthorizationScreen from './src/screens/PreAppAuthorizationScreen';
@@ -140,6 +140,17 @@ export type RootStackParamList = {
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+const navigationRef = createNavigationContainerRef<RootStackParamList>();
+
+// Navigation is restored during ordinary breaks. After 24 hours without app
+// activity, the user must complete the existing group PIN authorization again.
+const NAVIGATION_STATE_KEY = '@ebadsave/navigation-state/v2';
+const LAST_ACTIVE_AT_KEY = '@ebadsave/last-active-at/v1';
+const SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+const AUTH_REQUIRED_STATE = {
+  index: 0,
+  routes: [{ name: 'PreAppAuthorization' }],
+} as unknown as NavigationState;
 
 function WelcomeScreen({ navigation }: { navigation: any }) {
   return (
@@ -219,13 +230,12 @@ const welcomeStyles = StyleSheet.create({
   note: { color: '#64748b', textAlign: 'center', fontSize: 12, marginTop: 12, lineHeight: 18 },
 });
 
-const NAVIGATION_STATE_KEY = '@ebadsave/navigation-state/v1';
-
 export default function App() {
   const [initialNavigationState, setInitialNavigationState] = useState<
     NavigationState | PartialState<NavigationState> | undefined
   >(undefined);
   const [navigationStateLoaded, setNavigationStateLoaded] = useState(false);
+  const lastActiveRef = useRef<number>(Date.now());
 
   useEffect(() => {
     void initializeAutomaticBackupTask().catch((error: unknown) =>
@@ -233,43 +243,81 @@ export default function App() {
     );
   }, []);
 
-  // Restore the exact navigation stack after the app is backgrounded or restarted.
   useEffect(() => {
     let mounted = true;
 
-    const restoreNavigationState = async () => {
+    const restore = async () => {
       try {
-        const savedState = await AsyncStorage.getItem(NAVIGATION_STATE_KEY);
-        if (savedState) {
-          const parsedState = JSON.parse(savedState);
-          if (parsedState && typeof parsedState === 'object' && Array.isArray(parsedState.routes)) {
-            if (mounted) setInitialNavigationState(parsedState);
+        const [savedState, savedLastActive] = await Promise.all([
+          AsyncStorage.getItem(NAVIGATION_STATE_KEY),
+          AsyncStorage.getItem(LAST_ACTIVE_AT_KEY),
+        ]);
+        const lastActive = savedLastActive ? Number(savedLastActive) : 0;
+        lastActiveRef.current = lastActive;
+        const sessionExpired = !Number.isFinite(lastActive) || lastActive <= 0 || Date.now() - lastActive >= SESSION_TIMEOUT_MS;
+
+        if (mounted && sessionExpired && savedState) {
+          // Expired session: clear the old stack and return to PIN authorization.
+          setInitialNavigationState(AUTH_REQUIRED_STATE);
+          await AsyncStorage.removeItem(NAVIGATION_STATE_KEY);
+        } else if (mounted && savedState) {
+          const parsed = JSON.parse(savedState);
+          if (parsed && typeof parsed === 'object' && Array.isArray(parsed.routes) && parsed.routes.length > 0) {
+            setInitialNavigationState(parsed);
           }
         }
+
+        lastActiveRef.current = Date.now();
+        await AsyncStorage.setItem(LAST_ACTIVE_AT_KEY, String(lastActiveRef.current));
       } catch (error) {
-        console.warn('Could not restore navigation state:', error);
-        try {
-          await AsyncStorage.removeItem(NAVIGATION_STATE_KEY);
-        } catch {
-          // Ignore storage cleanup errors; the app can still start normally.
-        }
+        console.warn('Could not restore navigation/session state:', error);
       } finally {
         if (mounted) setNavigationStateLoaded(true);
       }
     };
 
-    void restoreNavigationState();
-    return () => {
-      mounted = false;
-    };
+    void restore();
+    return () => { mounted = false; };
   }, []);
 
   const persistNavigationState = (state: NavigationState | undefined) => {
     if (!state) return;
-    void AsyncStorage.setItem(NAVIGATION_STATE_KEY, JSON.stringify(state)).catch((error) =>
-      console.warn('Could not save navigation state:', error),
-    );
+    const now = Date.now();
+    lastActiveRef.current = now;
+    void Promise.all([
+      AsyncStorage.setItem(NAVIGATION_STATE_KEY, JSON.stringify(state)),
+      AsyncStorage.setItem(LAST_ACTIVE_AT_KEY, String(now)),
+    ]).catch((error) => console.warn('Could not save navigation/session state:', error));
   };
+
+  useEffect(() => {
+    if (!navigationStateLoaded) return;
+
+    const saveActivityTime = (time: number) => {
+      void AsyncStorage.setItem(LAST_ACTIVE_AT_KEY, String(time)).catch((error) =>
+        console.warn('Could not update app activity time:', error),
+      );
+    };
+
+    const subscription = AppState.addEventListener('change', (nextState: AppStateStatus) => {
+      const now = Date.now();
+      if (nextState === 'active') {
+        const expired = lastActiveRef.current > 0 && now - lastActiveRef.current >= SESSION_TIMEOUT_MS;
+        if (expired && navigationRef.isReady()) {
+          navigationRef.resetRoot(AUTH_REQUIRED_STATE);
+          void AsyncStorage.removeItem(NAVIGATION_STATE_KEY);
+        }
+        lastActiveRef.current = now;
+        saveActivityTime(now);
+      } else if (nextState === 'background' || nextState === 'inactive') {
+        // Store the time the app left the foreground, not the time it later resumes.
+        lastActiveRef.current = now;
+        saveActivityTime(now);
+      }
+    });
+
+    return () => subscription.remove();
+  }, [navigationStateLoaded]);
 
   if (!navigationStateLoaded) {
     return (
@@ -281,6 +329,7 @@ export default function App() {
 
   return (
     <NavigationContainer
+      ref={navigationRef}
       initialState={initialNavigationState}
       onStateChange={persistNavigationState}
     >
@@ -405,4 +454,4 @@ export default function App() {
       </Stack.Navigator>
     </NavigationContainer>
   );
-  }
+}
