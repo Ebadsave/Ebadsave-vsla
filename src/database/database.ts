@@ -6587,6 +6587,50 @@ export async function recordSavings(
   }
 
   /*
+   * Enforce the group's saved maximum shares for this specific meeting.
+   * The limit is cumulative across all savings entries for this member in
+   * this meeting, so splitting a contribution into several transactions
+   * cannot bypass the rule. Reversed transactions are excluded.
+   */
+  const setupRules = await getVSLASetupRules(groupId);
+  const shareValue = Number(setupRules?.share_value ?? 0);
+  const maximumShares = Number(setupRules?.maximum_shares_per_meeting ?? 0);
+
+  if (!Number.isFinite(shareValue) || shareValue <= 0) {
+    throw new Error('The group share value is not configured correctly. Please check Setup Rules.');
+  }
+  if (!Number.isFinite(maximumShares) || maximumShares <= 0) {
+    throw new Error('The maximum shares per meeting is not configured correctly. Please check Setup Rules.');
+  }
+
+  const maximumAmount = shareValue * maximumShares;
+  const savedThisMeeting = await db.getFirstAsync<{ total: number | null }>(
+    `SELECT COALESCE(SUM(amount), 0) AS total
+     FROM financial_transactions
+     WHERE group_id = ?
+       AND member_id = ?
+       AND meeting_id = ?
+       AND account_type = 'savings'
+       AND transaction_type = 'savings_contribution'
+       AND reversed = 0`,
+    groupId,
+    memberId,
+    activeMeetingId,
+  );
+
+  const alreadySaved = Number(savedThisMeeting?.total ?? 0);
+  const remainingAllowance = Math.max(0, maximumAmount - alreadySaved);
+  const proposedTotal = alreadySaved + amount;
+
+  if (proposedTotal > maximumAmount + 0.000001) {
+    const money = (value: number) => `UGX ${Math.round(value).toLocaleString()}`;
+    throw new Error(
+      `Maximum savings reached for this meeting. The group allows ${maximumShares} shares (${money(maximumAmount)}) per meeting. ` +
+      `This member has already saved ${money(alreadySaved)} and can save only ${money(remainingAllowance)} more in this meeting.`,
+    );
+  }
+
+  /*
    * Savings are independent of attendance. A member may save even when
    * marked absent. Roll call still starts the meeting and remains available
    * for fines, records and other meeting rules.
