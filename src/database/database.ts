@@ -10911,50 +10911,17 @@ export async function closeMeeting(
     meetingId,
   );
 
-  const todaySummary =
-    await getMeetingTransactionSummary(
-      meetingId,
-    );
-
-  const previousMeeting =
-    await db.getFirstAsync<{
-      id: number;
-      loan_fund: number | null;
-    }>(
-      `SELECT
-         gm.id,
-         mc.loan_fund
-       FROM group_meetings gm
-       LEFT JOIN meeting_closures mc
-         ON mc.meeting_id = gm.id
-       WHERE gm.group_id = ?
-         AND gm.status = 'closed'
-         AND gm.id != ?
-       ORDER BY gm.meeting_number DESC
-       LIMIT 1`,
-      meeting.group_id,
-      meetingId,
-    );
-
-  const previousLoanFund =
-    Number(previousMeeting?.loan_fund) || 0;
-
-  const closingLoanFund = Math.max(
-    0,
-    previousLoanFund +
-      todaySummary.loanFundCollections -
-      todaySummary.loanDisbursement,
-  );
-
   /*
-   * Savings and Insurance Fund remain lifetime account balances.
-   * Loan Fund is specifically calculated above from the previous
-   * concluded meeting plus this meeting's records.
+   * Use the canonical lifetime Loan Fund calculation used by the Home
+   * dashboard and loan-disbursement screen. Rebuilding a separate balance
+   * from the previous closure can drift when historical transactions are
+   * corrected or reversed.
    */
   const lifetimeSummary =
     await getFinancialSummary(
       meeting.group_id,
     );
+  const closingLoanFund = Number(lifetimeSummary.loanFund) || 0;
 
   const timestamp = now();
   const reconciliation = await getMeetingCashReconciliation(
