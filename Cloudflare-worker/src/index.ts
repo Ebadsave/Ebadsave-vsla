@@ -99,6 +99,9 @@ async function audit(env: Env, actorId: string, groupId: string, action: string,
  * transaction rows are modified.
  */
 async function transferKya2000Admin(request: Request, env: Env): Promise<Response> {
+  // One-time, group-scoped handover. The group owner has confirmed in the
+  // local app that KYA2000217 is Twebaze Edwin's existing membership. D1 has
+  // not yet received member/passbook sync, so this operation changes auth only.
   const suppliedSecret = request.headers.get('x-admin-bootstrap-secret') ?? '';
   const expectedSecret = env.ADMIN_BOOTSTRAP_SECRET ?? '';
   if (expectedSecret.length < 32) return json({ error: 'bootstrap_secret_missing_or_too_short' }, 500);
@@ -113,48 +116,45 @@ async function transferKya2000Admin(request: Request, env: Env): Promise<Respons
     return json({ error: 'invalid_kya2000_admin_transfer_details' }, 400);
   }
 
-  // Confirm the target is already a member; never create a membership here.
-  const passbookMember = await env.DB.prepare(
-    `SELECT member_number AS memberNumber, member_name AS memberName
-     FROM passbook_accounts WHERE group_id = 'kya-2000'
-       AND UPPER(REPLACE(member_number, ' ', '')) = 'KYA2000217' LIMIT 1`,
-  ).first<{ memberNumber: string; memberName: string }>();
-  const approvedApplication = await env.DB.prepare(
-    `SELECT member_number AS memberNumber, full_name AS memberName
-     FROM member_registration_applications WHERE group_id = 'kya-2000' AND status = 'approved'
-       AND UPPER(REPLACE(member_number, ' ', '')) = 'KYA2000217' LIMIT 1`,
-  ).first<{ memberNumber: string; memberName: string }>();
-  const member = passbookMember ?? approvedApplication;
-  if (!member || member.memberName.trim().toLocaleLowerCase() !== 'twebaze edwin') {
-    return json({ error: 'existing_member_not_verified', detail: 'KYA2000217 must match Twebaze Edwin in the existing group membership/passbook records.' }, 409);
-  }
-
+  // The existing active admin record is the D1-side proof of this group.
+  // Do not require D1 membership/passbook rows and do not fabricate them.
   const previousAdmin = await env.DB.prepare(
     `SELECT user_id AS userId FROM auth_users
-     WHERE group_id = 'kya-2000' AND UPPER(REPLACE(member_number, ' ', '')) = 'KYA2000001'
-       AND status = 'active' LIMIT 1`,
+     WHERE group_id = 'kya-2000'
+       AND UPPER(REPLACE(member_number, ' ', '')) = 'KYA2000001'
+       AND role = 'admin' AND status = 'active'
+     LIMIT 1`,
   ).first<{ userId: string }>();
-  if (!previousAdmin) return json({ error: 'previous_admin_account_not_found' }, 409);
+  if (!previousAdmin) return json({ error: 'previous_admin_account_not_found_or_not_active' }, 409);
 
   const existingTarget = await env.DB.prepare(
     `SELECT user_id AS userId FROM auth_users
-     WHERE group_id = 'kya-2000' AND UPPER(REPLACE(member_number, ' ', '')) = 'KYA2000217' LIMIT 1`,
+     WHERE group_id = 'kya-2000'
+       AND UPPER(REPLACE(member_number, ' ', '')) = 'KYA2000217'
+     LIMIT 1`,
   ).first<{ userId: string }>();
-  const targetUserId = existingTarget?.userId ?? 'KYA2000217';
+  const targetUserId = existingTarget?.userId ?? crypto.randomUUID();
   const verifier = await createPinVerifier(body.newPin, env.PIN_PEPPER);
 
   try {
+    // Atomic D1 batch. Only auth_users and auth_events are modified.
     await env.DB.batch([
       env.DB.prepare(
-        `INSERT INTO auth_users (user_id, group_id, member_number, role, pin_hash, pin_salt, failed_attempts, locked_until, status)
+        `INSERT INTO auth_users
+         (user_id, group_id, member_number, role, pin_hash, pin_salt,
+          failed_attempts, locked_until, status)
          VALUES (?, 'kya-2000', 'KYA2000217', 'admin', ?, ?, 0, NULL, 'active')
          ON CONFLICT(group_id, member_number) DO UPDATE SET
-           role = 'admin', pin_hash = excluded.pin_hash, pin_salt = excluded.pin_salt,
-           failed_attempts = 0, locked_until = NULL, status = 'active', updated_at = datetime('now')`,
+           role = 'admin', pin_hash = excluded.pin_hash,
+           pin_salt = excluded.pin_salt, failed_attempts = 0,
+           locked_until = NULL, status = 'active', updated_at = datetime('now')`,
       ).bind(targetUserId, verifier.pinHash, verifier.pinSalt),
       env.DB.prepare(
-        `UPDATE auth_users SET role = 'member', failed_attempts = 0, locked_until = NULL, updated_at = datetime('now')
-         WHERE user_id = ? AND group_id = 'kya-2000' AND UPPER(REPLACE(member_number, ' ', '')) = 'KYA2000001'`,
+        `UPDATE auth_users
+         SET role = 'member', failed_attempts = 0, locked_until = NULL,
+             updated_at = datetime('now')
+         WHERE user_id = ? AND group_id = 'kya-2000'
+           AND UPPER(REPLACE(member_number, ' ', '')) = 'KYA2000001'`,
       ).bind(previousAdmin.userId),
       env.DB.prepare(
         `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
@@ -169,7 +169,15 @@ async function transferKya2000Admin(request: Request, env: Env): Promise<Respons
     return json({ error: 'admin_transfer_failed_no_success_confirmation' }, 500);
   }
 
-  return json({ ok: true, groupId: 'kya-2000', newAdmin: { name: 'Twebaze Edwin', memberNumber: 'KYA2000217', role: 'admin' }, previousAdmin: { memberNumber: 'KYA2000001', role: 'member' }, pinSet: true, financialRecordsChanged: false }, 200);
+  return json({
+    ok: true,
+    groupId: 'kya-2000',
+    newAdmin: { name: 'Twebaze Edwin', memberNumber: 'KYA2000217', role: 'admin' },
+    previousAdmin: { memberNumber: 'KYA2000001', role: 'member' },
+    pinSet: true,
+    membershipRecordsChanged: false,
+    financialRecordsChanged: false,
+  }, 200);
 }
 
 async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
