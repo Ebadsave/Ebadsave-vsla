@@ -179,7 +179,7 @@ function WelcomeScreen({ navigation }: { navigation: any }) {
         <Text style={welcomeStyles.secondaryText}>5. Member Passbook</Text>
       </Pressable>
       <Pressable style={welcomeStyles.secondaryButton} onPress={() => navigation.navigate('CloudflareAdminSetup')}>
-        <Text style={welcomeStyles.secondaryText}>KYA 2000 Administrator Setup (one-time)</Text>
+        <Text style={welcomeStyles.secondaryText}>Set up this group’s administrator</Text>
       </Pressable>
       <Pressable style={welcomeStyles.secondaryButton} onPress={() => navigation.navigate('CloudflarePassbookSync')}>
         <Text style={welcomeStyles.secondaryText}>Administrator: Sync Remote Passbooks</Text>
