@@ -91,12 +91,13 @@ export async function runAutomaticCloudBackup(_force = false): Promise<{
     if (!cloudGroupId) throw new Error('Cloudflare group identity is missing. Sign in again.');
     if (!passphrase || passphrase.length < 12) throw new Error('Automatic backup passphrase is missing. Enter it in Backup & Restore.');
 
-    // The Worker group identity is expected to end in the group's four-digit KYA number.
     const match = cloudGroupId.match(/(\d{4})$/);
     if (!match) throw new Error('Cannot match the Cloudflare account to a local KYA group.');
+
     const groupNumber = match[1];
     const groups = await getAllGroups();
     const group = groups.find((item) => String(item.group_number).replace(/^KYA\s*/i, '').padStart(4, '0') === groupNumber);
+
     if (!group) throw new Error(`Local group KYA ${groupNumber} was not found. No backup was uploaded.`);
 
     const result = await uploadGroupDatabaseBackupToCloud(group.id, passphrase);
@@ -134,6 +135,7 @@ function makeTimestamp(): string {
 
 function parseAndValidateBackup(contents: string): BackupEnvelope {
   let parsed: unknown;
+
   try {
     parsed = JSON.parse(contents);
   } catch {
@@ -145,6 +147,7 @@ function parseAndValidateBackup(contents: string): BackupEnvelope {
   }
 
   const backup = parsed as Partial<BackupEnvelope>;
+
   if (
     backup.version !== 1 ||
     typeof backup.created_at !== 'string' ||
@@ -157,17 +160,20 @@ function parseAndValidateBackup(contents: string): BackupEnvelope {
   const missing = REQUIRED_BACKUP_TABLES.filter(
     (table) => !Array.isArray(backup.tables?.[table]),
   );
+
   if (missing.length) {
     throw new Error(
       `The backup is incomplete. Missing or invalid tables: ${missing.join(', ')}. No data was changed.`,
     );
   }
+
   return backup as BackupEnvelope;
 }
 
 async function pruneLocalBackupFiles(keep = MAX_LOCAL_BACKUP_FILES): Promise<void> {
   const directory = getDocumentsDirectory();
   const names = await FileSystem.readDirectoryAsync(directory);
+
   const candidates = names.filter(
     (name) => name.startsWith('ebadsave_backup_') && name.endsWith('.json'),
   );
@@ -176,21 +182,25 @@ async function pruneLocalBackupFiles(keep = MAX_LOCAL_BACKUP_FILES): Promise<voi
     candidates.map(async (name) => {
       const path = `${directory}${name}`;
       let createdAt = 0;
+
       try {
         const contents = await FileSystem.readAsStringAsync(path, {
           encoding: FileSystem.EncodingType.UTF8,
         });
+
         const parsed = JSON.parse(contents) as { created_at?: string };
         createdAt = parsed.created_at ? new Date(parsed.created_at).getTime() : 0;
       } catch {
-        // Invalid/legacy files sort behind valid backups.
+        // Invalid or legacy backups sort behind valid backups.
       }
+
       if (!Number.isFinite(createdAt)) createdAt = 0;
       return { name, path, createdAt };
     }),
   );
 
   details.sort((a, b) => b.createdAt - a.createdAt || b.name.localeCompare(a.name));
+
   for (const oldBackup of details.slice(Math.max(0, keep))) {
     await FileSystem.deleteAsync(oldBackup.path, { idempotent: true });
   }
@@ -209,11 +219,14 @@ export async function exportGroupDatabaseBackup(groupId: number): Promise<{
     const parsed = JSON.parse(json) as BackupEnvelope & {
       group_number?: string | number;
     };
+
     parseAndValidateBackup(json);
+
     if (!parsed.group_number) throw new Error('The group backup has no KYA group identity.');
 
     const fileName = `ebadsave_group_${String(parsed.group_number).replace(/^KYA\s*/i, '')}_${makeTimestamp()}.json`;
     const filePath = `${getDocumentsDirectory()}${fileName}`;
+
     await FileSystem.writeAsStringAsync(filePath, json, {
       encoding: FileSystem.EncodingType.UTF8,
     });
@@ -221,7 +234,9 @@ export async function exportGroupDatabaseBackup(groupId: number): Promise<{
     const saved = await FileSystem.readAsStringAsync(filePath, {
       encoding: FileSystem.EncodingType.UTF8,
     });
+
     const verified = JSON.parse(saved) as { group_number?: string | number };
+
     parseAndValidateBackup(saved);
 
     if (
@@ -258,11 +273,13 @@ export async function exportDatabaseBackup(): Promise<{
     const now = new Date();
     const fileName = `ebadsave_backup_${makeTimestamp()}.json`;
     const filePath = `${getDocumentsDirectory()}${fileName}`;
+
     await FileSystem.writeAsStringAsync(filePath, json, {
       encoding: FileSystem.EncodingType.UTF8,
     });
 
     const info = await FileSystem.getInfoAsync(filePath);
+
     if (!info.exists || !('size' in info) || Number(info.size) <= 0) {
       throw new Error('The backup file could not be verified after saving.');
     }
@@ -270,6 +287,7 @@ export async function exportDatabaseBackup(): Promise<{
     const savedContents = await FileSystem.readAsStringAsync(filePath, {
       encoding: FileSystem.EncodingType.UTF8,
     });
+
     parseAndValidateBackup(savedContents);
     await pruneLocalBackupFiles(MAX_LOCAL_BACKUP_FILES);
 
@@ -291,6 +309,7 @@ export async function emailBackupFile(
 ): Promise<{ success: boolean; message: string; error?: string }> {
   try {
     const available = await MailComposer.isAvailableAsync();
+
     if (!available) {
       return {
         success: false,
@@ -300,6 +319,7 @@ export async function emailBackupFile(
     }
 
     const info = await FileSystem.getInfoAsync(filePath);
+
     if (!info.exists) {
       return {
         success: false,
@@ -310,104 +330,4 @@ export async function emailBackupFile(
 
     const result = await MailComposer.composeAsync({
       subject: `Ebadsave VSLA Backup - ${new Date().toLocaleDateString()}`,
-      body: `Please find attached your Ebadsave VSLA backup.\n\nFile: ${fileName}\nCreated: ${new Date().toLocaleString()}\n\nKeep this file safe. Restoring a backup replaces current records with the records in that backup.`,
-      attachments: [filePath],
-    });
-
-    if (result.status === 'sent') return { success: true, message: 'Backup email sent.' };
-    if (result.status === 'saved') return { success: true, message: 'Backup email saved as a draft.' };
-    return { success: false, message: 'Email was not sent.', error: result.status };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown email error.';
-    return { success: false, message: 'Could not email the backup.', error: message };
-  }
-}
-
-export async function listBackupFiles(): Promise<BackupFileInfo[]> {
-  try {
-    const directory = getDocumentsDirectory();
-    const names = await FileSystem.readDirectoryAsync(directory);
-    const backups = names.filter(
-      (name) => name.startsWith('ebadsave_backup_') && name.endsWith('.json'),
-    );
-
-    const details = await Promise.all(
-      backups.map(async (name) => {
-        const path = `${directory}${name}`;
-        const info = await FileSystem.getInfoAsync(path);
-        let timestamp = 'Unknown';
-        try {
-          const content = await FileSystem.readAsStringAsync(path, {
-            encoding: FileSystem.EncodingType.UTF8,
-          });
-          const parsed = JSON.parse(content) as { created_at?: string };
-          if (parsed.created_at) timestamp = new Date(parsed.created_at).toLocaleString();
-        } catch {
-          // Keep invalid files visible for identification/removal.
-        }
-        return {
-          name,
-          path,
-          size: info.exists && 'size' in info ? Number(info.size) : 0,
-          timestamp,
-        };
-      }),
-    );
-
-    return details.sort((a, b) => b.name.localeCompare(a.name));
-  } catch {
-    return [];
-  }
-}
-
-export async function restoreDatabaseBackup(filePath: string): Promise<{
-  success: boolean;
-  message: string;
-  tablesRestored?: number;
-  error?: string;
-}> {
-  try {
-    const info = await FileSystem.getInfoAsync(filePath);
-    if (!info.exists) throw new Error('The selected backup file does not exist.');
-
-    const contents = await FileSystem.readAsStringAsync(filePath, {
-      encoding: FileSystem.EncodingType.UTF8,
-    });
-    if (!contents.trim()) {
-      throw new Error('The selected backup file is empty. No data was changed.');
-    }
-
-    const validated = parseAndValidateBackup(contents);
-    await restoreDatabaseBackupJson(JSON.stringify(validated));
-
-    return {
-      success: true,
-      message: `Backup restored successfully (${REQUIRED_BACKUP_TABLES.length} required tables validated).`,
-      tablesRestored: REQUIRED_BACKUP_TABLES.length,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown restore error.';
-    return { success: false, message: 'Backup restore failed.', error: message };
-  }
-}
-
-export async function deleteBackupFile(
-  filePath: string,
-): Promise<{ success: boolean; message: string; error?: string }> {
-  try {
-    const info = await FileSystem.getInfoAsync(filePath);
-    if (!info.exists) return { success: false, message: 'Backup file not found.' };
-    await FileSystem.deleteAsync(filePath, { idempotent: false });
-    return { success: true, message: 'Backup file deleted.' };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown deletion error.';
-    return { success: false, message: 'Could not delete backup file.', error: message };
-  }
-}
-
-export function formatFileSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return 'Unknown size';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+      body: `Please find attached your Ebadsave VSLA backup.\n\nFile: ${file
