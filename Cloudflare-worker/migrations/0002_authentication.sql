@@ -1,6 +1,5 @@
 PRAGMA foreign_keys = ON;
 
--- Store member identity and authentication information.
 CREATE TABLE IF NOT EXISTS auth_users (
   user_id TEXT PRIMARY KEY,
   group_id TEXT NOT NULL,
@@ -25,7 +24,6 @@ CREATE INDEX IF NOT EXISTS idx_auth_users_group
 CREATE INDEX IF NOT EXISTS idx_auth_users_status
   ON auth_users (status);
 
--- Track revoked access tokens.
 CREATE TABLE IF NOT EXISTS revoked_tokens (
   token_id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
@@ -36,7 +34,6 @@ CREATE TABLE IF NOT EXISTS revoked_tokens (
 CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expiry
   ON revoked_tokens (expires_at);
 
--- Record authentication security events.
 CREATE TABLE IF NOT EXISTS auth_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT,
