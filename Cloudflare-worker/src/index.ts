@@ -63,7 +63,7 @@ function cors(response: Response, request: Request): Response {
   // Configure a specific production app origin if the mobile/web client requires CORS.
   if (origin) headers.set('access-control-allow-origin', origin);
   headers.set('access-control-allow-methods', 'GET,POST,OPTIONS');
-  headers.set('access-control-allow-headers', 'authorization,content-type,x-admin-bootstrap-secret,x-backup-id,x-backup-encrypted,x-group-id,x-group-number');
+  headers.set('access-control-allow-headers', 'authorization,content-type,x-backup-id,x-backup-encrypted,x-group-id,x-group-number');
   headers.set('access-control-max-age', '86400');
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
@@ -181,15 +181,10 @@ async function transferKya2000Admin(request: Request, env: Env): Promise<Respons
 }
 
 async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
-async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
-  // Each registered group receives its own administrator identity.
-  // No bootstrap secret - group is claimed by first admin creation.
-  // PINs are hashed with the server pepper and are never stored or returned in plain text.
-  if (!env.PIN_PEPPER || env.PIN_PEPPER.length < 32) {
-    return json({ error: 'server_pin_pepper_not_configured' }, 500);
-  }
-  if (!constantTimeSecretEqual(suppliedSecret, expectedSecret)) {
-    return json({ error: 'bootstrap_secret_mismatch' }, 401);
+  // Backend-only bootstrap: the mobile app never receives or sends this secret.
+  // Each group can claim only its own first administrator; no global administrator exists.
+  if (!env.ADMIN_BOOTSTRAP_SECRET || env.ADMIN_BOOTSTRAP_SECRET.length < 32) {
+    return json({ error: 'server_bootstrap_secret_not_configured' }, 500);
   }
   if (!env.PIN_PEPPER || env.PIN_PEPPER.length < 32) {
     return json({ error: 'server_pin_pepper_not_configured' }, 500);
@@ -198,9 +193,10 @@ async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
   const body = await readJson(request);
   if (!body || typeof body.groupNumber !== 'string' ||
       typeof body.memberNumber !== 'string' || typeof body.memberName !== 'string' ||
-      typeof body.pin !== 'string') {
-    return json({ error: 'group_and_admin_details_required' }, 400);
+      typeof body.pin !== 'string' || typeof body.confirmPin !== 'string') {
+    return json({ error: 'group_admin_name_member_number_pin_and_confirmation_required' }, 400);
   }
+  if (body.pin !== body.confirmPin) return json({ error: 'pin_confirmation_mismatch' }, 400);
 
   const groupNumber = body.groupNumber.trim().toUpperCase().replace(/^KYA\s*/, '');
   if (!/^\d{4}$/.test(groupNumber)) {
@@ -242,6 +238,15 @@ async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
   const userId = crypto.randomUUID();
   try {
     await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS group_admin_profiles (
+        user_id TEXT PRIMARY KEY,
+        group_id TEXT NOT NULL,
+        member_name TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(group_id, user_id)
+      )`,
+    ).run();
+    await env.DB.prepare(
       `INSERT INTO group_admin_bootstrap_claims (group_id, group_number, admin_user_id)
        VALUES (?, ?, ?)`,
     ).bind(groupId, `KYA ${groupNumber}`, userId).run();
@@ -263,8 +268,13 @@ async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
   }
 
   await env.DB.prepare(
+    `INSERT INTO group_admin_profiles (user_id, group_id, member_name)
+     VALUES (?, ?, ?)`,
+  ).bind(userId, groupId, body.memberName.trim()).run();
+
+  await env.DB.prepare(
     `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
-     VALUES (?, ?, 'admin_bootstrap', 'success', datetime('now'))`,
+     VALUES (?, ?, 'group_admin_setup', 'success', datetime('now'))`,
   ).bind(userId, groupId).run();
 
   return json({
@@ -292,6 +302,9 @@ async function login(request: Request, env: Env): Promise<Response> {
   if (!body || typeof body.memberNumber !== 'string' || typeof body.pin !== 'string') {
     return json({ error: 'member_number_and_pin_required' }, 400);
   }
+  if (body.memberName !== undefined && typeof body.memberName !== 'string') {
+    return json({ error: 'invalid_member_name' }, 400);
+  }
   const memberNumber = normalizeMemberNumber(body.memberNumber);
   const pin = body.pin;
   if (!validMemberNumber(memberNumber) || !/^\d{6,12}$/.test(pin)) {
@@ -317,6 +330,24 @@ async function login(request: Request, env: Env): Promise<Response> {
   }
   const user = rows[0];
   if (!['admin', 'executive', 'member'].includes(user.role)) return json({ error: 'invalid_credentials' }, 401);
+  if (user.role === 'admin') {
+    if (typeof body.memberName !== 'string' || body.memberName.trim().length < 2) {
+      return json({ error: 'admin_name_required' }, 401);
+    }
+    const adminProfile = await env.DB.prepare(
+      `SELECT member_name AS memberName FROM group_admin_profiles
+       WHERE user_id = ? AND group_id = ? LIMIT 1`,
+    ).bind(user.userId, user.groupId).first<{ memberName: string }>();
+    // Existing group administrators may predate the profile table; use their
+    // already-synced passbook name as a compatibility fallback.
+    const storedAdminName = adminProfile?.memberName ?? (await env.DB.prepare(
+      `SELECT member_name AS memberName FROM passbook_accounts
+       WHERE group_id = ? AND UPPER(REPLACE(member_number, ' ', '')) = ? LIMIT 1`,
+    ).bind(user.groupId, memberNumber.replace(/\s/g, '')).first<{ memberName: string }>())?.memberName;
+    if (!storedAdminName || storedAdminName.trim().toLowerCase() !== body.memberName.trim().toLowerCase()) {
+      return json({ error: 'invalid_credentials' }, 401);
+    }
+  }
 
   if (user.lockedUntil) {
     const lockTime = Date.parse(`${user.lockedUntil.replace(' ', 'T')}Z`);
@@ -1008,12 +1039,7 @@ export default {
   return cors(response, request);
     }
     
-    if (url.pathname === '/v1/auth/transfer-kya2000-admin' && request.method === 'POST') {
-      response = await transferKya2000Admin(request, env);
-      return cors(response, request);
-    }
-
-    if (url.pathname === '/v1/auth/bootstrap-admin' && request.method === 'POST') {
+    if (url.pathname === '/v1/auth/admin/setup' && request.method === 'POST') {
       response = await bootstrapAdmin(request, env);
       return cors(response, request);
     }
