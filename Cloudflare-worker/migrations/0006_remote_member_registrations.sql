@@ -1,6 +1,5 @@
 PRAGMA foreign_keys = ON;
 
--- Keep applicants separate from active authentication accounts.
 CREATE TABLE IF NOT EXISTS member_registration_applications (
   application_id TEXT PRIMARY KEY,
   group_id TEXT NOT NULL,
