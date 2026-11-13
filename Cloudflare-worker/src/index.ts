@@ -181,78 +181,100 @@ async function transferKya2000Admin(request: Request, env: Env): Promise<Respons
 }
 
 async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
-  // This endpoint is deliberately restricted to the pre-agreed KYA 2000 test identity.
-  // Production groups must use a separately authorized onboarding process.
+  // Each registered group receives its own administrator identity.
+  // The server-side bootstrap secret is required; PINs are hashed with the
+  // server pepper and are never stored or returned in plain text.
   const suppliedSecret = request.headers.get('x-admin-bootstrap-secret') ?? '';
   const expectedSecret = env.ADMIN_BOOTSTRAP_SECRET ?? '';
- if (expectedSecret.length < 32) {
-  return json({ error: 'bootstrap_secret_missing_or_too_short' }, 500);
-}
-
-if (!constantTimeSecretEqual(suppliedSecret, expectedSecret)) {
-  return json({
-    error: 'bootstrap_secret_mismatch',
-    suppliedLength: suppliedSecret.length,
-    expectedLength: expectedSecret.length
-  }, 401);
-    }
-
-  const body = await readJson(request);
-  if (!body || body.groupId !== 'kya-2000' || body.groupNumber !== 'KYA 2000' ||
-      body.memberNumber !== 'KYA2000001' || body.memberName !== 'Twebaze Edwin' ||
-      typeof body.pin !== 'string' || !/^\d{6,12}$/.test(body.pin)) {
-    return json({ error: 'invalid_test_admin_details' }, 400);
+  if (expectedSecret.length < 32) {
+    return json({ error: 'bootstrap_secret_missing_or_too_short' }, 500);
+  }
+  if (!constantTimeSecretEqual(suppliedSecret, expectedSecret)) {
+    return json({ error: 'bootstrap_secret_mismatch' }, 401);
   }
   if (!env.PIN_PEPPER || env.PIN_PEPPER.length < 32) {
     return json({ error: 'server_pin_pepper_not_configured' }, 500);
   }
 
-  // The dedicated claim table provides a permanent, unique group-number claim.
-  // Migration 0005_group_admin_bootstrap.sql must be applied before this endpoint is used.
+  const body = await readJson(request);
+  if (!body || typeof body.groupNumber !== 'string' ||
+      typeof body.memberNumber !== 'string' || typeof body.memberName !== 'string' ||
+      typeof body.pin !== 'string') {
+    return json({ error: 'group_and_admin_details_required' }, 400);
+  }
+
+  const groupNumber = body.groupNumber.trim().toUpperCase().replace(/^KYA\s*/, '');
+  if (!/^\d{4}$/.test(groupNumber)) {
+    return json({ error: 'invalid_group_number' }, 400);
+  }
+  const numericGroup = Number(groupNumber);
+  const validGroupRange =
+    (numericGroup >= 2000 && numericGroup <= 2009) ||
+    (numericGroup >= 2010 && numericGroup <= 9090);
+  if (!validGroupRange) return json({ error: 'group_number_out_of_range' }, 400);
+
+  const groupId = `kya-${groupNumber}`;
+  const memberNumber = body.memberNumber.trim().toUpperCase().replace(/\s+/g, '');
+  if (!new RegExp(`^KYA${groupNumber}\\d{3}$`).test(memberNumber)) {
+    return json({ error: 'admin_member_number_must_belong_to_group' }, 400);
+  }
+  if (body.memberName.trim().length < 2 || body.memberName.trim().length > 100) {
+    return json({ error: 'invalid_admin_name' }, 400);
+  }
+  if (!/^\d{6,12}$/.test(body.pin)) {
+    return json({ error: 'invalid_pin' }, 400);
+  }
+
+  // KYA 2000 remains claimed by its existing administrator. Other groups
+  // can claim only their own unique group ID and group number.
   const existingGroup = await env.DB.prepare(
-    `SELECT admin_user_id FROM group_admin_bootstrap_claims WHERE group_id = ? OR group_number = ? LIMIT 1`,
-  ).bind('kya-2000', 'KYA 2000').first<{ admin_user_id: string }>();
+    `SELECT admin_user_id FROM group_admin_bootstrap_claims
+     WHERE group_id = ? OR group_number = ? LIMIT 1`,
+  ).bind(groupId, `KYA ${groupNumber}`).first<{ admin_user_id: string }>();
   if (existingGroup) return json({ error: 'group_already_bootstrapped' }, 409);
 
-  const existingAuthUser = await env.DB.prepare(
-    `SELECT user_id FROM auth_users WHERE group_id = ? LIMIT 1`,
-  ).bind('kya-2000').first<{ user_id: string }>();
-  if (existingAuthUser) return json({ error: 'group_already_bootstrapped' }, 409);
-
   const existingMember = await env.DB.prepare(
-    `SELECT user_id FROM auth_users WHERE UPPER(REPLACE(member_number, ' ', '')) = ? LIMIT 1`,
-  ).bind('KYA2000001').first<{ user_id: string }>();
+    `SELECT user_id FROM auth_users
+     WHERE group_id = ? AND UPPER(REPLACE(member_number, ' ', '')) = ? LIMIT 1`,
+  ).bind(groupId, memberNumber).first<{ user_id: string }>();
   if (existingMember) return json({ error: 'member_number_already_registered' }, 409);
 
   const verifier = await createPinVerifier(body.pin, env.PIN_PEPPER);
   const userId = crypto.randomUUID();
-  // Claim first: the primary/unique keys prevent two simultaneous bootstrap requests
-  // from claiming the same group. If user creation fails, release this new claim.
   try {
     await env.DB.prepare(
       `INSERT INTO group_admin_bootstrap_claims (group_id, group_number, admin_user_id)
-       VALUES ('kya-2000', 'KYA 2000', ?)`,
-    ).bind(userId).run();
+       VALUES (?, ?, ?)`,
+    ).bind(groupId, `KYA ${groupNumber}`, userId).run();
   } catch {
     return json({ error: 'group_already_bootstrapped' }, 409);
   }
+
   try {
     await env.DB.prepare(
-      `INSERT INTO auth_users (user_id, group_id, member_number, role, pin_hash, pin_salt, status)
-       VALUES (?, 'kya-2000', 'KYA2000001', 'admin', ?, ?, 'active')`,
-    ).bind(userId, verifier.pinHash, verifier.pinSalt).run();
+      `INSERT INTO auth_users
+       (user_id, group_id, member_number, role, pin_hash, pin_salt, status)
+       VALUES (?, ?, ?, 'admin', ?, ?, 'active')`,
+    ).bind(userId, groupId, memberNumber, verifier.pinHash, verifier.pinSalt).run();
   } catch {
     await env.DB.prepare(
       `DELETE FROM group_admin_bootstrap_claims WHERE group_id = ? AND admin_user_id = ?`,
-    ).bind('kya-2000', userId).run();
+    ).bind(groupId, userId).run();
     return json({ error: 'member_number_already_registered' }, 409);
   }
 
   await env.DB.prepare(
     `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
-     VALUES (?, 'kya-2000', 'admin_bootstrap', 'success', datetime('now'))`,
-  ).bind(userId).run();
-  return json({ ok: true, role: 'admin', groupId: 'kya-2000', memberNumber: 'KYA2000001' }, 201);
+     VALUES (?, ?, 'admin_bootstrap', 'success', datetime('now'))`,
+  ).bind(userId, groupId).run();
+
+  return json({
+    ok: true,
+    role: 'admin',
+    groupId,
+    groupNumber: `KYA ${groupNumber}`,
+    memberNumber,
+  }, 201);
 }
 
 function constantTimeSecretEqual(candidate: string, expected: string): boolean {
