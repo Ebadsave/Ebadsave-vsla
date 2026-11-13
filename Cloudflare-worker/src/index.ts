@@ -181,13 +181,12 @@ async function transferKya2000Admin(request: Request, env: Env): Promise<Respons
 }
 
 async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
+async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
   // Each registered group receives its own administrator identity.
-  // The server-side bootstrap secret is required; PINs are hashed with the
-  // server pepper and are never stored or returned in plain text.
-  const suppliedSecret = request.headers.get('x-admin-bootstrap-secret') ?? '';
-  const expectedSecret = env.ADMIN_BOOTSTRAP_SECRET ?? '';
-  if (expectedSecret.length < 32) {
-    return json({ error: 'bootstrap_secret_missing_or_too_short' }, 500);
+  // No bootstrap secret - group is claimed by first admin creation.
+  // PINs are hashed with the server pepper and are never stored or returned in plain text.
+  if (!env.PIN_PEPPER || env.PIN_PEPPER.length < 32) {
+    return json({ error: 'server_pin_pepper_not_configured' }, 500);
   }
   if (!constantTimeSecretEqual(suppliedSecret, expectedSecret)) {
     return json({ error: 'bootstrap_secret_mismatch' }, 401);
