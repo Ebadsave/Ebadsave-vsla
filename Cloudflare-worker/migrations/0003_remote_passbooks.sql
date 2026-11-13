@@ -1,7 +1,5 @@
 PRAGMA foreign_keys = ON;
 
--- Readable, structured passbook summaries.
--- Only the authenticated Worker should access these records.
 CREATE TABLE IF NOT EXISTS passbook_accounts (
   group_id TEXT NOT NULL,
   member_number TEXT NOT NULL,
