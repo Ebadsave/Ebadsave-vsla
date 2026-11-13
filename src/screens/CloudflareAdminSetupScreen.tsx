@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -13,445 +13,187 @@ import {
 } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
-const API =
-  'https://ebadsave-vsla-cloudflare.info-ebadsave.workers.dev';
-
-const GROUP = {
-  groupId: 'kya-2000',
-  groupNumber: 'KYA 2000',
-  memberNumber: 'KYA2000001',
-  memberName: 'Twebaze Edwin',
-};
+const API = 'https://ebadsave-vsla-cloudflare.info-ebadsave.workers.dev';
 
 type ApiResponse = {
   ok?: boolean;
   role?: string;
   accessToken?: string;
+  groupId?: string;
   error?: string;
   message?: string;
   [key: string]: unknown;
 };
 
-/**
- * Reads and validates Cloudflare responses.
- * Displays useful HTTP information when the Worker
- * returns HTML, invalid JSON, or an API error.
- */
-async function responseJson(
-  response: Response
-): Promise<ApiResponse> {
+async function responseJson(response: Response): Promise<ApiResponse> {
   const raw = await response.text();
-
   let data: ApiResponse = {};
-
   try {
     data = raw ? JSON.parse(raw) : {};
   } catch {
-    throw new Error(
-      `Cloudflare returned a non-JSON response.\n\n` +
-      `HTTP status: ${response.status}\n` +
-      `Content-Type: ${
-        response.headers.get('content-type') ?? 'unknown'
-      }\n\n` +
-      `Response: ${raw.slice(0, 500)}`
-    );
+    throw new Error(`Cloudflare returned an invalid response (HTTP ${response.status}).`);
   }
-
   if (!response.ok) {
-    // Turn technical Worker codes into clear messages ordinary group members can understand.
-    const friendlyMessages: Record<string, string> = {
-      group_already_bootstrapped:
-        'This group already has an administrator account. Do not create it again. Please sign in with the existing administrator member number and PIN, or contact Ebadsave support if you cannot sign in.',
-      member_number_already_registered:
-        'This member number is already registered. Please sign in with the existing account or contact Ebadsave support.',
-      bootstrap_secret_mismatch:
-        'The setup password is not correct. Check the ADMIN_BOOTSTRAP_SECRET given by Ebadsave and try again.',
-      bootstrap_secret_missing_or_too_short:
-        'The administrator setup has not been prepared on the server. Please contact Ebadsave support.',
-      server_pin_pepper_not_configured:
-        'The server is not ready to create the administrator account. Please contact Ebadsave support.',
-      invalid_test_admin_details:
-        'The group or administrator details do not match the approved setup. Please check the details or contact Ebadsave support.',
-      unauthorized:
-        'Your login details could not be verified. Please check your member number and PIN.',
-      not_found:
-        'This setup page could not be reached. Please check your internet connection or contact Ebadsave support.',
-      endpoint_not_found:
-        'This setup service address is not correct or the service is not available. Please contact Ebadsave support.',
+    const messages: Record<string, string> = {
+      group_already_bootstrapped: 'This group already has its own administrator. Sign in with that administrator account.',
+      member_number_already_registered: 'This member number already has an account.',
+      bootstrap_secret_mismatch: 'The administrator setup secret is incorrect.',
+      bootstrap_secret_missing_or_too_short: 'Cloudflare administrator setup is not configured.',
+      server_pin_pepper_not_configured: 'Cloudflare security is not configured.',
+      invalid_group_number: 'Enter a valid four-digit KYA group number.',
+      group_number_out_of_range: 'This KYA group number is outside the permitted ranges.',
+      admin_member_number_must_belong_to_group: 'The administrator member number must start with this group number and end with three digits.',
+      invalid_admin_name: 'Enter the administrator’s full name.',
+      invalid_pin: 'PIN must contain 6 to 12 digits.',
     };
-
     const code = typeof data.error === 'string' ? data.error : '';
-    const message = friendlyMessages[code] ||
-      (response.status === 404
-        ? 'The requested setup service was not found. Please contact Ebadsave support.'
-        : response.status === 409
-          ? 'This account or group is already registered. Please do not repeat the setup; contact Ebadsave support for help signing in.'
-          : data.message || 'We could not complete the request. Please try again or contact Ebadsave support.');
-
-    throw new Error(message);
+    throw new Error(messages[code] || data.message || 'Administrator setup failed.');
   }
-
   return data;
 }
 
-/**
- * Sends a request to the Cloudflare Worker.
- */
 async function apiRequest(
   endpoint: string,
   body: Record<string, unknown>,
-  headers: Record<string, string> = {}
+  headers: Record<string, string> = {},
 ): Promise<ApiResponse> {
   let response: Response;
-
   try {
     response = await fetch(`${API}${endpoint}`, {
       method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        ...headers,
-      },
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...headers },
       body: JSON.stringify(body),
     });
-  } catch (error) {
-    throw new Error(
-      `Could not connect to Cloudflare.\n\n` +
-      `${
-        error instanceof Error
-          ? error.message
-          : 'Network connection failed.'
-      }`
-    );
+  } catch {
+    throw new Error('Could not connect to Cloudflare. Check the internet connection.');
   }
-
   return responseJson(response);
 }
 
-export default function CloudflareAdminSetupScreen({
-  navigation,
-}: {
-  navigation: any;
-}) {
+export default function CloudflareAdminSetupScreen({ navigation }: { navigation: any }) {
+  const [groupNumber, setGroupNumber] = useState('');
+  const [adminName, setAdminName] = useState('');
+  const [memberNumber, setMemberNumber] = useState('');
   const [secret, setSecret] = useState('');
   const [pin, setPin] = useState('');
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
   const [complete, setComplete] = useState(false);
 
+  const cleanGroupNumber = groupNumber.trim().toUpperCase().replace(/^KYA\s*/, '');
+  const normalizedMemberNumber = memberNumber.trim().toUpperCase().replace(/\s+/g, '');
+  const groupId = useMemo(() => /^\d{4}$/.test(cleanGroupNumber) ? `kya-${cleanGroupNumber}` : '', [cleanGroupNumber]);
+
   const start = () => {
-    const cleanSecret = secret.trim();
-
-    if (cleanSecret.length < 32) {
-      Alert.alert(
-        'Invalid bootstrap secret',
-        'Enter the exact ADMIN_BOOTSTRAP_SECRET configured in Cloudflare. It must contain at least 32 characters.'
-      );
+    const numeric = Number(cleanGroupNumber);
+    const validRange = (numeric >= 2000 && numeric <= 2009) || (numeric >= 2010 && numeric <= 9090);
+    if (!/^\d{4}$/.test(cleanGroupNumber) || !validRange) {
+      Alert.alert('Check group number', 'Enter a valid KYA number in the permitted range.');
       return;
     }
-
-    if (!/^[0-9]{6,12}$/.test(pin)) {
-      Alert.alert(
-        'Invalid PIN',
-        'Use a PIN containing 6–12 digits.'
-      );
+    if (!adminName.trim() || !new RegExp(`^KYA${cleanGroupNumber}\\d{3}$`).test(normalizedMemberNumber)) {
+      Alert.alert('Check administrator details', 'Enter the administrator name and a member number belonging to this group.');
       return;
     }
-
+    if (secret.trim().length < 32) {
+      Alert.alert('Setup secret required', 'Enter the Cloudflare ADMIN_BOOTSTRAP_SECRET.');
+      return;
+    }
+    if (!/^\d{6,12}$/.test(pin)) {
+      Alert.alert('Invalid PIN', 'PIN must contain 6 to 12 digits.');
+      return;
+    }
     if (pin !== confirm) {
-      Alert.alert(
-        'PIN mismatch',
-        'The PIN entries do not match.'
-      );
+      Alert.alert('PIN mismatch', 'The PIN entries do not match.');
       return;
     }
-
     Alert.alert(
-      'One-time setup',
-      'This permanently claims KYA 2000 in Cloudflare. Continue only if these details are correct.',
+      'Create group administrator',
+      `Create a separate administrator account for KYA ${cleanGroupNumber}? This will not change any other group’s credentials.`,
       [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Create administrator',
-          style: 'destructive',
-          onPress: () => void submit(),
-        },
-      ]
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Create administrator', onPress: () => void submit() },
+      ],
     );
   };
 
   const submit = async () => {
     if (busy || complete) return;
-
     setBusy(true);
-
     try {
-      const cleanSecret = secret.trim();
+      const created = await apiRequest('/v1/auth/bootstrap-admin', {
+        groupNumber: `KYA ${cleanGroupNumber}`,
+        memberNumber: normalizedMemberNumber,
+        memberName: adminName.trim(),
+        pin,
+      }, { 'x-admin-bootstrap-secret': secret.trim() });
 
-      // STEP 1: Create the test administrator.
-      const created = await apiRequest(
-        '/v1/auth/bootstrap-admin',
-        {
-          ...GROUP,
-          pin,
-        },
-        {
-          'x-admin-bootstrap-secret': cleanSecret,
-        }
-      );
-
-      if (
-        created.ok !== true ||
-        created.role !== 'admin'
-      ) {
-        throw new Error(
-          'Cloudflare did not confirm administrator creation. Check the Worker response before retrying.'
-        );
+      if (created.ok !== true || created.role !== 'admin' || created.groupId !== groupId) {
+        throw new Error('Cloudflare did not confirm this group’s administrator account.');
       }
 
-      // STEP 2: Log in using the newly created administrator.
-      let loggedIn: ApiResponse;
-
-      try {
-        loggedIn = await apiRequest(
-          '/v1/auth/login',
-          {
-            memberNumber: GROUP.memberNumber,
-            pin,
-          }
-        );
-      } catch {
-        throw new Error(
-          'The administrator creation was confirmed, but login failed. Do not repeat the one-time bootstrap. The administrator may already exist. Check the Cloudflare records before attempting recovery.'
-        );
+      const loggedIn = await apiRequest('/v1/auth/login', { memberNumber: normalizedMemberNumber, pin });
+      if (loggedIn.ok !== true || typeof loggedIn.accessToken !== 'string' || !loggedIn.accessToken) {
+        throw new Error('Administrator was created, but sign-in was not confirmed. Do not repeat setup; check the account first.');
       }
 
-      if (
-        loggedIn.ok !== true ||
-        typeof loggedIn.accessToken !== 'string' ||
-        loggedIn.accessToken.length === 0
-      ) {
-        throw new Error(
-          'Administrator creation was confirmed, but Cloudflare did not return a valid login token. Do not repeat the one-time bootstrap.'
-        );
-      }
-
-      // STEP 3: Securely store the login token and group ID.
-      await SecureStore.setItemAsync(
-        'ebadsave_cloudflare_access_token',
-        loggedIn.accessToken
-      );
-
-      await SecureStore.setItemAsync(
-        'ebadsave_cloudflare_group_id',
-        GROUP.groupId
-      );
-
-      // STEP 4: Clear sensitive fields from the screen.
-      setSecret('');
-      setPin('');
-      setConfirm('');
-
-      setComplete(true);
-
-      Alert.alert(
-        'Administrator created',
-        'KYA 2000 administrator creation and login succeeded. Your access token has been stored securely.',
-        [
-          {
-            text: 'Continue',
-            onPress: () => navigation.navigate('Welcome'),
-          },
-        ]
-      );
+      await SecureStore.setItemAsync('ebadsave_cloudflare_access_token', loggedIn.accessToken);
+      await SecureStore.setItemAsync('ebadsave_cloudflare_group_id', groupId);
+      setSecret(''); setPin(''); setConfirm(''); setComplete(true);
+      Alert.alert('Administrator ready', `KYA ${cleanGroupNumber} now has its own administrator credentials.`, [
+        { text: 'Continue', onPress: () => navigation.navigate('Welcome') },
+      ]);
     } catch (error) {
-      Alert.alert(
-        'Setup not confirmed',
-        error instanceof Error
-          ? error.message
-          : 'An unexpected setup error occurred.'
-      );
+      Alert.alert('Setup not confirmed', error instanceof Error ? error.message : 'An unexpected setup error occurred.');
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <KeyboardAvoidingView
-      style={s.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <ScrollView
-        contentContainerStyle={s.page}
-        keyboardShouldPersistTaps="handled"
-      >
+    <KeyboardAvoidingView style={s.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView contentContainerStyle={s.page} keyboardShouldPersistTaps="handled">
         <Text style={s.brand}>Ebadsave VSLA</Text>
-        <Text style={s.title}>Cloudflare test administrator</Text>
-        <Text style={s.sub}>One-time secure setup for KYA 2000</Text>
-
+        <Text style={s.title}>Group administrator setup</Text>
+        <Text style={s.sub}>Each group has its own administrator member number and PIN.</Text>
         <View style={s.card}>
-          <Row label="Group number" value="KYA 2000" />
-          <Row label="Group ID" value="kya-2000" />
-          <Row label="Administrator" value="Twebaze Edwin" />
-          <Row label="Member number" value="KYA2000001" />
+          <Text style={s.label}>Group number</Text>
+          <TextInput style={s.input} value={groupNumber} onChangeText={setGroupNumber} placeholder="e.g. 2010 or KYA 2010" autoCapitalize="characters" editable={!busy && !complete} />
+          <Text style={s.preview}>Group ID: {groupId || 'Enter group number'}</Text>
+          <Text style={s.label}>Administrator full name</Text>
+          <TextInput style={s.input} value={adminName} onChangeText={setAdminName} placeholder="Administrator name" editable={!busy && !complete} />
+          <Text style={s.label}>Administrator member number</Text>
+          <TextInput style={s.input} value={memberNumber} onChangeText={setMemberNumber} placeholder="e.g. KYA2010001" autoCapitalize="characters" editable={!busy && !complete} />
         </View>
-
         <Text style={s.label}>Cloudflare ADMIN_BOOTSTRAP_SECRET</Text>
-        <TextInput
-          style={s.input}
-          value={secret}
-          onChangeText={setSecret}
-          secureTextEntry
-          autoCapitalize="none"
-          autoCorrect={false}
-          placeholder="Enter bootstrap secret"
-          editable={!busy && !complete}
-        />
-
+        <TextInput style={s.input} value={secret} onChangeText={setSecret} secureTextEntry autoCapitalize="none" autoCorrect={false} placeholder="Enter setup secret" editable={!busy && !complete} />
         <Text style={s.label}>Create PIN (6–12 digits)</Text>
-        <TextInput
-          style={s.input}
-          value={pin}
-          onChangeText={setPin}
-          secureTextEntry
-          keyboardType="number-pad"
-          maxLength={12}
-          placeholder="New PIN"
-          editable={!busy && !complete}
-        />
-
+        <TextInput style={s.input} value={pin} onChangeText={setPin} secureTextEntry keyboardType="number-pad" maxLength={12} placeholder="New PIN" editable={!busy && !complete} />
         <Text style={s.label}>Confirm PIN</Text>
-        <TextInput
-          style={s.input}
-          value={confirm}
-          onChangeText={setConfirm}
-          secureTextEntry
-          keyboardType="number-pad"
-          maxLength={12}
-          placeholder="Re-enter PIN"
-          editable={!busy && !complete}
-        />
-
-        <View style={s.warning}>
-          <Text style={s.warningText}>
-            Never share your PIN or bootstrap secret.
-            They are sent directly to Cloudflare over HTTPS.
-          </Text>
-        </View>
-
-        <TouchableOpacity
-          style={[s.button, (busy || complete) && s.disabled]}
-          onPress={start}
-          disabled={busy || complete}
-        >
-          {busy ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={s.buttonText}>
-              {complete ? 'Administrator created' : 'Create test administrator'}
-            </Text>
-          )}
+        <TextInput style={s.input} value={confirm} onChangeText={setConfirm} secureTextEntry keyboardType="number-pad" maxLength={12} placeholder="Re-enter PIN" editable={!busy && !complete} />
+        <View style={s.warning}><Text style={s.warningText}>Never share the PIN or setup secret. Each KYA group has a separate administrator account.</Text></View>
+        <TouchableOpacity style={[s.button, (busy || complete) && s.disabled]} onPress={start} disabled={busy || complete}>
+          {busy ? <ActivityIndicator color="#fff" /> : <Text style={s.buttonText}>{complete ? 'Administrator created' : 'Create group administrator'}</Text>}
         </TouchableOpacity>
-
-        <TouchableOpacity
-          style={s.back}
-          onPress={() => navigation.goBack()}
-          disabled={busy}
-        >
-          <Text style={s.backText}>Back</Text>
-        </TouchableOpacity>
+        <TouchableOpacity style={s.back} onPress={() => navigation.goBack()} disabled={busy}><Text style={s.backText}>Back</Text></TouchableOpacity>
       </ScrollView>
     </KeyboardAvoidingView>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={s.row}>
-      <Text style={s.rowLabel}>{label}</Text>
-      <Text style={s.rowValue}>{value}</Text>
-    </View>
   );
 }
 
 const s = StyleSheet.create({
   flex: { flex: 1, backgroundColor: '#f8fafc' },
   page: { flexGrow: 1, padding: 22, justifyContent: 'center' },
-  brand: {
-    color: '#16a34a',
-    fontSize: 25,
-    fontWeight: '800',
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  title: {
-    color: '#0f172a',
-    fontSize: 22,
-    fontWeight: '800',
-    textAlign: 'center',
-  },
-  sub: {
-    color: '#64748b',
-    textAlign: 'center',
-    marginTop: 7,
-    marginBottom: 20,
-  },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  row: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 6,
-    gap: 8,
-  },
-  rowLabel: { color: '#64748b', fontSize: 13, flex: 1 },
-  rowValue: {
-    color: '#0f172a',
-    fontSize: 13,
-    fontWeight: '700',
-    flex: 1,
-    textAlign: 'right',
-  },
-  label: {
-    color: '#334155',
-    fontWeight: '700',
-    marginTop: 12,
-    marginBottom: 6,
-  },
-  input: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 10,
-    padding: 13,
-    color: '#0f172a',
-    fontSize: 16,
-  },
-  warning: {
-    backgroundColor: '#fff7ed',
-    borderColor: '#fed7aa',
-    borderWidth: 1,
-    borderRadius: 10,
-    padding: 12,
-    marginTop: 17,
-  },
+  brand: { color: '#16a34a', fontSize: 25, fontWeight: '800', textAlign: 'center', marginBottom: 16 },
+  title: { color: '#0f172a', fontSize: 22, fontWeight: '800', textAlign: 'center' },
+  sub: { color: '#64748b', textAlign: 'center', marginTop: 7, marginBottom: 20 },
+  card: { backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 14, borderWidth: 1, borderColor: '#e2e8f0' },
+  label: { color: '#334155', fontWeight: '700', marginTop: 12, marginBottom: 6 },
+  input: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 10, padding: 13, color: '#0f172a', fontSize: 16 },
+  preview: { color: '#64748b', fontSize: 12, marginTop: 6 },
+  warning: { backgroundColor: '#fff7ed', borderColor: '#fed7aa', borderWidth: 1, borderRadius: 10, padding: 12, marginTop: 17 },
   warningText: { color: '#9a3412', fontSize: 12, lineHeight: 18 },
-  button: {
-    backgroundColor: '#16a34a',
-    borderRadius: 10,
-    padding: 16,
-    alignItems: 'center',
-    marginTop: 19,
-  },
+  button: { backgroundColor: '#16a34a', borderRadius: 10, padding: 16, alignItems: 'center', marginTop: 19 },
   disabled: { opacity: 0.55 },
   buttonText: { color: '#fff', fontWeight: '800' },
   back: { padding: 14, alignItems: 'center' },
