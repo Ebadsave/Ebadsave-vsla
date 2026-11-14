@@ -220,8 +220,29 @@ async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
     return json({ error: 'invalid_pin' }, 400);
   }
 
-  // KYA 2000 remains claimed by its existing administrator. Other groups
-  // can claim only their own unique group ID and group number.
+  // Ensure the per-group administrator registry exists before querying it.
+  // Without this table, D1 throws before the setup handler can return a useful
+  // response, which appears in the app as "Administrator setup unavailable".
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS group_admin_bootstrap_claims (
+      group_id TEXT PRIMARY KEY,
+      group_number TEXT NOT NULL UNIQUE,
+      admin_user_id TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+  ).run();
+
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS group_admin_profiles (
+      user_id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL,
+      member_name TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(group_id, user_id)
+    )`,
+  ).run();
+
+  // Each group can claim only its own unique group ID and group number.
   const existingGroup = await env.DB.prepare(
     `SELECT admin_user_id FROM group_admin_bootstrap_claims
      WHERE group_id = ? OR group_number = ? LIMIT 1`,
@@ -237,15 +258,6 @@ async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
   const verifier = await createPinVerifier(body.pin, env.PIN_PEPPER);
   const userId = crypto.randomUUID();
   try {
-    await env.DB.prepare(
-      `CREATE TABLE IF NOT EXISTS group_admin_profiles (
-        user_id TEXT PRIMARY KEY,
-        group_id TEXT NOT NULL,
-        member_name TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(group_id, user_id)
-      )`,
-    ).run();
     await env.DB.prepare(
       `INSERT INTO group_admin_bootstrap_claims (group_id, group_number, admin_user_id)
        VALUES (?, ?, ?)`,
