@@ -66,7 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           RESPONSE="$(curl --fail --silent --show-error \
-            https://ebadsave-vsla.info-ebadsave.workers.dev/health)"
+            https://ebadsave-vsla-cloudflare.info-ebadsave.workers.dev/health)"
           echo "$RESPONSE"
           node -e '
             const data = JSON.parse(process.argv[1]);
