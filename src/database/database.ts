@@ -3186,11 +3186,9 @@ export async function createGroup(
   country: string,
   isTestGroup: boolean = false,
 ): Promise<number> {
-  if (!isTestGroup) {
-    const registered = await registerGroupLocally({ groupName, district, country });
-    return registered.id;
-  }
-
+  // Allocate and create both test and production groups directly here.
+  // Calling registerGroupLocally from this function would recurse because
+  // registerGroupLocally calls createGroup again.
   const db = await getDatabase();
 
   const cleanName =
