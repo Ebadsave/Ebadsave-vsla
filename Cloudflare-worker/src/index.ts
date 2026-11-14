@@ -91,95 +91,6 @@ async function audit(env: Env, actorId: string, groupId: string, action: string,
   ).bind(actorId, groupId, action, result, backupId ?? null).run();
 }
 
-/**
- * One-time, tightly scoped KYA 2000 administrator handover.
- * It requires the server-side bootstrap secret, verifies the existing member
- * identity, provisions/updates that member's authentication record, and
- * demotes the previous administrator in one D1 batch. No passbook or
- * transaction rows are modified.
- */
-async function transferKya2000Admin(request: Request, env: Env): Promise<Response> {
-  // One-time, group-scoped handover. The group owner has confirmed in the
-  // local app that KYA2000217 is Twebaze Edwin's existing membership. D1 has
-  // not yet received member/passbook sync, so this operation changes auth only.
-  const suppliedSecret = request.headers.get('x-admin-bootstrap-secret') ?? '';
-  const expectedSecret = env.ADMIN_BOOTSTRAP_SECRET ?? '';
-  if (expectedSecret.length < 32) return json({ error: 'bootstrap_secret_missing_or_too_short' }, 500);
-  if (!constantTimeSecretEqual(suppliedSecret, expectedSecret)) return json({ error: 'bootstrap_secret_mismatch' }, 401);
-  if (!env.PIN_PEPPER || env.PIN_PEPPER.length < 32) return json({ error: 'server_pin_pepper_not_configured' }, 500);
-
-  const body = await readJson(request);
-  if (!body || body.groupId !== 'kya-2000' || body.groupNumber !== 'KYA 2000' ||
-      body.previousAdminMemberNumber !== 'KYA2000001' ||
-      body.newAdminMemberNumber !== 'KYA2000217' || body.newAdminName !== 'Twebaze Edwin' ||
-      typeof body.newPin !== 'string' || !/^\d{6,12}$/.test(body.newPin)) {
-    return json({ error: 'invalid_kya2000_admin_transfer_details' }, 400);
-  }
-
-  // The existing active admin record is the D1-side proof of this group.
-  // Do not require D1 membership/passbook rows and do not fabricate them.
-  const previousAdmin = await env.DB.prepare(
-    `SELECT user_id AS userId FROM auth_users
-     WHERE group_id = 'kya-2000'
-       AND UPPER(REPLACE(member_number, ' ', '')) = 'KYA2000001'
-       AND role = 'admin' AND status = 'active'
-     LIMIT 1`,
-  ).first<{ userId: string }>();
-  if (!previousAdmin) return json({ error: 'previous_admin_account_not_found_or_not_active' }, 409);
-
-  const existingTarget = await env.DB.prepare(
-    `SELECT user_id AS userId FROM auth_users
-     WHERE group_id = 'kya-2000'
-       AND UPPER(REPLACE(member_number, ' ', '')) = 'KYA2000217'
-     LIMIT 1`,
-  ).first<{ userId: string }>();
-  const targetUserId = existingTarget?.userId ?? crypto.randomUUID();
-  const verifier = await createPinVerifier(body.newPin, env.PIN_PEPPER);
-
-  try {
-    // Atomic D1 batch. Only auth_users and auth_events are modified.
-    await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO auth_users
-         (user_id, group_id, member_number, role, pin_hash, pin_salt,
-          failed_attempts, locked_until, status)
-         VALUES (?, 'kya-2000', 'KYA2000217', 'admin', ?, ?, 0, NULL, 'active')
-         ON CONFLICT(group_id, member_number) DO UPDATE SET
-           role = 'admin', pin_hash = excluded.pin_hash,
-           pin_salt = excluded.pin_salt, failed_attempts = 0,
-           locked_until = NULL, status = 'active', updated_at = datetime('now')`,
-      ).bind(targetUserId, verifier.pinHash, verifier.pinSalt),
-      env.DB.prepare(
-        `UPDATE auth_users
-         SET role = 'member', failed_attempts = 0, locked_until = NULL,
-             updated_at = datetime('now')
-         WHERE user_id = ? AND group_id = 'kya-2000'
-           AND UPPER(REPLACE(member_number, ' ', '')) = 'KYA2000001'`,
-      ).bind(previousAdmin.userId),
-      env.DB.prepare(
-        `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
-         VALUES (?, 'kya-2000', 'admin_transfer', 'success', datetime('now'))`,
-      ).bind(targetUserId),
-      env.DB.prepare(
-        `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
-         VALUES (?, 'kya-2000', 'admin_demoted', 'success', datetime('now'))`,
-      ).bind(previousAdmin.userId),
-    ]);
-  } catch {
-    return json({ error: 'admin_transfer_failed_no_success_confirmation' }, 500);
-  }
-
-  return json({
-    ok: true,
-    groupId: 'kya-2000',
-    newAdmin: { name: 'Twebaze Edwin', memberNumber: 'KYA2000217', role: 'admin' },
-    previousAdmin: { memberNumber: 'KYA2000001', role: 'member' },
-    pinSet: true,
-    membershipRecordsChanged: false,
-    financialRecordsChanged: false,
-  }, 200);
-}
-
 async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
   // Backend-only bootstrap: the mobile app never receives or sends this secret.
   // Each group can claim only its own first administrator; no global administrator exists.
@@ -249,40 +160,72 @@ async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
   ).bind(groupId, `KYA ${groupNumber}`).first<{ admin_user_id: string }>();
   if (existingGroup) return json({ error: 'group_already_bootstrapped' }, 409);
 
-  const existingMember = await env.DB.prepare(
-    `SELECT user_id FROM auth_users
-     WHERE group_id = ? AND UPPER(REPLACE(member_number, ' ', '')) = ? LIMIT 1`,
-  ).bind(groupId, memberNumber).first<{ user_id: string }>();
-  if (existingMember) return json({ error: 'member_number_already_registered' }, 409);
-
-  const verifier = await createPinVerifier(body.pin, env.PIN_PEPPER);
-  const userId = crypto.randomUUID();
-  try {
-    await env.DB.prepare(
-      `INSERT INTO group_admin_bootstrap_claims (group_id, group_number, admin_user_id)
-       VALUES (?, ?, ?)`,
-    ).bind(groupId, `KYA ${groupNumber}`, userId).run();
-  } catch {
-    return json({ error: 'group_already_bootstrapped' }, 409);
+  // Prove that this person is already a member of this group using the
+  // group's synced passbook record. The server-side bootstrap secret is never
+  // sent by the app, so membership data is the required group-scoped proof.
+  const membership = await env.DB.prepare(
+    `SELECT member_name AS memberName FROM passbook_accounts
+     WHERE group_id = ?
+       AND UPPER(REPLACE(member_number, ' ', '')) = ?
+     LIMIT 1`,
+  ).bind(groupId, memberNumber).first<{ memberName: string }>();
+  if (!membership) return json({ error: 'admin_membership_not_found_in_group' }, 403);
+  if (membership.memberName.trim().toLowerCase() !== body.memberName.trim().toLowerCase()) {
+    return json({ error: 'admin_name_does_not_match_group_membership' }, 403);
   }
 
-  try {
-    await env.DB.prepare(
+  // If this member already has a login in this same group, promote that
+  // account instead of creating a duplicate. Never move an account between groups.
+  const existingMember = await env.DB.prepare(
+    `SELECT user_id AS userId, group_id AS groupId FROM auth_users
+     WHERE UPPER(REPLACE(member_number, ' ', '')) = ? LIMIT 1`,
+  ).bind(memberNumber).first<{ userId: string; groupId: string }>();
+  if (existingMember && existingMember.groupId !== groupId) {
+    return json({ error: 'member_number_belongs_to_another_group' }, 409);
+  }
+
+  const verifier = await createPinVerifier(body.pin, env.PIN_PEPPER);
+  const userId = existingMember?.userId ?? crypto.randomUUID();
+  const statements: D1PreparedStatement[] = [
+    env.DB.prepare(
+      `INSERT INTO group_admin_bootstrap_claims (group_id, group_number, admin_user_id)
+       VALUES (?, ?, ?)`,
+    ).bind(groupId, `KYA ${groupNumber}`, userId),
+  ];
+
+  if (existingMember) {
+    statements.push(env.DB.prepare(
+      `UPDATE auth_users
+       SET role = 'admin', pin_hash = ?, pin_salt = ?, status = 'active',
+           failed_attempts = 0, locked_until = NULL, updated_at = datetime('now')
+       WHERE user_id = ? AND group_id = ?`,
+    ).bind(verifier.pinHash, verifier.pinSalt, userId, groupId));
+  } else {
+    statements.push(env.DB.prepare(
       `INSERT INTO auth_users
        (user_id, group_id, member_number, role, pin_hash, pin_salt, status)
        VALUES (?, ?, ?, 'admin', ?, ?, 'active')`,
-    ).bind(userId, groupId, memberNumber, verifier.pinHash, verifier.pinSalt).run();
-  } catch {
-    await env.DB.prepare(
-      `DELETE FROM group_admin_bootstrap_claims WHERE group_id = ? AND admin_user_id = ?`,
-    ).bind(groupId, userId).run();
-    return json({ error: 'member_number_already_registered' }, 409);
+    ).bind(userId, groupId, memberNumber, verifier.pinHash, verifier.pinSalt));
   }
 
-  await env.DB.prepare(
+  statements.push(env.DB.prepare(
     `INSERT INTO group_admin_profiles (user_id, group_id, member_name)
-     VALUES (?, ?, ?)`,
-  ).bind(userId, groupId, body.memberName.trim()).run();
+     VALUES (?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET
+       group_id = excluded.group_id,
+       member_name = excluded.member_name`,
+  ).bind(userId, groupId, body.memberName.trim()));
+  statements.push(env.DB.prepare(
+    `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
+     VALUES (?, ?, 'group_admin_setup', 'success', datetime('now'))`,
+  ).bind(userId, groupId));
+
+  try {
+    // D1 batch keeps the group claim, admin role/PIN and profile in one atomic unit.
+    await env.DB.batch(statements);
+  } catch {
+    return json({ error: 'group_already_bootstrapped_or_admin_setup_conflict' }, 409);
+  }
 
   await env.DB.prepare(
     `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
@@ -296,17 +239,6 @@ async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
     groupNumber: `KYA ${groupNumber}`,
     memberNumber,
   }, 201);
-}
-
-function constantTimeSecretEqual(candidate: string, expected: string): boolean {
-  const encoder = new TextEncoder();
-  const a = encoder.encode(candidate);
-  const b = encoder.encode(expected);
-  // Include length difference and iterate over the longer input to avoid early exits.
-  let difference = a.length ^ b.length;
-  const length = Math.max(a.length, b.length);
-  for (let i = 0; i < length; i++) difference |= (a[i] ?? 0) ^ (b[i] ?? 0);
-  return difference === 0;
 }
 
 async function login(request: Request, env: Env): Promise<Response> {
