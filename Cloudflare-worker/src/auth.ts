@@ -1,4 +1,7 @@
-const PIN_ITERATIONS = 310_000;
+// Cloudflare Workers Web Crypto supports a maximum of 100,000
+// PBKDF2 iterations in this runtime.
+const PIN_ITERATIONS = 100_000;
+
 const SALT_BYTES = 16;
 const HASH_BYTES = 32;
 
