@@ -70,9 +70,16 @@ jobs:
           echo "$RESPONSE"
           node -e '
             const data = JSON.parse(process.argv[1]);
-            if (data.ok !== true || data.service !== "ebadsave-vsla-cloudflare") {
-              console.error("ERROR: Health endpoint did not confirm the expected Worker.");
+            const required = [
+              "databaseConnected",
+              "bootstrapSecretConfigured",
+              "pinPepperConfigured",
+              "jwtSecretConfigured"
+            ];
+            const failed = required.filter((key) => data[key] !== true);
+            if (data.ok !== true || data.service !== "ebadsave-vsla-cloudflare" || failed.length) {
+              console.error("ERROR: Worker readiness check failed:", failed.join(", ") || "service identity");
               process.exit(1);
             }
-            console.log("Worker health endpoint responded successfully.");
+            console.log("Worker, D1, and server-side secret bindings are ready.");
           ' "$RESPONSE"
