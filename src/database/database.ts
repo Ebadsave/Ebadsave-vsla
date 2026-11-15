@@ -2865,6 +2865,19 @@ export async function createGroupDatabaseBackup(groupId: number): Promise<string
       continue;
     }
 
+    // loan_repayment_schedule has no group_id or member_id column. Its
+    // ownership is inherited through loan_id -> loan_records.group_id.
+    if (table === 'loan_repayment_schedule') {
+      tables[table] = await db.getAllAsync(
+        `SELECT lrs.*
+         FROM loan_repayment_schedule lrs
+         INNER JOIN loan_records lr ON lr.id = lrs.loan_id
+         WHERE lr.group_id = ?`,
+        groupId,
+      );
+      continue;
+    }
+
     if (groupTables.has(table) && columnNames.has('group_id')) {
       tables[table] = await db.getAllAsync(`SELECT * FROM "${table}" WHERE group_id = ?`, groupId);
       continue;
@@ -2991,6 +3004,9 @@ export async function restoreGroupDatabaseBackup(
   const backupMeetingIds = new Set(
     (parsed.tables.group_meetings as Record<string, unknown>[]).map((meeting) => Number(meeting.id)),
   );
+  const backupLoanIds = new Set(
+    (parsed.tables.loan_records as Record<string, unknown>[]).map((loan) => Number(loan.id)),
+  );
   const memberOwnedTables = new Set([
     'deleted_member_numbers', 'member_next_of_kin', 'next_of_kin_change_history',
     'next_of_kin_benefits', 'member_credentials', 'member_auth_attempts',
@@ -3005,6 +3021,9 @@ export async function restoreGroupDatabaseBackup(
     for (const row of rows) {
       if (table === 'meeting_closures' && !backupMeetingIds.has(Number(row.meeting_id))) {
         throw new Error('Backup table meeting_closures contains a closure for a meeting outside this group. No local data was changed.');
+      }
+      if (table === 'loan_repayment_schedule' && !backupLoanIds.has(Number(row.loan_id))) {
+        throw new Error('Backup table loan_repayment_schedule contains a repayment schedule for a loan outside this group. No local data was changed.');
       }
       if (groupOwnedTables.has(table) && names.has('group_id') && Number(row.group_id) !== groupId) {
         throw new Error(`Backup table ${table} contains a row for another group. No local data was changed.`);
