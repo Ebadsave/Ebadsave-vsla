@@ -47,15 +47,44 @@ type JwtClaims = {
   sub: string; groupId: string; role: JwtRole; exp: number; iat: number; jti: string;
 };
 
-const json = (data: unknown, status = 200): Response => new Response(JSON.stringify(data), {
-  status,
-  headers: {
-    'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store',
-    'x-content-type-options': 'nosniff',
-    'vary': 'Origin',
-  },
-});
+const ERROR_MESSAGES: Record<string, string> = {
+  group_already_bootstrapped: 'This group already has an administrator.',
+  member_number_already_registered: 'This member number already has an account.',
+  server_bootstrap_secret_not_configured: 'The Worker bootstrap secret is not configured.',
+  server_pin_pepper_not_configured: 'The Worker PIN security setting is not configured.',
+  invalid_group_number: 'The group number must contain four digits.',
+  group_number_out_of_range: 'The group number is outside the permitted range.',
+  admin_member_number_must_belong_to_group: 'The administrator member number does not belong to this group.',
+  invalid_admin_name: 'Enter a valid administrator name.',
+  invalid_pin: 'The PIN must contain 6 to 12 digits.',
+  group_admin_name_member_number_pin_and_confirmation_required: 'Required administrator setup fields are missing.',
+  pin_confirmation_mismatch: 'The PIN entries do not match.',
+  d1_operation_failed: 'A database operation failed. Use the request ID when checking Worker logs.',
+  worker_unhandled_error: 'The Worker encountered an unexpected error. Use the request ID when checking Worker logs.',
+};
+
+const json = (data: unknown, status = 200): Response => {
+  let payload = data;
+  if (isRecord(data) && typeof data.error === 'string') {
+    const code = data.error;
+    payload = {
+      ...data,
+      ok: false,
+      code,
+      httpStatus: status,
+      message: typeof data.message === 'string' ? data.message : (ERROR_MESSAGES[code] ?? code.replace(/_/g, ' ')),
+    };
+  }
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      'vary': 'Origin',
+    },
+  });
+};
 
 function cors(response: Response, request: Request): Response {
   const headers = new Headers(response.headers);
@@ -64,6 +93,8 @@ function cors(response: Response, request: Request): Response {
   if (origin) headers.set('access-control-allow-origin', origin);
   headers.set('access-control-allow-methods', 'GET,POST,OPTIONS');
   headers.set('access-control-allow-headers', 'authorization,content-type,x-backup-id,x-backup-encrypted,x-group-id,x-group-number');
+  headers.set('access-control-expose-headers', 'x-request-id');
+  if (!headers.has('x-request-id')) headers.set('x-request-id', crypto.randomUUID());
   headers.set('access-control-max-age', '86400');
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
@@ -168,37 +199,40 @@ async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
 
   const verifier = await createPinVerifier(body.pin, env.PIN_PEPPER);
   const userId = crypto.randomUUID();
+  // D1 batch runs these statements as one transaction. A failed profile/event
+  // insert therefore cannot leave a claimed group or orphaned auth account.
   try {
-    await env.DB.prepare(
-      `INSERT INTO group_admin_bootstrap_claims (group_id, group_number, admin_user_id)
-       VALUES (?, ?, ?)`,
-    ).bind(groupId, `KYA ${groupNumber}`, userId).run();
-  } catch {
-    return json({ error: 'group_already_bootstrapped' }, 409);
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO group_admin_bootstrap_claims (group_id, group_number, admin_user_id)
+         VALUES (?, ?, ?)`,
+      ).bind(groupId, `KYA ${groupNumber}`, userId),
+      env.DB.prepare(
+        `INSERT INTO auth_users
+         (user_id, group_id, member_number, role, pin_hash, pin_salt, status)
+         VALUES (?, ?, ?, 'admin', ?, ?, 'active')`,
+      ).bind(userId, groupId, memberNumber, verifier.pinHash, verifier.pinSalt),
+      env.DB.prepare(
+        `INSERT INTO group_admin_profiles (user_id, group_id, member_name)
+         VALUES (?, ?, ?)`,
+      ).bind(userId, groupId, body.memberName.trim()),
+      env.DB.prepare(
+        `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
+         VALUES (?, ?, 'group_admin_setup', 'success', datetime('now'))`,
+      ).bind(userId, groupId),
+    ]);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (/unique constraint failed.*group_admin_bootstrap_claims/i.test(detail)) {
+      return json({ error: 'group_already_bootstrapped' }, 409);
+    }
+    if (/unique constraint failed.*auth_users/i.test(detail)) {
+      return json({ error: 'member_number_already_registered' }, 409);
+    }
+    // Let the outer request handler log the technical detail and return the
+    // shared WORKER_UNHANDLED_ERROR code plus a request ID. Do not hide D1 errors.
+    throw error;
   }
-
-  try {
-    await env.DB.prepare(
-      `INSERT INTO auth_users
-       (user_id, group_id, member_number, role, pin_hash, pin_salt, status)
-       VALUES (?, ?, ?, 'admin', ?, ?, 'active')`,
-    ).bind(userId, groupId, memberNumber, verifier.pinHash, verifier.pinSalt).run();
-  } catch {
-    await env.DB.prepare(
-      `DELETE FROM group_admin_bootstrap_claims WHERE group_id = ? AND admin_user_id = ?`,
-    ).bind(groupId, userId).run();
-    return json({ error: 'member_number_already_registered' }, 409);
-  }
-
-  await env.DB.prepare(
-    `INSERT INTO group_admin_profiles (user_id, group_id, member_name)
-     VALUES (?, ?, ?)`,
-  ).bind(userId, groupId, body.memberName.trim()).run();
-
-  await env.DB.prepare(
-    `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
-     VALUES (?, ?, 'group_admin_setup', 'success', datetime('now'))`,
-  ).bind(userId, groupId).run();
 
   return json({
     ok: true,
@@ -933,6 +967,8 @@ async function createAuthUser(request: Request, env: Env, claims: JwtClaims): Pr
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const requestId = crypto.randomUUID();
+    try {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return cors(new Response(null, { status: 204 }), request);
 
@@ -1115,5 +1151,22 @@ export default {
     }
 
     return cors(json({ error: 'not_found' }, 404), request);
+    } catch (error) {
+      // Log only the request ID and technical error; never log request bodies or PINs.
+      console.error('Worker request failed', {
+        requestId,
+        path: new URL(request.url).pathname,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      const failure = json({
+        error: 'worker_unhandled_error',
+        code: 'WORKER_UNHANDLED_ERROR',
+        message: ERROR_MESSAGES.worker_unhandled_error,
+        requestId,
+      }, 500);
+      const headers = new Headers(failure.headers);
+      headers.set('x-request-id', requestId);
+      return cors(new Response(failure.body, { status: failure.status, headers }), request);
+    }
   },
 };
