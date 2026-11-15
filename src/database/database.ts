@@ -2852,6 +2852,19 @@ export async function createGroupDatabaseBackup(groupId: number): Promise<string
       continue;
     }
 
+    // meeting_closures has no group_id or member_id column. Its ownership is
+    // inherited through meeting_id -> group_meetings.group_id.
+    if (table === 'meeting_closures') {
+      tables[table] = await db.getAllAsync(
+        `SELECT mc.*
+         FROM meeting_closures mc
+         INNER JOIN group_meetings gm ON gm.id = mc.meeting_id
+         WHERE gm.group_id = ?`,
+        groupId,
+      );
+      continue;
+    }
+
     if (groupTables.has(table) && columnNames.has('group_id')) {
       tables[table] = await db.getAllAsync(`SELECT * FROM "${table}" WHERE group_id = ?`, groupId);
       continue;
@@ -2975,6 +2988,9 @@ export async function restoreGroupDatabaseBackup(
     'member_opening_balances', 'onboarding_balance_audit', 'historical_transaction_imports',
     'historical_extra_entries', 'historical_member_loan_balances',
   ]);
+  const backupMeetingIds = new Set(
+    (parsed.tables.group_meetings as Record<string, unknown>[]).map((meeting) => Number(meeting.id)),
+  );
   const memberOwnedTables = new Set([
     'deleted_member_numbers', 'member_next_of_kin', 'next_of_kin_change_history',
     'next_of_kin_benefits', 'member_credentials', 'member_auth_attempts',
@@ -2987,6 +3003,9 @@ export async function restoreGroupDatabaseBackup(
     const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info("${table}")`);
     const names = new Set(columns.map((column) => column.name));
     for (const row of rows) {
+      if (table === 'meeting_closures' && !backupMeetingIds.has(Number(row.meeting_id))) {
+        throw new Error('Backup table meeting_closures contains a closure for a meeting outside this group. No local data was changed.');
+      }
       if (groupOwnedTables.has(table) && names.has('group_id') && Number(row.group_id) !== groupId) {
         throw new Error(`Backup table ${table} contains a row for another group. No local data was changed.`);
       }
@@ -3186,9 +3205,11 @@ export async function createGroup(
   country: string,
   isTestGroup: boolean = false,
 ): Promise<number> {
-  // Allocate and create both test and production groups directly here.
-  // Calling registerGroupLocally from this function would recurse because
-  // registerGroupLocally calls createGroup again.
+  if (!isTestGroup) {
+    const registered = await registerGroupLocally({ groupName, district, country });
+    return registered.id;
+  }
+
   const db = await getDatabase();
 
   const cleanName =
