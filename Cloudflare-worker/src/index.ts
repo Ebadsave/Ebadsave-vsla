@@ -160,72 +160,40 @@ async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
   ).bind(groupId, `KYA ${groupNumber}`).first<{ admin_user_id: string }>();
   if (existingGroup) return json({ error: 'group_already_bootstrapped' }, 409);
 
-  // Prove that this person is already a member of this group using the
-  // group's synced passbook record. The server-side bootstrap secret is never
-  // sent by the app, so membership data is the required group-scoped proof.
-  const membership = await env.DB.prepare(
-    `SELECT member_name AS memberName FROM passbook_accounts
-     WHERE group_id = ?
-       AND UPPER(REPLACE(member_number, ' ', '')) = ?
-     LIMIT 1`,
-  ).bind(groupId, memberNumber).first<{ memberName: string }>();
-  if (!membership) return json({ error: 'admin_membership_not_found_in_group' }, 403);
-  if (membership.memberName.trim().toLowerCase() !== body.memberName.trim().toLowerCase()) {
-    return json({ error: 'admin_name_does_not_match_group_membership' }, 403);
-  }
-
-  // If this member already has a login in this same group, promote that
-  // account instead of creating a duplicate. Never move an account between groups.
   const existingMember = await env.DB.prepare(
-    `SELECT user_id AS userId, group_id AS groupId FROM auth_users
-     WHERE UPPER(REPLACE(member_number, ' ', '')) = ? LIMIT 1`,
-  ).bind(memberNumber).first<{ userId: string; groupId: string }>();
-  if (existingMember && existingMember.groupId !== groupId) {
-    return json({ error: 'member_number_belongs_to_another_group' }, 409);
-  }
+    `SELECT user_id FROM auth_users
+     WHERE group_id = ? AND UPPER(REPLACE(member_number, ' ', '')) = ? LIMIT 1`,
+  ).bind(groupId, memberNumber).first<{ user_id: string }>();
+  if (existingMember) return json({ error: 'member_number_already_registered' }, 409);
 
   const verifier = await createPinVerifier(body.pin, env.PIN_PEPPER);
-  const userId = existingMember?.userId ?? crypto.randomUUID();
-  const statements: D1PreparedStatement[] = [
-    env.DB.prepare(
+  const userId = crypto.randomUUID();
+  try {
+    await env.DB.prepare(
       `INSERT INTO group_admin_bootstrap_claims (group_id, group_number, admin_user_id)
        VALUES (?, ?, ?)`,
-    ).bind(groupId, `KYA ${groupNumber}`, userId),
-  ];
+    ).bind(groupId, `KYA ${groupNumber}`, userId).run();
+  } catch {
+    return json({ error: 'group_already_bootstrapped' }, 409);
+  }
 
-  if (existingMember) {
-    statements.push(env.DB.prepare(
-      `UPDATE auth_users
-       SET role = 'admin', pin_hash = ?, pin_salt = ?, status = 'active',
-           failed_attempts = 0, locked_until = NULL, updated_at = datetime('now')
-       WHERE user_id = ? AND group_id = ?`,
-    ).bind(verifier.pinHash, verifier.pinSalt, userId, groupId));
-  } else {
-    statements.push(env.DB.prepare(
+  try {
+    await env.DB.prepare(
       `INSERT INTO auth_users
        (user_id, group_id, member_number, role, pin_hash, pin_salt, status)
        VALUES (?, ?, ?, 'admin', ?, ?, 'active')`,
-    ).bind(userId, groupId, memberNumber, verifier.pinHash, verifier.pinSalt));
-  }
-
-  statements.push(env.DB.prepare(
-    `INSERT INTO group_admin_profiles (user_id, group_id, member_name)
-     VALUES (?, ?, ?)
-     ON CONFLICT(user_id) DO UPDATE SET
-       group_id = excluded.group_id,
-       member_name = excluded.member_name`,
-  ).bind(userId, groupId, body.memberName.trim()));
-  statements.push(env.DB.prepare(
-    `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
-     VALUES (?, ?, 'group_admin_setup', 'success', datetime('now'))`,
-  ).bind(userId, groupId));
-
-  try {
-    // D1 batch keeps the group claim, admin role/PIN and profile in one atomic unit.
-    await env.DB.batch(statements);
+    ).bind(userId, groupId, memberNumber, verifier.pinHash, verifier.pinSalt).run();
   } catch {
-    return json({ error: 'group_already_bootstrapped_or_admin_setup_conflict' }, 409);
+    await env.DB.prepare(
+      `DELETE FROM group_admin_bootstrap_claims WHERE group_id = ? AND admin_user_id = ?`,
+    ).bind(groupId, userId).run();
+    return json({ error: 'member_number_already_registered' }, 409);
   }
+
+  await env.DB.prepare(
+    `INSERT INTO group_admin_profiles (user_id, group_id, member_name)
+     VALUES (?, ?, ?)`,
+  ).bind(userId, groupId, body.memberName.trim()).run();
 
   await env.DB.prepare(
     `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
@@ -239,6 +207,17 @@ async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
     groupNumber: `KYA ${groupNumber}`,
     memberNumber,
   }, 201);
+}
+
+function constantTimeSecretEqual(candidate: string, expected: string): boolean {
+  const encoder = new TextEncoder();
+  const a = encoder.encode(candidate);
+  const b = encoder.encode(expected);
+  // Include length difference and iterate over the longer input to avoid early exits.
+  let difference = a.length ^ b.length;
+  const length = Math.max(a.length, b.length);
+  for (let i = 0; i < length; i++) difference |= (a[i] ?? 0) ^ (b[i] ?? 0);
+  return difference === 0;
 }
 
 async function login(request: Request, env: Env): Promise<Response> {
@@ -959,19 +938,34 @@ export default {
 
     let response: Response;
     if (url.pathname === '/health' && request.method === 'GET') {
+      let databaseConnected = false;
+      try {
+        // A real D1 round-trip: the previous health endpoint never touched D1,
+        // so ok:true did not prove that the database binding was working.
+        const probe = await env.DB.prepare('SELECT 1 AS connected').first<{ connected: number }>();
+        databaseConnected = probe?.connected === 1;
+      } catch {
+        databaseConnected = false;
+      }
+
       response = json({
-  ok: true,
-  service: 'ebadsave-vsla-cloudflare',
-  stage: 'authentication-and-passbooks',
-  bootstrapSecretConfigured: Boolean(
-    env.ADMIN_BOOTSTRAP_SECRET &&
-    env.ADMIN_BOOTSTRAP_SECRET.length >= 32
-  ),
-  pinPepperConfigured: Boolean(
-    env.PIN_PEPPER &&
-    env.PIN_PEPPER.length >= 32
-  ),
-});
+        ok: true,
+        service: 'ebadsave-vsla-cloudflare',
+        stage: 'authentication-and-passbooks',
+        databaseConnected,
+        bootstrapSecretConfigured: Boolean(
+          env.ADMIN_BOOTSTRAP_SECRET &&
+          env.ADMIN_BOOTSTRAP_SECRET.length >= 32
+        ),
+        pinPepperConfigured: Boolean(
+          env.PIN_PEPPER &&
+          env.PIN_PEPPER.length >= 32
+        ),
+        jwtSecretConfigured: Boolean(
+          env.JWT_HS256_SECRET &&
+          env.JWT_HS256_SECRET.length >= 32
+        ),
+      }, databaseConnected ? 200 : 503);
       return cors(response, request);
     }
 
@@ -984,6 +978,12 @@ export default {
     }
     
     if (url.pathname === '/v1/auth/admin/setup' && request.method === 'POST') {
+      response = await bootstrapAdmin(request, env);
+      return cors(response, request);
+    }
+
+    // Compatibility alias for older app builds; new builds use /admin/setup.
+    if (url.pathname === '/v1/auth/bootstrap-admin' && request.method === 'POST') {
       response = await bootstrapAdmin(request, env);
       return cors(response, request);
     }
