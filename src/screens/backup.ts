@@ -341,16 +341,16 @@ export async function signInCloudflareBackupAdmin(
   memberNumber: string,
   pin: string,
 ): Promise<void> {
-  const normalizedName = memberName.trim().replace(/\\s+/g, ' ');
-  const normalizedMemberNumber = memberNumber.trim().toUpperCase().replace(/\\s+/g, '');
+  const normalizedName = memberName.trim().replace(/\s+/g, ' ');
+  const normalizedMemberNumber = memberNumber.trim().toUpperCase().replace(/\s+/g, '');
 
   if (!normalizedName) {
     throw new Error('Enter the administrator full name.');
   }
-  if (!/^KYA\\d{7}$/.test(normalizedMemberNumber)) {
+  if (!/^KYA\d{7}$/.test(normalizedMemberNumber)) {
     throw new Error('Enter a valid administrator member number, for example KYA2010001.');
   }
-  if (!/^\\d{6,12}$/.test(pin)) {
+  if (!/^\d{6,12}$/.test(pin)) {
     throw new Error('Administrator PIN must contain 6–12 digits.');
   }
 
