@@ -48,8 +48,10 @@ const [groupNumberInput, setGroupNumberInput] = useState('');
 const [recoveryPassphrase, setRecoveryPassphrase] = useState('');
 const [cloudGroupBackups, setCloudGroupBackups] = useState<CloudBackupFileInfo[]>([]);
 const [groupCloudBusy, setGroupCloudBusy] = useState(false);
+const [cloudAdminName, setCloudAdminName] = useState('');
 const [cloudAdminMemberNumber, setCloudAdminMemberNumber] = useState('');
 const [cloudAdminPin, setCloudAdminPin] = useState('');
+const [showCloudAdminPin, setShowCloudAdminPin] = useState(false);
 const [cloudAdminSignedIn, setCloudAdminSignedIn] = useState(false);
 const loadConsent = useCallback(async () => {
   try {
@@ -89,7 +91,11 @@ const loadGroups = useCallback(async () => {
 const handleCloudflareAdminSignIn = async () => {
   try {
     setGroupCloudBusy(true);
-    await signInCloudflareBackupAdmin(cloudAdminMemberNumber, cloudAdminPin);
+    await signInCloudflareBackupAdmin(
+      cloudAdminName,
+      cloudAdminMemberNumber,
+      cloudAdminPin,
+    );
     setCloudAdminPin('');
     setCloudAdminSignedIn(true);
     Alert.alert('Cloudflare Connected', 'Group administrator authenticated successfully.');
@@ -487,8 +493,46 @@ Data Backup & Restore
 
   <View style={styles.section}>
     <Text style={styles.sectionTitle}>Cloudflare Backup & Restore</Text>
-    <TextInput value={cloudAdminMemberNumber} onChangeText={setCloudAdminMemberNumber} placeholder="Administrator member number (KYA2010001)" autoCapitalize="characters" style={styles.recoveryInput} />
-    <TextInput value={cloudAdminPin} onChangeText={setCloudAdminPin} placeholder="Administrator PIN" secureTextEntry keyboardType="number-pad" style={styles.recoveryInput} />
+    <TextInput
+      value={cloudAdminName}
+      onChangeText={setCloudAdminName}
+      placeholder="Administrator full name"
+      autoCapitalize="words"
+      autoCorrect={false}
+      editable={!cloudAdminSignedIn}
+      style={styles.recoveryInput}
+    />
+    <TextInput
+      value={cloudAdminMemberNumber}
+      onChangeText={setCloudAdminMemberNumber}
+      placeholder="Administrator member number (KYA2010001)"
+      autoCapitalize="characters"
+      autoCorrect={false}
+      editable={!cloudAdminSignedIn}
+      style={styles.recoveryInput}
+    />
+    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 }}>
+      <TextInput
+        value={cloudAdminPin}
+        onChangeText={setCloudAdminPin}
+        placeholder="Administrator PIN"
+        secureTextEntry={!showCloudAdminPin}
+        keyboardType="number-pad"
+        editable={!cloudAdminSignedIn}
+        style={[styles.recoveryInput, { flex: 1, marginTop: 0, marginRight: 8 }]}
+        autoCapitalize="none"
+      />
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel={showCloudAdminPin ? 'Hide administrator PIN' : 'Show administrator PIN'}
+        onPress={() => setShowCloudAdminPin((visible) => !visible)}
+        style={{ paddingHorizontal: 12, paddingVertical: 14, borderRadius: 8, borderWidth: 1, borderColor: '#16a34a', backgroundColor: '#fff' }}
+      >
+        <Text style={{ color: '#166534', fontWeight: '700' }}>
+          {showCloudAdminPin ? 'Hide' : 'Show'}
+        </Text>
+      </TouchableOpacity>
+    </View>
     <TouchableOpacity style={[styles.button, styles.primaryButton, groupCloudBusy && styles.disabledButton]} onPress={() => void (cloudAdminSignedIn ? handleCloudflareAdminSignOut() : handleCloudflareAdminSignIn())} disabled={groupCloudBusy}>
       <Text style={styles.buttonText}>{cloudAdminSignedIn ? 'Sign Out of Cloudflare' : 'Sign In as Group Administrator'}</Text>
     </TouchableOpacity>

@@ -337,13 +337,31 @@ function bytesToUtf8(bytes: Uint8Array): string {
 }
 
 export async function signInCloudflareBackupAdmin(
+  memberName: string,
   memberNumber: string,
   pin: string,
 ): Promise<void> {
+  const normalizedName = memberName.trim().replace(/\\s+/g, ' ');
+  const normalizedMemberNumber = memberNumber.trim().toUpperCase().replace(/\\s+/g, '');
+
+  if (!normalizedName) {
+    throw new Error('Enter the administrator full name.');
+  }
+  if (!/^KYA\\d{7}$/.test(normalizedMemberNumber)) {
+    throw new Error('Enter a valid administrator member number, for example KYA2010001.');
+  }
+  if (!/^\\d{6,12}$/.test(pin)) {
+    throw new Error('Administrator PIN must contain 6–12 digits.');
+  }
+
   const response = await fetch(`${CLOUDFLARE_API_BASE_URL}/v1/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({ memberNumber: memberNumber.trim().toUpperCase(), pin }),
+    body: JSON.stringify({
+      memberName: normalizedName,
+      memberNumber: normalizedMemberNumber,
+      pin,
+    }),
   });
 
   const payload = await response.json() as {
