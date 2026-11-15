@@ -34,10 +34,12 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
+
           if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
-            echo "ERROR: GitHub Actions secret CLOUDFLARE_API_TOKEN is missing."
+            echo "ERROR: CLOUDFLARE_API_TOKEN is missing."
             exit 1
           fi
+
           npx wrangler whoami
 
       - name: Check D1 migration history
@@ -54,6 +56,27 @@ jobs:
           set -euo pipefail
           npx wrangler d1 migrations apply ebadsave-vsla-db --remote
 
+      - name: Verify Worker secret bindings before deployment
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          echo "Checking secrets attached to ebadsave-vsla-cloudflare..."
+
+          SECRETS="$(npx wrangler secret list --name ebadsave-vsla-cloudflare)"
+
+          echo "$SECRETS"
+
+          for SECRET in ADMIN_BOOTSTRAP_SECRET PIN_PEPPER JWT_HS256_SECRET; do
+            if ! echo "$SECRETS" | grep -q "\"name\": \"$SECRET\""; then
+              echo "ERROR: $SECRET is not attached to this Worker."
+              exit 1
+            fi
+          done
+
+          echo "All three Worker secrets are listed."
+
       - name: Deploy Cloudflare Worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -61,25 +84,47 @@ jobs:
           set -euo pipefail
           npx wrangler deploy --name ebadsave-vsla-cloudflare
 
-      - name: Verify deployed Worker responds
+      - name: Verify Worker secret bindings after deployment
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          npx wrangler secret list --name ebadsave-vsla-cloudflare
+
+      - name: Verify Worker and D1 health
         shell: bash
         run: |
           set -euo pipefail
+
           RESPONSE="$(curl --fail --silent --show-error \
             https://ebadsave-vsla-cloudflare.info-ebadsave.workers.dev/health)"
+
           echo "$RESPONSE"
+
           node -e '
             const data = JSON.parse(process.argv[1]);
+
             const required = [
               "databaseConnected",
               "bootstrapSecretConfigured",
               "pinPepperConfigured",
               "jwtSecretConfigured"
             ];
-            const failed = required.filter((key) => data[key] !== true);
-            if (data.ok !== true || data.service !== "ebadsave-vsla-cloudflare" || failed.length) {
-              console.error("ERROR: Worker readiness check failed:", failed.join(", ") || "service identity");
+
+            const failed = required.filter(key => data[key] !== true);
+
+            if (
+              data.ok !== true ||
+              data.service !== "ebadsave-vsla-cloudflare" ||
+              failed.length > 0
+            ) {
+              console.error(
+                "ERROR: Worker readiness check failed:",
+                failed.join(", ") || "service identity"
+              );
               process.exit(1);
             }
-            console.log("Worker, D1, and server-side secret bindings are ready.");
+
+            console.log("Worker, D1, and all secret bindings are ready.");
           ' "$RESPONSE"
