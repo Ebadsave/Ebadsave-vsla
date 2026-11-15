@@ -21,33 +21,43 @@ type ApiResponse = {
   accessToken?: string;
   groupId?: string;
   error?: string;
+  code?: string;
   message?: string;
+  requestId?: string;
   [key: string]: unknown;
 };
 
 async function responseJson(response: Response): Promise<ApiResponse> {
   const raw = await response.text();
+  const requestId = response.headers.get('x-request-id') || undefined;
   let data: ApiResponse = {};
+
   try {
     data = raw ? JSON.parse(raw) : {};
   } catch {
-    throw new Error(`Cloudflare returned an invalid response (HTTP ${response.status}).`);
+    const code = 'CLOUDFLARE_INVALID_JSON';
+    throw new Error(
+      `Cloudflare error ${code} (HTTP ${response.status}). ` +
+      `Response was not valid JSON.${requestId ? ` Request ID: ${requestId}.` : ''}`,
+    );
   }
-  if (!response.ok) {
-    const messages: Record<string, string> = {
-      group_already_bootstrapped: 'This group already has its own administrator. Sign in with that administrator account.',
-      member_number_already_registered: 'This member number already has an account.',
-      server_bootstrap_secret_not_configured: 'Cloudflare administrator setup is not configured.',
-      server_pin_pepper_not_configured: 'Cloudflare security is not configured.',
-      invalid_group_number: 'Enter a valid four-digit KYA group number.',
-      group_number_out_of_range: 'This KYA group number is outside the permitted ranges.',
-      admin_member_number_must_belong_to_group: 'The administrator member number must start with this group number and end with three digits.',
-      invalid_admin_name: 'Enter the administrator’s full name.',
-      invalid_pin: 'PIN must contain 6 to 12 digits.',
-    };
-    const code = typeof data.error === 'string' ? data.error : '';
-    throw new Error(messages[code] || data.message || 'Administrator setup failed.');
+
+  if (!response.ok || data.ok === false) {
+    const code =
+      (typeof data.code === 'string' && data.code) ||
+      (typeof data.error === 'string' && data.error) ||
+      'CLOUDFLARE_REQUEST_FAILED';
+    const message =
+      (typeof data.message === 'string' && data.message) ||
+      (typeof data.error === 'string' && data.error) ||
+      'Cloudflare rejected the request.';
+    const id = (typeof data.requestId === 'string' && data.requestId) || requestId;
+    throw new Error(
+      `Cloudflare error ${code} (HTTP ${response.status}): ${message}` +
+      `${id ? ` | Request ID: ${id}` : ''}`,
+    );
   }
+
   return data;
 }
 
@@ -64,7 +74,7 @@ async function apiRequest(
       body: JSON.stringify(body),
     });
   } catch {
-    throw new Error('Could not connect to Cloudflare. Check the internet connection.');
+    throw new Error('APP_NETWORK_ERROR: Could not connect to Cloudflare. Check the internet connection.');
   }
   return responseJson(response);
 }
