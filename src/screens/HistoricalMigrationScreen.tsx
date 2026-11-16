@@ -1,11 +1,12 @@
 import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { RootStackParamList } from '../../App';
 import { canManageHistoricalEntries, getMembersByGroupId, createHistoricalMigrationImport, getHistoricalMigrationImports, getHistoricalMigrationDrafts, createHistoricalMigrationDraft, updateHistoricalMigrationDraft, deleteHistoricalMigrationDraft, setHistoricalMigrationDraftsAwaitingVerification, type HistoricalMigrationImport, type HistoricalMigrationDraft, type HistoricalMigrationCategory, type HistoricalMigrationEvidenceType } from '../database/database';
 
-type Props = NativeStackScreenProps<RootStackParamList, 'HistoricalMigration'>;
+type Props = {
+  route: { params: { groupId: number; executiveMemberId: number } };
+  navigation: { goBack: () => void };
+};
 type Member = { id: number; full_name: string; member_number: string };
 const categories: { value: HistoricalMigrationCategory; label: string }[] = [
   { value: 'savings', label: 'Savings' }, { value: 'loan_issued', label: 'Loan issued' },
