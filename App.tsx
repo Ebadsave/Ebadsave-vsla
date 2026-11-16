@@ -29,6 +29,7 @@ import CloudflarePassbookSyncScreen from './src/screens/CloudflarePassbookSyncSc
 import OnboardingScreen from './src/screens/OnboardingScreen';
 import ExistingGroupOnboardingScreen from './src/screens/ExistingGroupOnboardingScreen';
 import HistoricalRecordsScreen from './src/screens/HistoricalRecordsScreen';
+import HistoricalMigrationScreen from './src/screens/HistoricalMigrationScreen';
 import ShareOutCalculationScreen from './src/screens/ShareOutCalculationScreen';
 import MemberPassbookLoginScreen from './src/screens/MemberPassbookLoginScreen';
 import MemberPassbookScreen from './src/screens/MemberPassbookScreen';
@@ -43,6 +44,7 @@ export type RootStackParamList = {
   PersonalLogin: undefined;
   ExistingGroupOnboarding: { groupId: number };
   HistoricalRecords: { groupId: number; executiveMemberId: number };
+  HistoricalMigration: { groupId: number; executiveMemberId: number };
   ShareOutCalculation: { groupId: number; executiveMemberId: number };
   PreAppAuthorization: undefined;
   Home: undefined;
@@ -350,6 +352,7 @@ export default function App() {
         <Stack.Screen name="CloudflarePassbookSync" component={CloudflarePassbookSyncScreen} options={{ title: 'Remote Passbook Sync' }} />
         <Stack.Screen name="ExistingGroupOnboarding" component={ExistingGroupOnboardingScreen} />
         <Stack.Screen name="HistoricalRecords" component={HistoricalRecordsScreen} />
+        <Stack.Screen name="HistoricalMigration" component={HistoricalMigrationScreen} />
         <Stack.Screen name="ShareOutCalculation" component={ShareOutCalculationScreen} />
 
         <Stack.Screen
