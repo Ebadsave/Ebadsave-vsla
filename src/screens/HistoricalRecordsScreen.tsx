@@ -334,6 +334,11 @@ export default function HistoricalRecordsScreen({ route, navigation }: Props) {
       {historicalLocked && <View style={styles.lockedNotice}><Text style={styles.lockedTitle}>HISTORICAL SETUP LOCKED</Text><Text style={styles.lockedText}>The first meeting has been closed. New historical entries are disabled; existing records remain available for viewing.</Text></View>}
       <View style={styles.header}><Text style={styles.eyebrow}>EBADSAVE • KYAMUSONI TUTUNGUKYE</Text><Text style={styles.title}>{groupName}</Text><Text style={styles.groupNo}>{groupNumber}</Text><Text style={styles.subtitle}>Tap the big picture buttons. Enter what is written in the passbook.</Text></View>
 
+      <TouchableOpacity onPress={() => navigation.navigate('HistoricalMigration', { groupId, executiveMemberId })} style={{backgroundColor:'#166534',borderRadius:12,padding:14,marginBottom:12,alignItems:'center'}}>
+        <Text style={{color:'#fff',fontSize:15,fontWeight:'900'}}>📚 Open Historical Ledger Migration</Text>
+        <Text style={{color:'#dcfce7',fontSize:12,marginTop:4}}>Register evidence • prepare drafts • submit for verification</Text>
+      </TouchableOpacity>
+
       <Text style={styles.sectionTitle}>📊 Imported history totals</Text>
       <View style={styles.summaryCard}>
         <View style={styles.totalLine}><Text style={styles.totalLabel}>🪙 Savings</Text><Text style={styles.totalValue}>{money(summary.savings)}</Text></View>
