@@ -2210,16 +2210,23 @@ function validIsoDateOnly(value: string): boolean {
 }
 
 /**
- * Import one historical entry from a physical passbook or loan book.
- * It becomes a real ledger transaction, so savings and loan-balance summaries
- * use it. The source reference is unique per group to prevent duplicate imports.
- * It intentionally does not enforce today's share limits or today's loan rules
- * on transactions that occurred before the group began using Ebadsave.
+ * LEGACY HISTORICAL IMPORTS ARE READ-ONLY.
+ *
+ * Keep historical_transaction_imports and its existing rows in place because
+ * member balances, summaries, passbooks and backups still depend on them.
+ * New historical ledger entries must go through the replacement review and
+ * approval workflow. Do not write to this legacy table from this API.
  */
 export async function recordHistoricalFinancialTransaction(
   groupId: number,
   input: HistoricalFinancialTransactionInput,
 ): Promise<number> {
+  void groupId;
+  void input;
+  throw new Error('The old historical import function is disabled. Use the new historical ledger review and approval process.');
+
+  // Retained below for source-history only; unreachable while legacy imports
+  // are disabled. Existing rows remain available to read-only calculations.
   const db = await getDatabase();
   const historicalLock = await db.getFirstAsync<{ onboarding_locked: number }>('SELECT onboarding_locked FROM groups WHERE id = ? LIMIT 1', groupId);
   if (Number(historicalLock?.onboarding_locked ?? 0) === 1) throw new Error('Historical setup is permanently disabled because the first meeting has been closed.');
@@ -2628,6 +2635,9 @@ export async function recordHistoricalExtraEntry(groupId: number, input: Histori
 }
 
 export async function editHistoricalEntry(groupId: number, entryKind: 'standard' | 'extra', entryId: number, input: HistoricalEditInput, editorMemberId: number): Promise<void> {
+  if (entryKind === 'standard') {
+    throw new Error('Editing through the old historical import system is disabled. Existing records are preserved.');
+  }
   await requireHistoricalGroupAdmin(groupId, editorMemberId);
   const db = await getDatabase(); const amount = Number(input.amount); const date = normalizeText(input.transaction_date); const timestamp = now();
   if (!Number.isFinite(amount) || amount <= 0) throw new Error('Amount must be greater than zero.');
@@ -2667,6 +2677,9 @@ export async function editHistoricalEntry(groupId: number, entryKind: 'standard'
 }
 
 export async function softDeleteHistoricalEntry(groupId: number, entryKind: 'standard' | 'extra', entryId: number, adminMemberId: number): Promise<void> {
+  if (entryKind === 'standard') {
+    throw new Error('Deleting through the old historical import system is disabled. Existing records are preserved.');
+  }
   await requireHistoricalGroupAdmin(groupId, adminMemberId);
   const db = await getDatabase(); const timestamp = now();
   await db.withTransactionAsync(async () => {
