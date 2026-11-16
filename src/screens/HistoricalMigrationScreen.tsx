@@ -1,7 +1,7 @@
 import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { canManageHistoricalEntries, getMembersByGroupId, createHistoricalMigrationImport, getHistoricalMigrationImports, getHistoricalMigrationDrafts, createHistoricalMigrationDraft, updateHistoricalMigrationDraft, deleteHistoricalMigrationDraft, setHistoricalMigrationDraftsAwaitingVerification, type HistoricalMigrationImport, type HistoricalMigrationDraft, type HistoricalMigrationCategory, type HistoricalMigrationEvidenceType } from '../database/database';
+import { canManageHistoricalEntries, getMembersByGroupId, createHistoricalMigrationImport, getHistoricalMigrationImports, getHistoricalMigrationDrafts, createHistoricalMigrationDraft, updateHistoricalMigrationDraft, deleteHistoricalMigrationDraft, setHistoricalMigrationDraftsAwaitingVerification, approveHistoricalMigrationImport, returnHistoricalMigrationImportForCorrection, type HistoricalMigrationImport, type HistoricalMigrationDraft, type HistoricalMigrationCategory, type HistoricalMigrationEvidenceType } from '../database/database';
 
 type Props = {
   route: { params: { groupId: number; executiveMemberId: number } };
@@ -18,7 +18,7 @@ const evidenceTypes: { value: HistoricalMigrationEvidenceType; label: string }[]
   { value: 'manual', label: 'Manual ledger entry' }, { value: 'pdf', label: 'PDF' }, { value: 'image', label: 'Scanned image' }, { value: 'audio', label: 'Voice recording' }, { value: 'video', label: 'Ledger video' },
 ];
 const statusLabel: Record<string,string> = { pending_review:'Pending review', processing:'Processing', needs_correction:'Needs correction', awaiting_verification:'Awaiting verification', approved:'Approved', rejected:'Rejected' };
-const needsMember = (category: HistoricalMigrationCategory) => ['savings','loan_issued','loan_repayment','previous_loan_balance','fine'].includes(category);
+const needsMember = (category: HistoricalMigrationCategory) => ['savings','loan_issued','loan_repayment','previous_loan_balance','fine','insurance'].includes(category);
 
 export default function HistoricalMigrationScreen({ route, navigation }: Props) {
   const { groupId, executiveMemberId } = route.params;
@@ -41,6 +41,9 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
   const [description,setDescription] = useState('');
   const [opening,setOpening] = useState(false);
   const [editing,setEditing] = useState<HistoricalMigrationDraft|null>(null);
+  const [memberConfirmations,setMemberConfirmations] = useState<Record<number,string>>({});
+  const [evidenceReviewed,setEvidenceReviewed] = useState(false);
+  const [amountsReviewed,setAmountsReviewed] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -60,7 +63,7 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
   useFocusEffect(useCallback(()=>{ void load(); },[load]));
 
   const openImport = async (item: HistoricalMigrationImport) => {
-    setSelectedImport(item); setEditing(null);
+    setSelectedImport(item); setEditing(null); setMemberConfirmations({}); setEvidenceReviewed(false); setAmountsReviewed(false);
     try { setDrafts(await getHistoricalMigrationDrafts(item.id,groupId)); }
     catch(e) { Alert.alert('Could not load drafts',e instanceof Error?e.message:'Please try again.'); }
   };
@@ -104,6 +107,46 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
       {text:'Cancel',style:'cancel'}, {text:'Submit',onPress:async()=>{try{await setHistoricalMigrationDraftsAwaitingVerification(selectedImport.id,groupId); await load(); const fresh=(await getHistoricalMigrationImports(groupId)).find(i=>i.id===selectedImport.id); if(fresh) await openImport(fresh); Alert.alert('Submitted','The import is awaiting the next verification and approval stage.');}catch(e){Alert.alert('Could not submit',e instanceof Error?e.message:'Please try again.');}}}
     ]);
   };
+  const returnSelectedImportForCorrection = () => {
+    if (!canManage || !selectedImport) return;
+    Alert.alert('Return for correction?', 'This will not post any money. The drafts will return to Step 2 so an authorised user can correct the member, category, date or amount.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Return to Step 2', onPress: async () => {
+        try {
+          await returnHistoricalMigrationImportForCorrection(groupId, selectedImport.id, executiveMemberId);
+          await load();
+          const fresh = (await getHistoricalMigrationImports(groupId)).find(i => i.id === selectedImport.id);
+          if (fresh) await openImport(fresh);
+          Alert.alert('Returned for correction', 'The import is editable again. No financial records were posted.');
+        } catch (e) { Alert.alert('Could not return import', e instanceof Error ? e.message : 'Please try again.'); }
+      } },
+    ]);
+  };
+
+  const approveSelectedImport = async () => {
+    if (!canManage || !selectedImport) return;
+    if (selectedImport.status !== 'awaiting_verification') { Alert.alert('Not ready for approval','Submit this import for verification first.'); return; }
+    if (!evidenceReviewed || !amountsReviewed) { Alert.alert('Review confirmations required','Confirm that you checked the original evidence and all transaction dates and amounts.'); return; }
+    Alert.alert('Approve and post historical records?', 'This will post the verified entries into the group financial records. The action is permanent and protected against duplicate approval. Check the ledger evidence and member numbers carefully.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Approve and save', style: 'destructive', onPress: async () => {
+        setSaving(true);
+        try {
+          const result = await approveHistoricalMigrationImport({
+            group_id: groupId, import_id: selectedImport.id, approver_member_id: executiveMemberId,
+            confirmed_member_numbers: memberConfirmations, evidence_reviewed: evidenceReviewed, amounts_reviewed: amountsReviewed,
+          });
+          setEvidenceReviewed(false); setAmountsReviewed(false); setMemberConfirmations({});
+          await load();
+          const fresh = (await getHistoricalMigrationImports(groupId)).find(i => i.id === selectedImport.id);
+          if (fresh) await openImport(fresh);
+          Alert.alert('Historical import approved', `${result.approved_drafts} entries approved. ${result.posted_transactions} financial transactions posted, ${result.saved_opening_balances} opening savings balances saved, and ${result.saved_loan_snapshots} loan balance snapshots saved.`);
+        } catch (e) { Alert.alert('Approval stopped', e instanceof Error ? e.message : 'No changes were saved. Please review the entries and try again.'); }
+        finally { setSaving(false); }
+      } },
+    ]);
+  };
+
   const editDraft = (draft: HistoricalMigrationDraft) => { setEditing(draft);setCategory(draft.category);setMemberId(draft.member_id);setDate(draft.transaction_date);setAmount(String(draft.amount));setDescription(draft.description);setOpening(!!draft.is_opening_balance); };
   const removeDraft = (draft: HistoricalMigrationDraft) => Alert.alert('Remove draft?','This only removes the unposted draft, not the original evidence.',[{text:'Cancel',style:'cancel'},{text:'Remove',style:'destructive',onPress:async()=>{try{await deleteHistoricalMigrationDraft(draft.id,draft.import_id,groupId);setDrafts(await getHistoricalMigrationDrafts(draft.import_id,groupId));if(editing?.id===draft.id)resetDraft();}catch(e){Alert.alert('Could not remove',e instanceof Error?e.message:'Please try again.');}}}]);
 
@@ -138,10 +181,26 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
         {!!editing&&<TouchableOpacity onPress={resetDraft} style={styles.secondary}><Text style={styles.secondaryText}>Cancel editing</Text></TouchableOpacity>}
       </View>
       {drafts.map(d=><View key={d.id} style={styles.draftCard}><Text style={styles.importTitle}>{categories.find(c=>c.value===d.category)?.label||d.category} • UGX {Number(d.amount).toLocaleString()}</Text><Text style={styles.meta}>{d.transaction_date} • {d.member_name||'Group transaction'} {d.member_number?`(${d.member_number})`:''}</Text>{d.is_opening_balance===1&&<Text style={styles.opening}>Opening balance — not a new transaction</Text>}{!!d.description&&<Text style={styles.meta}>{d.description}</Text>}<View style={styles.row}><TouchableOpacity disabled={!canManage} onPress={()=>editDraft(d)} style={[styles.smallButton,!canManage&&styles.disabled]}><Text style={styles.smallText}>Edit</Text></TouchableOpacity><TouchableOpacity disabled={!canManage} onPress={()=>removeDraft(d)} style={[styles.smallButton,styles.delete,!canManage&&styles.disabled]}><Text style={[styles.smallText,{color:'#b91c1c'}]}>Remove draft</Text></TouchableOpacity></View></View>)}
+      {selectedImport.status === 'awaiting_verification' && <View style={styles.approvalCard}>
+        <Text style={styles.approvalTitle}>STEP 3 • Member verification and administrator approval</Text>
+        <Text style={styles.help}>For every member-linked entry, compare the member's name and number with the official group register. Enter the exact member number below. Group-level income and expenditure do not require a member number.</Text>
+        {drafts.filter(d=>needsMember(d.category)).map(d=><View key={`verify-${d.id}`} style={styles.verifyRow}>
+          <Text style={styles.verifyTitle}>{d.member_name || 'Member not selected'} • {categories.find(c=>c.value===d.category)?.label || d.category}</Text>
+          <Text style={styles.meta}>Draft #{d.id} • UGX {Number(d.amount).toLocaleString()} • {d.transaction_date}</Text>
+          <Text style={styles.label}>Confirm member number</Text>
+          <TextInput value={memberConfirmations[d.id] || ''} onChangeText={v=>setMemberConfirmations(old=>({...old,[d.id]:v}))} style={styles.input} autoCapitalize="characters" placeholder="Enter exact KYA member number" />
+        </View>)}
+        <TouchableOpacity onPress={()=>setEvidenceReviewed(v=>!v)} style={styles.checkRow}><Text style={styles.checkbox}>{evidenceReviewed?'☑':'☐'}</Text><Text style={styles.chipText}>I checked the original ledger, PDF, image, audio or video evidence.</Text></TouchableOpacity>
+        <TouchableOpacity onPress={()=>setAmountsReviewed(v=>!v)} style={styles.checkRow}><Text style={styles.checkbox}>{amountsReviewed?'☑':'☐'}</Text><Text style={styles.chipText}>I verified every amount, original date, category and opening-balance label.</Text></TouchableOpacity>
+        <View style={styles.validationNotice}><Text style={styles.validationText}>Financial safeguards: invalid dates, future dates, missing members, member-number mismatches, unsupported categories, duplicate approvals and conflicting opening balances are rejected. Previous loan balances are saved as snapshots, not cash transactions.</Text></View>
+        <TouchableOpacity disabled={!canManage||saving} onPress={returnSelectedImportForCorrection} style={styles.secondary}><Text style={styles.secondaryText}>Return to Step 2 for corrections</Text></TouchableOpacity>
+        <TouchableOpacity disabled={!canManage||saving||!evidenceReviewed||!amountsReviewed} onPress={()=>void approveSelectedImport()} style={[styles.primary,(!canManage||saving||!evidenceReviewed||!amountsReviewed)&&styles.disabled]}><Text style={styles.primaryText}>{saving?'Approving…':'Approve and post verified records'}</Text></TouchableOpacity>
+      </View>}
+      {selectedImport.status === 'approved' && <View style={styles.approvalCard}><Text style={styles.approvalTitle}>Approved and saved</Text><Text style={styles.help}>This import is locked against editing and duplicate posting. Its approval and posting references are retained in the audit history.</Text></View>}
       <TouchableOpacity disabled={!canManage||drafts.length===0||['approved','rejected','awaiting_verification'].includes(selectedImport.status)} onPress={()=>void submitForVerification()} style={[styles.primary, (drafts.length===0||['approved','rejected','awaiting_verification'].includes(selectedImport.status))&&styles.disabled]}><Text style={styles.primaryText}>Submit drafts for verification</Text></TouchableOpacity>
       <Text style={styles.help}>Submission only changes workflow status. Financial posting and administrator approval are reserved for Step 3.</Text>
     </>}
   </ScrollView></SafeAreaView>;
 }
 
-const styles=StyleSheet.create({safe:{flex:1,backgroundColor:'#f3f6f4'},center:{flex:1,alignItems:'center',justifyContent:'center'},content:{padding:14,paddingBottom:40},back:{paddingVertical:10},backText:{color:'#166534',fontWeight:'900'},header:{backgroundColor:'#14532d',borderRadius:16,padding:17,marginBottom:16},kicker:{color:'#bbf7d0',fontSize:11,fontWeight:'900'},title:{color:'#fff',fontSize:22,fontWeight:'900',marginTop:7},sub:{color:'#f0fdf4',fontSize:13,lineHeight:19,marginTop:8},heading:{fontSize:17,fontWeight:'900',color:'#111827',marginTop:14,marginBottom:9},card:{backgroundColor:'#fff',borderRadius:14,padding:13,borderWidth:1,borderColor:'#dbe4dc',marginBottom:10},label:{fontSize:13,fontWeight:'800',color:'#334155',marginTop:11,marginBottom:6},input:{minHeight:46,borderWidth:1,borderColor:'#cbd5e1',borderRadius:10,paddingHorizontal:11,color:'#111827',fontSize:15,backgroundColor:'#fff'},multiline:{minHeight:72,textAlignVertical:'top',paddingTop:10},chips:{flexDirection:'row',flexWrap:'wrap',gap:7},chip:{borderWidth:1,borderColor:'#cbd5e1',borderRadius:18,paddingHorizontal:10,paddingVertical:9,backgroundColor:'#f8fafc'},chipOn:{backgroundColor:'#166534',borderColor:'#166534'},chipText:{fontSize:12,color:'#334155',fontWeight:'800'},chipTextOn:{color:'#fff'},memberChip:{borderWidth:1,borderColor:'#cbd5e1',borderRadius:12,padding:9,marginRight:7,marginBottom:3,backgroundColor:'#f8fafc'},primary:{minHeight:49,backgroundColor:'#16a34a',borderRadius:11,alignItems:'center',justifyContent:'center',marginTop:14,paddingHorizontal:12},primaryText:{color:'#fff',fontSize:15,fontWeight:'900'},secondary:{padding:12,alignItems:'center'},secondaryText:{color:'#475569',fontWeight:'800'},disabled:{opacity:.45},notice:{backgroundColor:'#fef3c7',borderColor:'#f59e0b',borderWidth:1,borderRadius:10,padding:11},noticeText:{color:'#92400e',fontSize:12,fontWeight:'800'},importCard:{backgroundColor:'#fff',borderRadius:12,borderWidth:1,borderColor:'#dbe4dc',padding:13,marginBottom:8},selected:{borderColor:'#16a34a',borderWidth:2},importTitle:{fontSize:14,fontWeight:'900',color:'#111827'},meta:{fontSize:12,color:'#64748b',marginTop:4,lineHeight:17},status:{alignSelf:'flex-start',marginTop:7,backgroundColor:'#fef3c7',color:'#92400e',fontSize:11,fontWeight:'900',paddingHorizontal:8,paddingVertical:4,borderRadius:7,overflow:'hidden'},empty:{color:'#64748b',fontSize:13},checkRow:{flexDirection:'row',alignItems:'center',gap:8,marginTop:13},checkbox:{fontSize:22,color:'#166534'},draftCard:{backgroundColor:'#fff',borderWidth:1,borderColor:'#dbe4dc',borderRadius:12,padding:12,marginBottom:8},opening:{color:'#92400e',fontWeight:'900',fontSize:12,marginTop:5},row:{flexDirection:'row',gap:8,marginTop:10},smallButton:{flex:1,backgroundColor:'#dbeafe',padding:10,borderRadius:8,alignItems:'center'},smallText:{color:'#1d4ed8',fontWeight:'900'},delete:{backgroundColor:'#fee2e2'},help:{fontSize:12,color:'#64748b',lineHeight:17,marginTop:8}});
+const styles=StyleSheet.create({safe:{flex:1,backgroundColor:'#f3f6f4'},center:{flex:1,alignItems:'center',justifyContent:'center'},content:{padding:14,paddingBottom:40},back:{paddingVertical:10},backText:{color:'#166534',fontWeight:'900'},header:{backgroundColor:'#14532d',borderRadius:16,padding:17,marginBottom:16},kicker:{color:'#bbf7d0',fontSize:11,fontWeight:'900'},title:{color:'#fff',fontSize:22,fontWeight:'900',marginTop:7},sub:{color:'#f0fdf4',fontSize:13,lineHeight:19,marginTop:8},heading:{fontSize:17,fontWeight:'900',color:'#111827',marginTop:14,marginBottom:9},card:{backgroundColor:'#fff',borderRadius:14,padding:13,borderWidth:1,borderColor:'#dbe4dc',marginBottom:10},label:{fontSize:13,fontWeight:'800',color:'#334155',marginTop:11,marginBottom:6},input:{minHeight:46,borderWidth:1,borderColor:'#cbd5e1',borderRadius:10,paddingHorizontal:11,color:'#111827',fontSize:15,backgroundColor:'#fff'},multiline:{minHeight:72,textAlignVertical:'top',paddingTop:10},chips:{flexDirection:'row',flexWrap:'wrap',gap:7},chip:{borderWidth:1,borderColor:'#cbd5e1',borderRadius:18,paddingHorizontal:10,paddingVertical:9,backgroundColor:'#f8fafc'},chipOn:{backgroundColor:'#166534',borderColor:'#166534'},chipText:{fontSize:12,color:'#334155',fontWeight:'800'},chipTextOn:{color:'#fff'},memberChip:{borderWidth:1,borderColor:'#cbd5e1',borderRadius:12,padding:9,marginRight:7,marginBottom:3,backgroundColor:'#f8fafc'},primary:{minHeight:49,backgroundColor:'#16a34a',borderRadius:11,alignItems:'center',justifyContent:'center',marginTop:14,paddingHorizontal:12},primaryText:{color:'#fff',fontSize:15,fontWeight:'900'},secondary:{padding:12,alignItems:'center'},secondaryText:{color:'#475569',fontWeight:'800'},disabled:{opacity:.45},notice:{backgroundColor:'#fef3c7',borderColor:'#f59e0b',borderWidth:1,borderRadius:10,padding:11},noticeText:{color:'#92400e',fontSize:12,fontWeight:'800'},importCard:{backgroundColor:'#fff',borderRadius:12,borderWidth:1,borderColor:'#dbe4dc',padding:13,marginBottom:8},selected:{borderColor:'#16a34a',borderWidth:2},importTitle:{fontSize:14,fontWeight:'900',color:'#111827'},meta:{fontSize:12,color:'#64748b',marginTop:4,lineHeight:17},status:{alignSelf:'flex-start',marginTop:7,backgroundColor:'#fef3c7',color:'#92400e',fontSize:11,fontWeight:'900',paddingHorizontal:8,paddingVertical:4,borderRadius:7,overflow:'hidden'},empty:{color:'#64748b',fontSize:13},checkRow:{flexDirection:'row',alignItems:'center',gap:8,marginTop:13},checkbox:{fontSize:22,color:'#166534'},draftCard:{backgroundColor:'#fff',borderWidth:1,borderColor:'#dbe4dc',borderRadius:12,padding:12,marginBottom:8},opening:{color:'#92400e',fontWeight:'900',fontSize:12,marginTop:5},row:{flexDirection:'row',gap:8,marginTop:10},smallButton:{flex:1,backgroundColor:'#dbeafe',padding:10,borderRadius:8,alignItems:'center'},smallText:{color:'#1d4ed8',fontWeight:'900'},delete:{backgroundColor:'#fee2e2'},help:{fontSize:12,color:'#64748b',lineHeight:17,marginTop:8},approvalCard:{backgroundColor:'#f0fdf4',borderWidth:1,borderColor:'#86efac',borderRadius:13,padding:13,marginTop:14,marginBottom:12},approvalTitle:{fontSize:16,fontWeight:'900',color:'#14532d',marginBottom:7},verifyRow:{backgroundColor:'#fff',borderWidth:1,borderColor:'#bbf7d0',borderRadius:10,padding:10,marginTop:10},verifyTitle:{fontSize:13,fontWeight:'900',color:'#14532d'},validationNotice:{backgroundColor:'#ecfdf5',borderRadius:9,padding:10,marginTop:12},validationText:{fontSize:11,color:'#166534',lineHeight:16,fontWeight:'700'}});
