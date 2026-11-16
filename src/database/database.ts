@@ -1384,6 +1384,30 @@ status TEXT NOT NULL DEFAULT 'active',
     CREATE INDEX IF NOT EXISTS idx_historical_migration_drafts_group_date
       ON historical_migration_drafts(group_id, transaction_date, id);
 
+    CREATE TABLE IF NOT EXISTS historical_migration_approvals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      import_id INTEGER NOT NULL,
+      draft_id INTEGER NOT NULL UNIQUE,
+      approved_by_member_id INTEGER NOT NULL,
+      verified_member_id INTEGER,
+      confirmed_member_number TEXT NOT NULL DEFAULT '',
+      posting_kind TEXT NOT NULL,
+      posted_transaction_id INTEGER,
+      posted_loan_balance_id INTEGER,
+      source_reference TEXT NOT NULL DEFAULT '',
+      approved_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (import_id) REFERENCES historical_migration_imports(id),
+      FOREIGN KEY (draft_id) REFERENCES historical_migration_drafts(id),
+      FOREIGN KEY (approved_by_member_id) REFERENCES members(id),
+      FOREIGN KEY (verified_member_id) REFERENCES members(id),
+      FOREIGN KEY (posted_transaction_id) REFERENCES financial_transactions(id),
+      FOREIGN KEY (posted_loan_balance_id) REFERENCES historical_member_loan_balances(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_historical_migration_approvals_group_date
+      ON historical_migration_approvals(group_id, approved_at DESC);
+
     CREATE TABLE IF NOT EXISTS historical_extra_entries (
       id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, member_id INTEGER, transaction_id INTEGER,
       entry_type TEXT NOT NULL CHECK (entry_type IN ('fine', 'insurance', 'external_loan')),
@@ -2826,7 +2850,7 @@ const BACKUP_TABLES = [
   'member_auth_attempts', 'member_transaction_signatures', 'app_access_sessions',
   'app_access_authorizers', 'meeting_attendance', 'meeting_closures',
   'financial_accounts', 'financial_collections', 'financial_collection_items',
-  'financial_transactions', 'historical_transaction_imports', 'historical_extra_entries', 'historical_member_loan_balances', 'historical_migration_imports', 'historical_migration_drafts', 'financial_transaction_reversals', 'receipts',
+  'financial_transactions', 'historical_transaction_imports', 'historical_extra_entries', 'historical_member_loan_balances', 'historical_migration_imports', 'historical_migration_drafts', 'historical_migration_approvals', 'financial_transaction_reversals', 'receipts',
   'notification_queue', 'notification_delivery', 'meeting_audit_records',
   'sync_queue', 'member_passbook_records', 'member_statement_records',
   'loan_interest_charges', 'meeting_loan_interest_charges', 'loan_policy_settings', 'loan_committee_members', 'loan_applications',
@@ -2885,7 +2909,7 @@ export async function createGroupDatabaseBackup(groupId: number): Promise<string
     'loan_emergency_freezes', 'loan_audit_log', 'member_opening_balances',
     'onboarding_balance_audit', 'historical_transaction_imports',
     'historical_extra_entries', 'historical_member_loan_balances',
-    'historical_migration_imports', 'historical_migration_drafts',
+    'historical_migration_imports', 'historical_migration_drafts', 'historical_migration_approvals',
   ]);
   const memberTables = new Set([
     'deleted_member_numbers', 'member_next_of_kin', 'next_of_kin_change_history',
@@ -3013,7 +3037,7 @@ export async function restoreGroupDatabaseBackup(
     throw new Error('Backup group identity does not match the requested KYA group. No local data was changed.');
   }
 
-  const optionalNewTables = new Set(['historical_migration_imports', 'historical_migration_drafts']);
+  const optionalNewTables = new Set(['historical_migration_imports', 'historical_migration_drafts', 'historical_migration_approvals']);
   for (const table of BACKUP_TABLES) {
     if (!Array.isArray(parsed.tables[table])) {
       if (optionalNewTables.has(table)) parsed.tables[table] = [];
@@ -3070,7 +3094,7 @@ export async function restoreGroupDatabaseBackup(
     'loan_deductions', 'loan_emergency_freezes', 'loan_audit_log',
     'member_opening_balances', 'onboarding_balance_audit', 'historical_transaction_imports',
     'historical_extra_entries', 'historical_member_loan_balances',
-    'historical_migration_imports', 'historical_migration_drafts',
+    'historical_migration_imports', 'historical_migration_drafts', 'historical_migration_approvals',
   ]);
   const backupMeetingIds = new Set(
     (parsed.tables.group_meetings as Record<string, unknown>[]).map((meeting) => Number(meeting.id)),
@@ -12059,7 +12083,7 @@ export async function createHistoricalMigrationDraft(input: {
     );
     return Number(result.lastInsertRowId);
   }
-  if (['savings','loan_issued','loan_repayment','previous_loan_balance','fine'].includes(input.category)) {
+  if (['savings','loan_issued','loan_repayment','previous_loan_balance','fine','insurance'].includes(input.category)) {
     throw new Error('Choose the member for this transaction category.');
   }
   const result = await db.runAsync(
@@ -12098,7 +12122,7 @@ export async function updateHistoricalMigrationDraft(input: {
     );
     if (!member) throw new Error('The selected member does not belong to this group.');
     memberName = member.full_name; memberNumber = member.member_number;
-  } else if (['savings','loan_issued','loan_repayment','previous_loan_balance','fine'].includes(input.category)) {
+  } else if (['savings','loan_issued','loan_repayment','previous_loan_balance','fine','insurance'].includes(input.category)) {
     throw new Error('Choose the member for this transaction category.');
   }
   const result = await db.runAsync(
@@ -12130,3 +12154,271 @@ export async function setHistoricalMigrationDraftsAwaitingVerification(importId:
     await db.runAsync("UPDATE historical_migration_imports SET status = 'awaiting_verification', updated_at = ? WHERE id = ? AND group_id = ? AND status != 'approved'", now(), importId, groupId);
   });
 }
+
+/* ============================================================
+   HISTORICAL LEDGER MIGRATION — STEP 3
+   Member verification, validation and administrator approval.
+   Posting and approval audit are atomic and idempotent per draft.
+   ============================================================ */
+
+export async function returnHistoricalMigrationImportForCorrection(
+  groupId: number, importId: number, reviewerMemberId: number, reason = 'Returned by administrator for correction.',
+): Promise<void> {
+  await requireHistoricalGroupAdmin(groupId, reviewerMemberId);
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ status: string; notes: string }>(
+    'SELECT status, notes FROM historical_migration_imports WHERE id = ? AND group_id = ? LIMIT 1', importId, groupId,
+  );
+  if (!row) throw new Error('Historical import was not found.');
+  if (row.status !== 'awaiting_verification') throw new Error('Only an import awaiting verification can be returned for correction.');
+  const timestamp = now();
+  const auditNote = `${normalizeText(reason)} (${timestamp})`;
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      "UPDATE historical_migration_drafts SET status = 'needs_correction', updated_at = ? WHERE import_id = ? AND group_id = ? AND status = 'awaiting_verification'",
+      timestamp, importId, groupId,
+    );
+    await db.runAsync(
+      "UPDATE historical_migration_imports SET status = 'needs_correction', notes = ?, updated_at = ? WHERE id = ? AND group_id = ?",
+      [normalizeText(row.notes || ''), auditNote].filter(Boolean).join(' | '), timestamp, importId, groupId,
+    );
+  });
+}
+
+export type HistoricalMigrationApprovalResult = {
+  import_id: number;
+  approved_drafts: number;
+  posted_transactions: number;
+  saved_opening_balances: number;
+  saved_loan_snapshots: number;
+};
+
+export async function approveHistoricalMigrationImport(input: {
+  group_id: number;
+  import_id: number;
+  approver_member_id: number;
+  confirmed_member_numbers: Record<number, string>;
+  evidence_reviewed: boolean;
+  amounts_reviewed: boolean;
+}): Promise<HistoricalMigrationApprovalResult> {
+  const { group_id: groupId, import_id: importId, approver_member_id: approverId } = input;
+  await requireHistoricalGroupAdmin(groupId, approverId);
+  if (input.evidence_reviewed !== true || input.amounts_reviewed !== true) {
+    throw new Error('Confirm that the original ledger evidence and every amount/date have been reviewed before approval.');
+  }
+
+  const db = await getDatabase();
+  const timestamp = now();
+  const result: HistoricalMigrationApprovalResult = {
+    import_id: importId, approved_drafts: 0, posted_transactions: 0,
+    saved_opening_balances: 0, saved_loan_snapshots: 0,
+  };
+
+  await db.withTransactionAsync(async () => {
+    const imp = await db.getFirstAsync<{
+      id: number; group_id: number; status: string; evidence_name: string; source_reference: string;
+    }>(
+      'SELECT id, group_id, status, evidence_name, source_reference FROM historical_migration_imports WHERE id = ? AND group_id = ? LIMIT 1',
+      importId, groupId,
+    );
+    if (!imp) throw new Error('The selected historical import does not belong to this group.');
+    if (imp.status !== 'awaiting_verification') throw new Error('Only imports awaiting verification can be approved.');
+
+    const drafts = await db.getAllAsync<HistoricalMigrationDraft>(
+      'SELECT * FROM historical_migration_drafts WHERE import_id = ? AND group_id = ? ORDER BY transaction_date ASC, id ASC',
+      importId, groupId,
+    );
+    if (!drafts.length) throw new Error('There are no transaction drafts to approve.');
+
+    const today = new Date();
+    const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const memberRequired = new Set(['savings','loan_issued','loan_repayment','previous_loan_balance','fine','insurance']);
+    const supported = new Set(['savings','loan_issued','loan_repayment','previous_loan_balance','fine','insurance','group_income','group_expense']);
+
+    // Validate the entire batch before the first financial write.
+    const verifiedMembers = new Map<number, { id: number; member_number: string; full_name: string }>();
+    for (const draft of drafts) {
+      if (draft.status !== 'awaiting_verification') throw new Error(`Draft #${draft.id} is not awaiting verification.`);
+      if (!supported.has(draft.category)) throw new Error(`Draft #${draft.id} uses category "${draft.category}". Select a supported financial category before approval.`);
+      if (!validIsoDateOnly(draft.transaction_date) || draft.transaction_date > todayIso) throw new Error(`Draft #${draft.id} has an invalid or future transaction date.`);
+      const amount = Number(draft.amount);
+      if (!Number.isFinite(amount) || amount < 0 || (draft.category !== 'previous_loan_balance' && amount <= 0)) {
+        throw new Error(`Draft #${draft.id} has an invalid amount.`);
+      }
+      if (draft.is_opening_balance === 1 && draft.category !== 'savings') {
+        throw new Error(`Draft #${draft.id}: the opening-balance flag is only valid for a savings opening balance. Previous loan balances use their own snapshot category.`);
+      }
+      const priorApproval = await db.getFirstAsync<{ id: number }>(
+        'SELECT id FROM historical_migration_approvals WHERE draft_id = ? LIMIT 1', draft.id,
+      );
+      if (priorApproval) throw new Error(`Draft #${draft.id} has already been approved and cannot be posted again.`);
+
+      if (memberRequired.has(draft.category)) {
+        if (!draft.member_id) throw new Error(`Draft #${draft.id} requires a member.`);
+        const member = await db.getFirstAsync<{ id: number; member_number: string; full_name: string }>(
+          'SELECT id, member_number, full_name FROM members WHERE id = ? AND group_id = ? LIMIT 1',
+          draft.member_id, groupId,
+        );
+        if (!member) throw new Error(`The member on draft #${draft.id} does not belong to this group.`);
+        const typedNumber = normalizeText(input.confirmed_member_numbers[draft.id] || '').toUpperCase();
+        if (!typedNumber || typedNumber !== normalizeText(member.member_number).toUpperCase()) {
+          throw new Error(`Verify the member number for ${member.full_name} on draft #${draft.id}. Enter the exact number shown in the member register.`);
+        }
+        if (draft.member_number && normalizeText(draft.member_number).toUpperCase() !== normalizeText(member.member_number).toUpperCase()) {
+          throw new Error(`Draft #${draft.id} has a member-number mismatch. Return to Step 2 and correct the member before approval.`);
+        }
+        verifiedMembers.set(draft.id, member);
+      } else if (draft.member_id != null) {
+        const member = await db.getFirstAsync<{ id: number; member_number: string; full_name: string }>(
+          'SELECT id, member_number, full_name FROM members WHERE id = ? AND group_id = ? LIMIT 1',
+          draft.member_id, groupId,
+        );
+        if (!member) throw new Error(`The optional member on draft #${draft.id} does not belong to this group.`);
+        verifiedMembers.set(draft.id, member);
+      }
+    }
+
+    await ensureFinancialAccountsForGroup(db, groupId);
+
+    for (const draft of drafts) {
+      const amount = Number(draft.amount);
+      const member = verifiedMembers.get(draft.id) || null;
+      const sourceReference = normalizeText(draft.source_reference || imp.source_reference || '')
+        || `HIST-MIG-${groupId}-${importId}-${draft.id}`;
+      const description = normalizeText(draft.description || '') || `Historical ${draft.category.replace(/_/g, ' ')}`;
+      const reason = `${description} — ${sourceReference}`;
+      const ledgerDate = `${draft.transaction_date}T12:00:00.000Z`;
+      let postingKind = 'financial_transaction';
+      let transactionId: number | null = null;
+      let loanBalanceId: number | null = null;
+
+      if (draft.category === 'savings' && draft.is_opening_balance === 1) {
+        postingKind = 'opening_savings_balance';
+        const existing = await db.getFirstAsync<{ opening_savings: number | null }>(
+          'SELECT opening_savings FROM member_opening_balances WHERE group_id = ? AND member_id = ? LIMIT 1',
+          groupId, member!.id,
+        );
+        if (existing && existing.opening_savings != null && Number(existing.opening_savings) !== 0) {
+          throw new Error(`Member ${member!.member_number} already has an opening savings balance. Reconcile it before approving this new opening balance.`);
+        }
+        if (existing) {
+          await db.runAsync(
+            'UPDATE member_opening_balances SET opening_savings = ?, saved_at = ? WHERE group_id = ? AND member_id = ?',
+            amount, timestamp, groupId, member!.id,
+          );
+        } else {
+          await db.runAsync(
+            `INSERT INTO member_opening_balances (member_id, group_id, opening_shares, share_value, opening_savings, opening_loan_balance, loan_due_date, saved_at)
+             VALUES (?, ?, NULL, NULL, ?, 0, NULL, ?)`,
+            member!.id, groupId, amount, timestamp,
+          );
+        }
+        result.saved_opening_balances += 1;
+      } else if (draft.category === 'previous_loan_balance') {
+        postingKind = 'loan_balance_snapshot';
+        const duplicateDate = await db.getFirstAsync<{ id: number }>(
+          'SELECT id FROM historical_member_loan_balances WHERE group_id = ? AND member_id = ? AND transaction_date = ? AND is_deleted = 0 LIMIT 1',
+          groupId, member!.id, draft.transaction_date,
+        );
+        if (duplicateDate) throw new Error(`Member ${member!.member_number} already has a loan balance snapshot on ${draft.transaction_date}. Reconcile the existing snapshot first.`);
+        const inserted = await db.runAsync(
+          `INSERT INTO historical_member_loan_balances (group_id, member_id, balance, transaction_date, source_reference, source_notes, is_deleted, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+          groupId, member!.id, amount, draft.transaction_date, `${sourceReference}-D${draft.id}`.slice(0, 120), reason, timestamp,
+        );
+        loanBalanceId = Number(inserted.lastInsertRowId);
+        result.saved_loan_snapshots += 1;
+      } else {
+        let accountType: FinancialAccountType;
+        let transactionType: string;
+        let signedAmount = amount;
+        switch (draft.category) {
+          case 'savings': accountType = 'savings'; transactionType = 'savings_contribution'; break;
+          case 'loan_issued': accountType = 'loan_fund'; transactionType = 'loan_issued'; signedAmount = -amount; break;
+          case 'loan_repayment': accountType = 'loan_repayment'; transactionType = 'loan_repayment'; break;
+          case 'insurance': accountType = 'insurance_fund'; transactionType = 'insurance_contribution'; break;
+          case 'fine': accountType = 'fines'; transactionType = 'fine'; break;
+          case 'group_income': accountType = 'external_fund'; transactionType = 'external_fund'; break;
+          case 'group_expense': accountType = 'expenditure_fund'; transactionType = 'expenditure'; signedAmount = -amount; break;
+          default: throw new Error(`Unsupported financial category on draft #${draft.id}.`);
+        }
+        const inserted = await db.runAsync(
+          `INSERT INTO financial_transactions (group_id, account_type, amount, reason, member_id, meeting_id, collection_id, transaction_type, reversed_transaction_id, reversed, created_at)
+           VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, NULL, 0, ?)`,
+          groupId, accountType, signedAmount, reason, member?.id ?? null, transactionType, ledgerDate,
+        );
+        transactionId = Number(inserted.lastInsertRowId);
+        await db.runAsync(
+          'UPDATE financial_accounts SET balance = balance + ?, updated_at = ? WHERE group_id = ? AND account_type = ?',
+          signedAmount, timestamp, groupId, accountType,
+        );
+        if (draft.category === 'fine' || draft.category === 'insurance') {
+          await db.runAsync(
+            `INSERT INTO historical_extra_entries
+              (group_id, member_id, transaction_id, entry_type, amount, transaction_date, fine_reason, lender_name, interest_amount, due_date, source_reference, source_notes, is_deleted, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, '', 0, NULL, ?, ?, 0, ?)`,
+            groupId, member?.id ?? null, transactionId, draft.category, amount, draft.transaction_date,
+            draft.category === 'fine' ? (description || 'other') : '', sourceReference, reason, timestamp,
+          );
+        }
+        if (member) {
+          // The member passbook records loan issued as a positive amount in the existing app convention.
+          const passbookAmount = draft.category === 'loan_issued' ? amount : signedAmount;
+          const passbookType = draft.category === 'group_income' || draft.category === 'group_expense' ? 'historical_group_transaction' : transactionType;
+          await addPassbookEntry(db, groupId, member.id, null, transactionId, passbookType, passbookAmount, reason, ledgerDate);
+        }
+        result.posted_transactions += 1;
+      }
+
+      await db.runAsync(
+        `INSERT INTO historical_migration_approvals
+          (group_id, import_id, draft_id, approved_by_member_id, verified_member_id, confirmed_member_number,
+           posting_kind, posted_transaction_id, posted_loan_balance_id, source_reference, approved_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        groupId, importId, draft.id, approverId, member?.id ?? null,
+        member ? normalizeText(input.confirmed_member_numbers[draft.id]).toUpperCase() : '',
+        postingKind, transactionId, loanBalanceId, sourceReference, timestamp,
+      );
+      await db.runAsync(
+        "UPDATE historical_migration_drafts SET status = 'approved', updated_at = ? WHERE id = ? AND import_id = ? AND group_id = ?",
+        timestamp, draft.id, importId, groupId,
+      );
+      result.approved_drafts += 1;
+    }
+
+    await db.runAsync(
+      "UPDATE historical_migration_imports SET status = 'approved', updated_at = ? WHERE id = ? AND group_id = ?",
+      timestamp, importId, groupId,
+    );
+    await db.runAsync('UPDATE groups SET last_activity_at = ? WHERE id = ?', timestamp, groupId);
+  });
+
+  return result;
+}
+
+export async function getHistoricalMigrationApprovalHistory(
+  groupId: number,
+  importId: number,
+): Promise<Array<{
+  draft_id: number; approved_by_member_id: number; approver_name: string;
+  verified_member_id: number | null; confirmed_member_number: string;
+  posting_kind: string; posted_transaction_id: number | null;
+  posted_loan_balance_id: number | null; source_reference: string; approved_at: string;
+}>> {
+  const db = await getDatabase();
+  return db.getAllAsync<{
+    draft_id: number; approved_by_member_id: number; approver_name: string;
+    verified_member_id: number | null; confirmed_member_number: string;
+    posting_kind: string; posted_transaction_id: number | null;
+    posted_loan_balance_id: number | null; source_reference: string; approved_at: string;
+  }>(
+    `SELECT a.draft_id, a.approved_by_member_id, approver.full_name AS approver_name,
+            a.verified_member_id, a.confirmed_member_number, a.posting_kind,
+            a.posted_transaction_id, a.posted_loan_balance_id, a.source_reference, a.approved_at
+     FROM historical_migration_approvals a
+     JOIN members approver ON approver.id = a.approved_by_member_id
+     WHERE a.group_id = ? AND a.import_id = ? ORDER BY a.id ASC`,
+    groupId, importId,
+  );
+}
+
