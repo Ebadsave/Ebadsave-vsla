@@ -1341,6 +1341,49 @@ status TEXT NOT NULL DEFAULT 'active',
     CREATE INDEX IF NOT EXISTS idx_historical_imports_member_date
       ON historical_transaction_imports(group_id, member_id, transaction_date, id);
 
+    CREATE TABLE IF NOT EXISTS historical_migration_imports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      evidence_type TEXT NOT NULL CHECK (evidence_type IN ('manual','pdf','image','audio','video')),
+      evidence_name TEXT NOT NULL DEFAULT '',
+      evidence_uri TEXT NOT NULL DEFAULT '',
+      source_reference TEXT NOT NULL DEFAULT '',
+      notes TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending_review' CHECK (status IN ('pending_review','processing','needs_correction','awaiting_verification','approved','rejected')),
+      created_by_member_id INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (created_by_member_id) REFERENCES members(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_historical_migration_imports_group_status
+      ON historical_migration_imports(group_id, status, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS historical_migration_drafts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      import_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL,
+      member_id INTEGER,
+      member_name TEXT NOT NULL DEFAULT '',
+      member_number TEXT NOT NULL DEFAULT '',
+      category TEXT NOT NULL CHECK (category IN ('savings','loan_issued','loan_repayment','previous_loan_balance','insurance','fine','group_income','group_expense','other')),
+      transaction_date TEXT NOT NULL,
+      amount REAL NOT NULL CHECK (amount >= 0),
+      is_opening_balance INTEGER NOT NULL DEFAULT 0 CHECK (is_opening_balance IN (0,1)),
+      description TEXT NOT NULL DEFAULT '',
+      source_reference TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','needs_correction','awaiting_verification','approved','rejected')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (import_id) REFERENCES historical_migration_imports(id) ON DELETE CASCADE,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (member_id) REFERENCES members(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_historical_migration_drafts_import
+      ON historical_migration_drafts(import_id, id);
+    CREATE INDEX IF NOT EXISTS idx_historical_migration_drafts_group_date
+      ON historical_migration_drafts(group_id, transaction_date, id);
+
     CREATE TABLE IF NOT EXISTS historical_extra_entries (
       id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, member_id INTEGER, transaction_id INTEGER,
       entry_type TEXT NOT NULL CHECK (entry_type IN ('fine', 'insurance', 'external_loan')),
@@ -2203,8 +2246,8 @@ export type HistoricalFinancialTransactionRecord = {
   imported_at: string;
 };
 
-function validIsoDateOnly(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+function validIsoDateOnly(value: string | null | undefined): boolean {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const parsed = new Date(`${value}T12:00:00.000Z`);
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
@@ -2450,7 +2493,7 @@ export type HistoricalEditInput = {
   interest_amount?: number; due_date?: string | null; source_notes?: string;
 };
 
-function validateHistoricalDate(value: string, field = 'Transaction date'): void {
+function validateHistoricalDate(value: string | null | undefined, field = 'Transaction date'): void {
   if (!validIsoDateOnly(value)) throw new Error(`${field} must be a real date in YYYY-MM-DD format.`);
 }
 
@@ -2635,75 +2678,86 @@ export async function recordHistoricalExtraEntry(groupId: number, input: Histori
 }
 
 export async function editHistoricalEntry(groupId: number, entryKind: 'standard' | 'extra', entryId: number, input: HistoricalEditInput, editorMemberId: number): Promise<void> {
+  // Legacy standard imports are preserved for reading but cannot be edited.
   if (entryKind === 'standard') {
     throw new Error('Editing through the old historical import system is disabled. Existing records are preserved.');
   }
+
   await requireHistoricalGroupAdmin(groupId, editorMemberId);
-  const db = await getDatabase(); const amount = Number(input.amount); const date = normalizeText(input.transaction_date); const timestamp = now();
+  const db = await getDatabase();
+  const amount = Number(input.amount);
+  const date = normalizeText(input.transaction_date);
+  const timestamp = now();
   if (!Number.isFinite(amount) || amount <= 0) throw new Error('Amount must be greater than zero.');
   validateHistoricalDate(date);
+
   await db.withTransactionAsync(async () => {
-    if (entryKind === 'standard') {
-      const row = await db.getFirstAsync<any>('SELECT * FROM historical_transaction_imports WHERE id = ? AND group_id = ? AND is_deleted = 0 LIMIT 1', entryId, groupId);
-      if (!row) throw new Error('This entry is no longer available. Refresh the list.');
-      const signedOld = row.historical_type === 'loan_disbursement' ? -Number(row.amount) : Number(row.amount);
-      const signedNew = row.historical_type === 'loan_disbursement' ? -amount : amount;
-      const accountType: FinancialAccountType = row.historical_type === 'savings' ? 'savings' : row.historical_type === 'loan_disbursement' ? 'loan_fund' : 'loan_repayment';
-      let editedShareCount = row.share_count;
-      if (row.historical_type === 'savings') {
-        const unit = Number(row.share_value || 0);
-        if (unit <= 0 || Math.abs(amount / unit - Math.round(amount / unit)) > 0.0001) throw new Error('Savings amount must be a whole number of the original share value.');
-        editedShareCount = Math.round(amount / unit);
-      }
-      const audit = `Edited on ${timestamp.slice(0, 10)} by ${editorMemberId}; previous amount ${row.amount}; previous date ${row.transaction_date}.`;
-      await db.runAsync('UPDATE historical_transaction_imports SET amount = ?, transaction_date = ?, share_count = ?, source_notes = ?, edited_at = ?, edited_by_member_id = ? WHERE id = ? AND group_id = ?', amount, date, editedShareCount, [normalizeText(input.source_notes || row.source_notes || ''), audit].filter(Boolean).join(' | '), timestamp, editorMemberId, entryId, groupId);
-      await db.runAsync('UPDATE financial_transactions SET amount = ?, created_at = ? WHERE id = ? AND group_id = ?', signedNew, `${date}T12:00:00.000Z`, row.transaction_id, groupId);
-      await db.runAsync('UPDATE financial_accounts SET balance = balance + ?, updated_at = ? WHERE group_id = ? AND account_type = ?', signedNew - signedOld, timestamp, groupId, accountType);
-      await db.runAsync('UPDATE member_passbook_records SET amount = ?, created_at = ?, description = ? WHERE transaction_id = ? AND group_id = ?', amount, `${date}T12:00:00.000Z`, `Historical ${row.historical_type.replace('_', ' ')} (edited on ${timestamp.slice(0, 10)})`, row.transaction_id, groupId);
-      await rebuildHistoricalPassbookBalance(db, groupId, Number(row.member_id));
-    } else {
-      const row = await db.getFirstAsync<any>('SELECT * FROM historical_extra_entries WHERE id = ? AND group_id = ? AND is_deleted = 0 LIMIT 1', entryId, groupId);
-      if (!row) throw new Error('This entry is no longer available. Refresh the list.');
-      const dueDate = normalizeText(input.due_date || '') || null; if (dueDate) validateHistoricalDate(dueDate, 'Due date');
-      const interest = Number(input.interest_amount ?? row.interest_amount ?? 0); if (!Number.isFinite(interest) || interest < 0) throw new Error('Interest must be zero or greater.');
-      const audit = `Edited on ${timestamp.slice(0, 10)} by ${editorMemberId}; previous amount ${row.amount}; previous date ${row.transaction_date}.`;
-      const accountType: FinancialAccountType = row.entry_type === 'fine' ? 'fines' : row.entry_type === 'insurance' ? 'insurance_fund' : 'external_fund';
-      await db.runAsync('UPDATE historical_extra_entries SET amount = ?, transaction_date = ?, fine_reason = ?, lender_name = ?, interest_amount = ?, due_date = ?, source_notes = ?, edited_at = ?, edited_by_member_id = ? WHERE id = ? AND group_id = ?', amount, date, normalizeText(input.fine_reason || row.fine_reason || ''), normalizeText(input.lender_name || row.lender_name || ''), interest, dueDate, [normalizeText(input.source_notes || row.source_notes || ''), audit].filter(Boolean).join(' | '), timestamp, editorMemberId, entryId, groupId);
-      await db.runAsync('UPDATE financial_transactions SET amount = ?, created_at = ?, reason = ? WHERE id = ? AND group_id = ?', amount, `${date}T12:00:00.000Z`, `${row.entry_type} (edited on ${timestamp.slice(0, 10)})`, row.transaction_id, groupId);
-      await db.runAsync('UPDATE financial_accounts SET balance = balance + ?, updated_at = ? WHERE group_id = ? AND account_type = ?', amount - Number(row.amount), timestamp, groupId, accountType);
-      if (row.member_id != null) await db.runAsync('UPDATE member_passbook_records SET amount = ?, created_at = ?, description = ? WHERE transaction_id = ? AND group_id = ?', amount, `${date}T12:00:00.000Z`, `${row.entry_type} (edited on ${timestamp.slice(0, 10)})`, row.transaction_id, groupId);
+    const row = await db.getFirstAsync<any>(
+      'SELECT * FROM historical_extra_entries WHERE id = ? AND group_id = ? AND is_deleted = 0 LIMIT 1',
+      entryId, groupId,
+    );
+    if (!row) throw new Error('This entry is no longer available. Refresh the list.');
+
+    const dueDate = normalizeText(input.due_date || '') || null;
+    if (dueDate) validateHistoricalDate(dueDate, 'Due date');
+    const interest = Number(input.interest_amount ?? row.interest_amount ?? 0);
+    if (!Number.isFinite(interest) || interest < 0) throw new Error('Interest must be zero or greater.');
+    const audit = `Edited on ${timestamp.slice(0, 10)} by ${editorMemberId}; previous amount ${row.amount}; previous date ${row.transaction_date}.`;
+    const accountType: FinancialAccountType = row.entry_type === 'fine' ? 'fines' : row.entry_type === 'insurance' ? 'insurance_fund' : 'external_fund';
+
+    await db.runAsync(
+      'UPDATE historical_extra_entries SET amount = ?, transaction_date = ?, fine_reason = ?, lender_name = ?, interest_amount = ?, due_date = ?, source_notes = ?, edited_at = ?, edited_by_member_id = ? WHERE id = ? AND group_id = ?',
+      amount, date, normalizeText(input.fine_reason || row.fine_reason || ''), normalizeText(input.lender_name || row.lender_name || ''), interest, dueDate,
+      [normalizeText(input.source_notes || row.source_notes || ''), audit].filter(Boolean).join(' | '), timestamp, editorMemberId, entryId, groupId,
+    );
+    await db.runAsync(
+      'UPDATE financial_transactions SET amount = ?, created_at = ?, reason = ? WHERE id = ? AND group_id = ?',
+      amount, `${date}T12:00:00.000Z`, `${row.entry_type} (edited on ${timestamp.slice(0, 10)})`, row.transaction_id, groupId,
+    );
+    await db.runAsync(
+      'UPDATE financial_accounts SET balance = balance + ?, updated_at = ? WHERE group_id = ? AND account_type = ?',
+      amount - Number(row.amount), timestamp, groupId, accountType,
+    );
+    if (row.member_id != null) {
+      await db.runAsync(
+        'UPDATE member_passbook_records SET amount = ?, created_at = ?, description = ? WHERE transaction_id = ? AND group_id = ?',
+        amount, `${date}T12:00:00.000Z`, `${row.entry_type} (edited on ${timestamp.slice(0, 10)})`, row.transaction_id, groupId,
+      );
     }
   });
 }
 
 export async function softDeleteHistoricalEntry(groupId: number, entryKind: 'standard' | 'extra', entryId: number, adminMemberId: number): Promise<void> {
+  // Legacy standard imports are preserved for reading but cannot be deleted.
   if (entryKind === 'standard') {
     throw new Error('Deleting through the old historical import system is disabled. Existing records are preserved.');
   }
+
   await requireHistoricalGroupAdmin(groupId, adminMemberId);
-  const db = await getDatabase(); const timestamp = now();
+  const db = await getDatabase();
+  const timestamp = now();
   await db.withTransactionAsync(async () => {
-    if (entryKind === 'standard') {
-      const row = await db.getFirstAsync<any>('SELECT * FROM historical_transaction_imports WHERE id = ? AND group_id = ? AND is_deleted = 0 LIMIT 1', entryId, groupId);
-      if (!row) throw new Error('This entry is already deleted or does not exist.');
-      const signed = row.historical_type === 'loan_disbursement' ? -Number(row.amount) : Number(row.amount);
-      const accountType: FinancialAccountType = row.historical_type === 'savings' ? 'savings' : row.historical_type === 'loan_disbursement' ? 'loan_fund' : 'loan_repayment';
-      await db.runAsync('UPDATE historical_transaction_imports SET is_deleted = 1, edited_at = ?, edited_by_member_id = ? WHERE id = ? AND group_id = ?', timestamp, adminMemberId, entryId, groupId);
-      await db.runAsync('UPDATE financial_transactions SET reversed = 1 WHERE id = ? AND group_id = ?', row.transaction_id, groupId);
-      await db.runAsync('UPDATE financial_accounts SET balance = balance - ?, updated_at = ? WHERE group_id = ? AND account_type = ?', signed, timestamp, groupId, accountType);
-      await db.runAsync('UPDATE member_passbook_records SET amount = 0, description = ? WHERE transaction_id = ? AND group_id = ?', `DELETED on ${timestamp.slice(0, 10)} by admin ${adminMemberId}`, row.transaction_id, groupId);
+    const row = await db.getFirstAsync<any>(
+      'SELECT * FROM historical_extra_entries WHERE id = ? AND group_id = ? AND is_deleted = 0 LIMIT 1',
+      entryId, groupId,
+    );
+    if (!row) throw new Error('This entry is already deleted or does not exist.');
+    const accountType: FinancialAccountType = row.entry_type === 'fine' ? 'fines' : row.entry_type === 'insurance' ? 'insurance_fund' : 'external_fund';
+    await db.runAsync(
+      'UPDATE historical_extra_entries SET is_deleted = 1, edited_at = ?, edited_by_member_id = ? WHERE id = ? AND group_id = ?',
+      timestamp, adminMemberId, entryId, groupId,
+    );
+    await db.runAsync('UPDATE financial_transactions SET reversed = 1 WHERE id = ? AND group_id = ?', row.transaction_id, groupId);
+    await db.runAsync(
+      'UPDATE financial_accounts SET balance = balance - ?, updated_at = ? WHERE group_id = ? AND account_type = ?',
+      Number(row.amount), timestamp, groupId, accountType,
+    );
+    if (row.member_id != null) {
+      await db.runAsync(
+        'UPDATE member_passbook_records SET amount = 0, description = ? WHERE transaction_id = ? AND group_id = ?',
+        `DELETED on ${timestamp.slice(0, 10)} by admin ${adminMemberId}`, row.transaction_id, groupId,
+      );
       await rebuildHistoricalPassbookBalance(db, groupId, Number(row.member_id));
-    } else {
-      const row = await db.getFirstAsync<any>('SELECT * FROM historical_extra_entries WHERE id = ? AND group_id = ? AND is_deleted = 0 LIMIT 1', entryId, groupId);
-      if (!row) throw new Error('This entry is already deleted or does not exist.');
-      const accountType: FinancialAccountType = row.entry_type === 'fine' ? 'fines' : row.entry_type === 'insurance' ? 'insurance_fund' : 'external_fund';
-      await db.runAsync('UPDATE historical_extra_entries SET is_deleted = 1, edited_at = ?, edited_by_member_id = ? WHERE id = ? AND group_id = ?', timestamp, adminMemberId, entryId, groupId);
-      await db.runAsync('UPDATE financial_transactions SET reversed = 1 WHERE id = ? AND group_id = ?', row.transaction_id, groupId);
-      await db.runAsync('UPDATE financial_accounts SET balance = balance - ?, updated_at = ? WHERE group_id = ? AND account_type = ?', Number(row.amount), timestamp, groupId, accountType);
-      if (row.member_id != null) {
-        await db.runAsync('UPDATE member_passbook_records SET amount = 0, description = ? WHERE transaction_id = ? AND group_id = ?', `DELETED on ${timestamp.slice(0, 10)} by admin ${adminMemberId}`, row.transaction_id, groupId);
-        await rebuildHistoricalPassbookBalance(db, groupId, Number(row.member_id));
-      }
     }
   });
 }
@@ -2772,7 +2826,7 @@ const BACKUP_TABLES = [
   'member_auth_attempts', 'member_transaction_signatures', 'app_access_sessions',
   'app_access_authorizers', 'meeting_attendance', 'meeting_closures',
   'financial_accounts', 'financial_collections', 'financial_collection_items',
-  'financial_transactions', 'historical_transaction_imports', 'historical_extra_entries', 'historical_member_loan_balances', 'financial_transaction_reversals', 'receipts',
+  'financial_transactions', 'historical_transaction_imports', 'historical_extra_entries', 'historical_member_loan_balances', 'historical_migration_imports', 'historical_migration_drafts', 'financial_transaction_reversals', 'receipts',
   'notification_queue', 'notification_delivery', 'meeting_audit_records',
   'sync_queue', 'member_passbook_records', 'member_statement_records',
   'loan_interest_charges', 'meeting_loan_interest_charges', 'loan_policy_settings', 'loan_committee_members', 'loan_applications',
@@ -2831,6 +2885,7 @@ export async function createGroupDatabaseBackup(groupId: number): Promise<string
     'loan_emergency_freezes', 'loan_audit_log', 'member_opening_balances',
     'onboarding_balance_audit', 'historical_transaction_imports',
     'historical_extra_entries', 'historical_member_loan_balances',
+    'historical_migration_imports', 'historical_migration_drafts',
   ]);
   const memberTables = new Set([
     'deleted_member_numbers', 'member_next_of_kin', 'next_of_kin_change_history',
@@ -2842,7 +2897,7 @@ export async function createGroupDatabaseBackup(groupId: number): Promise<string
   const schemaCache = new Map<string, Set<string>>();
   for (const table of BACKUP_TABLES) {
     const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info("${table}")`);
-    const columnNames = new Set(columns.map((column) => column.name));
+    const columnNames = new Set<string>(columns.map((column) => String(column.name)));
     schemaCache.set(table, columnNames);
 
     if (table === 'groups') {
@@ -2958,9 +3013,11 @@ export async function restoreGroupDatabaseBackup(
     throw new Error('Backup group identity does not match the requested KYA group. No local data was changed.');
   }
 
+  const optionalNewTables = new Set(['historical_migration_imports', 'historical_migration_drafts']);
   for (const table of BACKUP_TABLES) {
     if (!Array.isArray(parsed.tables[table])) {
-      throw new Error(`Group backup is missing table ${table}. No local data was changed.`);
+      if (optionalNewTables.has(table)) parsed.tables[table] = [];
+      else throw new Error(`Group backup is missing table ${table}. No local data was changed.`);
     }
   }
 
@@ -3013,6 +3070,7 @@ export async function restoreGroupDatabaseBackup(
     'loan_deductions', 'loan_emergency_freezes', 'loan_audit_log',
     'member_opening_balances', 'onboarding_balance_audit', 'historical_transaction_imports',
     'historical_extra_entries', 'historical_member_loan_balances',
+    'historical_migration_imports', 'historical_migration_drafts',
   ]);
   const backupMeetingIds = new Set(
     (parsed.tables.group_meetings as Record<string, unknown>[]).map((meeting) => Number(meeting.id)),
@@ -11902,4 +11960,173 @@ export async function closeAppAccessSession(
     now(),
     sessionId,
   );
+}
+
+
+/* ============================================================
+   HISTORICAL LEDGER MIGRATION — STEP 2 (DRAFTS ONLY)
+   These records are isolated from financial_transactions. Nothing
+   affects member/group balances until the later approval/posting stage.
+   ============================================================ */
+
+export type HistoricalMigrationEvidenceType = 'manual' | 'pdf' | 'image' | 'audio' | 'video';
+export type HistoricalMigrationStatus = 'pending_review' | 'processing' | 'needs_correction' | 'awaiting_verification' | 'approved' | 'rejected';
+export type HistoricalMigrationCategory = 'savings' | 'loan_issued' | 'loan_repayment' | 'previous_loan_balance' | 'insurance' | 'fine' | 'group_income' | 'group_expense' | 'other';
+
+export type HistoricalMigrationImport = {
+  id: number; group_id: number; evidence_type: HistoricalMigrationEvidenceType;
+  evidence_name: string; evidence_uri: string; source_reference: string; notes: string;
+  status: HistoricalMigrationStatus; created_by_member_id: number | null;
+  created_at: string; updated_at: string; draft_count?: number;
+};
+
+export type HistoricalMigrationDraft = {
+  id: number; import_id: number; group_id: number; member_id: number | null;
+  member_name: string; member_number: string; category: HistoricalMigrationCategory;
+  transaction_date: string; amount: number; is_opening_balance: number;
+  description: string; source_reference: string; status: string;
+  created_at: string; updated_at: string;
+};
+
+export async function createHistoricalMigrationImport(input: {
+  group_id: number; evidence_type: HistoricalMigrationEvidenceType; evidence_name?: string;
+  evidence_uri?: string; source_reference?: string; notes?: string; created_by_member_id?: number | null;
+}): Promise<number> {
+  const db = await getDatabase();
+  const group = await db.getFirstAsync<{ id: number }>('SELECT id FROM groups WHERE id = ? LIMIT 1', input.group_id);
+  if (!group) throw new Error('The selected group could not be found.');
+  const timestamp = now();
+  const result = await db.runAsync(
+    `INSERT INTO historical_migration_imports
+      (group_id, evidence_type, evidence_name, evidence_uri, source_reference, notes, status, created_by_member_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'pending_review', ?, ?, ?)`,
+    input.group_id, input.evidence_type, normalizeText(input.evidence_name || ''), normalizeText(input.evidence_uri || ''),
+    normalizeText(input.source_reference || ''), normalizeText(input.notes || ''), input.created_by_member_id ?? null, timestamp, timestamp,
+  );
+  return Number(result.lastInsertRowId);
+}
+
+export async function getHistoricalMigrationImports(groupId: number): Promise<HistoricalMigrationImport[]> {
+  const db = await getDatabase();
+  return db.getAllAsync<HistoricalMigrationImport>(
+    `SELECT i.*, (SELECT COUNT(*) FROM historical_migration_drafts d WHERE d.import_id = i.id) AS draft_count
+     FROM historical_migration_imports i WHERE i.group_id = ? ORDER BY i.created_at DESC, i.id DESC`, groupId,
+  );
+}
+
+export async function updateHistoricalMigrationImportStatus(
+  groupId: number, importId: number, status: Exclude<HistoricalMigrationStatus, 'approved'>, notes?: string,
+): Promise<void> {
+  if (!['pending_review','processing','needs_correction','awaiting_verification','rejected'].includes(status)) throw new Error('Invalid import status.');
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ id: number; status: string }>(
+    'SELECT id, status FROM historical_migration_imports WHERE id = ? AND group_id = ? LIMIT 1', importId, groupId,
+  );
+  if (!row) throw new Error('Historical import was not found.');
+  if (row.status === 'approved') throw new Error('Approved imports are locked.');
+  await db.runAsync(
+    `UPDATE historical_migration_imports SET status = ?, notes = CASE WHEN ? = '' THEN notes ELSE ? END, updated_at = ?
+     WHERE id = ? AND group_id = ?`,
+    status, normalizeText(notes || ''), normalizeText(notes || ''), now(), importId, groupId,
+  );
+}
+
+export async function createHistoricalMigrationDraft(input: {
+  import_id: number; group_id: number; member_id?: number | null; category: HistoricalMigrationCategory;
+  transaction_date: string; amount: number; is_opening_balance?: boolean; description?: string; source_reference?: string;
+}): Promise<number> {
+  const db = await getDatabase();
+  const imp = await db.getFirstAsync<{ id: number; status: string }>(
+    'SELECT id, status FROM historical_migration_imports WHERE id = ? AND group_id = ? LIMIT 1', input.import_id, input.group_id,
+  );
+  if (!imp) throw new Error('Select a valid evidence import first.');
+  if (!['pending_review','processing','needs_correction'].includes(imp.status)) throw new Error('This import is not open for draft editing.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.transaction_date)) throw new Error('Enter the original transaction date as YYYY-MM-DD.');
+  const date = new Date(`${input.transaction_date}T12:00:00.000Z`);
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0,10) !== input.transaction_date) throw new Error('The original transaction date is invalid.');
+  const amount = Number(input.amount);
+  if (!Number.isFinite(amount) || amount < 0) throw new Error('Amount must be zero or greater.');
+  if (input.member_id != null) {
+    const member = await db.getFirstAsync<{ id: number; full_name: string; member_number: string }>(
+      'SELECT id, full_name, member_number FROM members WHERE id = ? AND group_id = ? LIMIT 1', input.member_id, input.group_id,
+    );
+    if (!member) throw new Error('The selected member does not belong to this group.');
+    const result = await db.runAsync(
+      `INSERT INTO historical_migration_drafts (import_id, group_id, member_id, member_name, member_number, category, transaction_date, amount, is_opening_balance, description, source_reference, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
+      input.import_id, input.group_id, member.id, member.full_name, member.member_number, input.category, input.transaction_date,
+      amount, input.is_opening_balance ? 1 : 0, normalizeText(input.description || ''), normalizeText(input.source_reference || ''), now(), now(),
+    );
+    return Number(result.lastInsertRowId);
+  }
+  if (['savings','loan_issued','loan_repayment','previous_loan_balance','fine'].includes(input.category)) {
+    throw new Error('Choose the member for this transaction category.');
+  }
+  const result = await db.runAsync(
+    `INSERT INTO historical_migration_drafts (import_id, group_id, member_id, member_name, member_number, category, transaction_date, amount, is_opening_balance, description, source_reference, status, created_at, updated_at)
+     VALUES (?, ?, NULL, '', '', ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
+    input.import_id, input.group_id, input.category, input.transaction_date, amount, input.is_opening_balance ? 1 : 0,
+    normalizeText(input.description || ''), normalizeText(input.source_reference || ''), now(), now(),
+  );
+  return Number(result.lastInsertRowId);
+}
+
+export async function getHistoricalMigrationDrafts(importId: number, groupId: number): Promise<HistoricalMigrationDraft[]> {
+  const db = await getDatabase();
+  return db.getAllAsync<HistoricalMigrationDraft>(
+    `SELECT * FROM historical_migration_drafts WHERE import_id = ? AND group_id = ? ORDER BY transaction_date, id`, importId, groupId,
+  );
+}
+
+export async function updateHistoricalMigrationDraft(input: {
+  id: number; import_id: number; group_id: number; member_id?: number | null; category: HistoricalMigrationCategory;
+  transaction_date: string; amount: number; is_opening_balance?: boolean; description?: string; source_reference?: string;
+}): Promise<void> {
+  const db = await getDatabase();
+  const imp = await db.getFirstAsync<{ status: string }>(
+    'SELECT status FROM historical_migration_imports WHERE id = ? AND group_id = ? LIMIT 1', input.import_id, input.group_id,
+  );
+  if (!imp || !['pending_review','processing','needs_correction'].includes(imp.status)) throw new Error('This import is closed or awaiting verification.');
+  const date = new Date(`${input.transaction_date}T12:00:00.000Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.transaction_date) || !Number.isFinite(date.getTime()) || date.toISOString().slice(0,10) !== input.transaction_date) throw new Error('Enter a valid original date as YYYY-MM-DD.');
+  const amount = Number(input.amount);
+  if (!Number.isFinite(amount) || amount < 0) throw new Error('Amount must be zero or greater.');
+  let memberName = '', memberNumber = '';
+  if (input.member_id != null) {
+    const member = await db.getFirstAsync<{ full_name: string; member_number: string }>(
+      'SELECT full_name, member_number FROM members WHERE id = ? AND group_id = ? LIMIT 1', input.member_id, input.group_id,
+    );
+    if (!member) throw new Error('The selected member does not belong to this group.');
+    memberName = member.full_name; memberNumber = member.member_number;
+  } else if (['savings','loan_issued','loan_repayment','previous_loan_balance','fine'].includes(input.category)) {
+    throw new Error('Choose the member for this transaction category.');
+  }
+  const result = await db.runAsync(
+    `UPDATE historical_migration_drafts SET member_id = ?, member_name = ?, member_number = ?, category = ?, transaction_date = ?, amount = ?, is_opening_balance = ?, description = ?, source_reference = ?, status = 'draft', updated_at = ?
+     WHERE id = ? AND import_id = ? AND group_id = ? AND status != 'approved'`,
+    input.member_id ?? null, memberName, memberNumber, input.category, input.transaction_date, amount, input.is_opening_balance ? 1 : 0,
+    normalizeText(input.description || ''), normalizeText(input.source_reference || ''), now(), input.id, input.import_id, input.group_id,
+  );
+  if (result.changes === 0) throw new Error('Draft was not updated. It may be locked or no longer exist.');
+}
+
+export async function deleteHistoricalMigrationDraft(id: number, importId: number, groupId: number): Promise<void> {
+  const db = await getDatabase();
+  const imp = await db.getFirstAsync<{ status: string }>(
+    'SELECT status FROM historical_migration_imports WHERE id = ? AND group_id = ? LIMIT 1', importId, groupId,
+  );
+  if (!imp || !['pending_review','processing','needs_correction'].includes(imp.status)) throw new Error('This import is closed or awaiting verification.');
+  await db.runAsync("DELETE FROM historical_migration_drafts WHERE id = ? AND import_id = ? AND group_id = ? AND status != 'approved'", id, importId, groupId);
+}
+
+export async function setHistoricalMigrationDraftsAwaitingVerification(importId: number, groupId: number): Promise<void> {
+  const db = await getDatabase();
+  const count = await db.getFirstAsync<{ count: number }>(
+    'SELECT COUNT(*) AS count FROM historical_migration_drafts WHERE import_id = ? AND group_id = ?', importId, groupId,
+  );
+  if (!Number(count?.count || 0)) throw new Error('Add at least one transaction draft before submitting for verification.');
+  await db.withTransactionAsync(async () => {
+    await db.runAsync("UPDATE historical_migration_drafts SET status = 'awaiting_verification', updated_at = ? WHERE import_id = ? AND group_id = ? AND status != 'approved'", now(), importId, groupId);
+    await db.runAsync("UPDATE historical_migration_imports SET status = 'awaiting_verification', updated_at = ? WHERE id = ? AND group_id = ? AND status != 'approved'", now(), importId, groupId);
+  });
 }
