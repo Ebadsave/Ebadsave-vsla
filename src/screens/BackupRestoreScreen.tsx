@@ -1627,6 +1627,284 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: '#e5e7eb',
   },
-
   backButtonText: {
-    color: '#1
+    color: '#1f2937',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#1f2937',
+    marginBottom: 4,
+  },
+
+  subtitle: {
+    fontSize: 14,
+    color: '#6b7280',
+  },
+
+  section: {
+    marginBottom: 24,
+  },
+
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 12,
+  },
+
+  bodyText: {
+    fontSize: 13,
+    color: '#4b5563',
+    lineHeight: 19,
+    marginBottom: 12,
+  },
+
+  groupChoice: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 6,
+    backgroundColor: '#fff',
+  },
+
+  groupChoiceSelected: {
+    borderColor: '#16a34a',
+    backgroundColor: '#f0fdf4',
+  },
+
+  groupChoiceText: {
+    color: '#1f2937',
+    fontSize: 13,
+  },
+
+  recoveryInput: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#fff',
+    marginTop: 10,
+    color: '#111827',
+  },
+
+  pinVisibilityButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#16a34a',
+    backgroundColor: '#fff',
+  },
+
+  pinVisibilityText: {
+    color: '#166534',
+    fontWeight: '700',
+  },
+
+  infoBox: {
+    backgroundColor: '#ecfdf5',
+    borderLeftWidth: 4,
+    borderLeftColor: '#16a34a',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+
+  infoText: {
+    fontSize: 13,
+    color: '#047857',
+    lineHeight: 20,
+  },
+
+  button: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+
+  primaryButton: {
+    backgroundColor: '#16a34a',
+  },
+
+  importButton: {
+    backgroundColor: '#dbeafe',
+    marginTop: 10,
+  },
+
+  buttonIcon: {
+    fontSize: 20,
+  },
+
+  buttonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+
+  importButtonText: {
+    color: '#1d4ed8',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+
+  disabledButton: {
+    opacity: 0.6,
+  },
+
+  loadingContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 32,
+  },
+
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#6b7280',
+  },
+
+  emptyBox: {
+    backgroundColor: '#f3f4f6',
+    borderRadius: 8,
+    padding: 24,
+    alignItems: 'center',
+  },
+
+  emptyTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 4,
+  },
+
+  emptyText: {
+    fontSize: 13,
+    color: '#6b7280',
+  },
+
+  backupCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+
+  backupInfo: {
+    flex: 1,
+  },
+
+  backupName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 2,
+  },
+
+  backupDetails: {
+    fontSize: 12,
+    color: '#9ca3af',
+  },
+
+  backupActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+
+  iconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  restoreButton: {
+    backgroundColor: '#dbeafe',
+  },
+
+  emailButton: {
+    backgroundColor: '#fef3c7',
+  },
+
+  deleteButton: {
+    backgroundColor: '#fee2e2',
+  },
+
+  instructionBox: {
+    backgroundColor: '#f3f4f6',
+    borderRadius: 8,
+    padding: 16,
+  },
+
+  instructionTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 12,
+  },
+
+  instructionStep: {
+    flexDirection: 'row',
+    marginBottom: 12,
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+
+  stepNumber: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#16a34a',
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    paddingTop: 2,
+  },
+
+  stepText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#374151',
+    lineHeight: 18,
+    paddingTop: 2,
+  },
+
+  tipBox: {
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: '#fbbf24',
+  },
+
+  tipTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 4,
+  },
+
+  tipText: {
+    fontSize: 12,
+    color: '#6b7280',
+    lineHeight: 18,
+  },
+});
