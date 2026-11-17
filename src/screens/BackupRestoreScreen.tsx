@@ -13,7 +13,6 @@ import * as DocumentPicker from 'expo-document-picker';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 
 import { getAutomaticCloudBackupConsent, setAutomaticCloudBackupConsent, saveAutomaticCloudBackupPassphrase, runAutomaticCloudBackup } from '../database/backup';
-import { initializeAutomaticBackupTask, unregisterAutomaticBackupTask } from '../services/backupBackground';
 import { getAllGroups, type GroupRecord } from '../database/database';
 import { exportGroupDatabaseBackup, uploadGroupDatabaseBackupToCloud, listCloudGroupBackups, restoreCloudGroupDatabaseBackup, signInCloudflareBackupAdmin, signOutCloudflareBackupAdmin, type CloudBackupFileInfo } from './backup';
 
@@ -205,12 +204,16 @@ const handleCloudBackupConsent = async () => {
     if (!saved.success) throw new Error(saved.message);
     if (nextValue) {
       setCloudBackupConsent(true);
+      // Load optional native background-task modules only when the user
+      // explicitly enables automatic backups, not while the app is starting.
+      const { initializeAutomaticBackupTask } = await import('../services/backupBackground');
       await initializeAutomaticBackupTask();
       setCloudBackupStatus('Consent enabled. Starting the first encrypted cloud backup.');
       const result = await runAutomaticCloudBackup(true);
       setCloudBackupStatus(result.message);
       if (!result.success && !result.skipped) Alert.alert('Cloud Backup Pending', result.error || result.message);
     } else {
+      const { unregisterAutomaticBackupTask } = await import('../services/backupBackground');
       await unregisterAutomaticBackupTask();
       setCloudBackupConsent(false);
       setCloudBackupStatus('Automatic cloud uploads are disabled. Local backups remain available.');
