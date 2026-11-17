@@ -64,7 +64,7 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
       setImports(loadedImports);
       setMembers((loadedMembers as Member[]).slice().sort((a,b)=>a.full_name.localeCompare(b.full_name)));
       if (selectedImport) {
-        const fresh = loadedImports.find(i=>i.id===selectedImport.id) || null;
+        const fresh = loadedImports.find((i: HistoricalMigrationImport) => i.id === selectedImport.id) || null;
         setSelectedImport(fresh);
         setDrafts(fresh ? await getHistoricalMigrationDrafts(fresh.id,groupId) : []);
       }
