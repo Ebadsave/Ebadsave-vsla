@@ -12396,6 +12396,131 @@ export async function approveHistoricalMigrationImport(input: {
   return result;
 }
 
+
+/* ============================================================
+   HISTORICAL LEDGER MIGRATION — STEP 4
+   Read-only reconciliation report. This does not post, reverse,
+   edit or delete financial records.
+   ============================================================ */
+
+export type HistoricalMigrationReconciliation = {
+  imports: {
+    total: number;
+    approved: number;
+    rejected: number;
+    awaiting_verification: number;
+    pending_or_correction: number;
+  };
+  drafts: {
+    total: number;
+    approved: number;
+    unapproved: number;
+    approved_value: number;
+  };
+  categories: Array<{
+    category: string;
+    total_count: number;
+    approved_count: number;
+    approved_amount: number;
+    opening_savings_amount: number;
+  }>;
+  recent_approvals: Array<{
+    draft_id: number;
+    category: string;
+    transaction_date: string;
+    amount: number;
+    member_name: string;
+    member_number: string;
+    approver_name: string;
+    source_reference: string;
+    posting_kind: string;
+    approved_at: string;
+  }>;
+};
+
+export async function getHistoricalMigrationReconciliation(
+  groupId: number,
+): Promise<HistoricalMigrationReconciliation> {
+  const db = await getDatabase();
+  const importCounts = await db.getFirstAsync<{
+    total: number; approved: number; rejected: number;
+    awaiting_verification: number; pending_or_correction: number;
+  }>(
+    `SELECT COUNT(*) AS total,
+      COALESCE(SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END), 0) AS approved,
+      COALESCE(SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END), 0) AS rejected,
+      COALESCE(SUM(CASE WHEN status = 'awaiting_verification' THEN 1 ELSE 0 END), 0) AS awaiting_verification,
+      COALESCE(SUM(CASE WHEN status IN ('pending_review','processing','needs_correction') THEN 1 ELSE 0 END), 0) AS pending_or_correction
+     FROM historical_migration_imports WHERE group_id = ?`,
+    groupId,
+  );
+  const draftCounts = await db.getFirstAsync<{
+    total: number; approved: number; unapproved: number; approved_value: number;
+  }>(
+    `SELECT COUNT(*) AS total,
+      COALESCE(SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END), 0) AS approved,
+      COALESCE(SUM(CASE WHEN status != 'approved' THEN 1 ELSE 0 END), 0) AS unapproved,
+      COALESCE(SUM(CASE WHEN status = 'approved' AND category NOT IN ('previous_loan_balance') THEN amount ELSE 0 END), 0) AS approved_value
+     FROM historical_migration_drafts WHERE group_id = ?`,
+    groupId,
+  );
+  const categoryRows = await db.getAllAsync<{
+    category: string; total_count: number; approved_count: number;
+    approved_amount: number; opening_savings_amount: number;
+  }>(
+    `SELECT category,
+      COUNT(*) AS total_count,
+      COALESCE(SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END), 0) AS approved_count,
+      COALESCE(SUM(CASE WHEN status = 'approved' AND category != 'previous_loan_balance' THEN amount ELSE 0 END), 0) AS approved_amount,
+      COALESCE(SUM(CASE WHEN status = 'approved' AND category = 'savings' AND is_opening_balance = 1 THEN amount ELSE 0 END), 0) AS opening_savings_amount
+     FROM historical_migration_drafts WHERE group_id = ? GROUP BY category ORDER BY category`,
+    groupId,
+  );
+  const recentApprovals = await db.getAllAsync<{
+    draft_id: number; category: string; transaction_date: string; amount: number;
+    member_name: string; member_number: string; approver_name: string;
+    source_reference: string; posting_kind: string; approved_at: string;
+  }>(
+    `SELECT d.id AS draft_id, d.category, d.transaction_date, d.amount,
+      COALESCE(m.full_name, d.member_name, 'Group transaction') AS member_name,
+      COALESCE(m.member_number, d.member_number, '') AS member_number,
+      approver.full_name AS approver_name, a.source_reference, a.posting_kind, a.approved_at
+     FROM historical_migration_approvals a
+     JOIN historical_migration_drafts d ON d.id = a.draft_id AND d.group_id = a.group_id
+     LEFT JOIN members m ON m.id = a.verified_member_id AND m.group_id = a.group_id
+     JOIN members approver ON approver.id = a.approved_by_member_id
+     WHERE a.group_id = ? ORDER BY a.approved_at DESC, a.id DESC LIMIT 100`,
+    groupId,
+  );
+  return {
+    imports: {
+      total: Number(importCounts?.total || 0),
+      approved: Number(importCounts?.approved || 0),
+      rejected: Number(importCounts?.rejected || 0),
+      awaiting_verification: Number(importCounts?.awaiting_verification || 0),
+      pending_or_correction: Number(importCounts?.pending_or_correction || 0),
+    },
+    drafts: {
+      total: Number(draftCounts?.total || 0),
+      approved: Number(draftCounts?.approved || 0),
+      unapproved: Number(draftCounts?.unapproved || 0),
+      approved_value: Number(draftCounts?.approved_value || 0),
+    },
+    categories: categoryRows.map((row) => ({
+      category: row.category,
+      total_count: Number(row.total_count || 0),
+      approved_count: Number(row.approved_count || 0),
+      approved_amount: Number(row.approved_amount || 0),
+      opening_savings_amount: Number(row.opening_savings_amount || 0),
+    })),
+    recent_approvals: recentApprovals.map((row) => ({
+      ...row,
+      draft_id: Number(row.draft_id),
+      amount: Number(row.amount || 0),
+    })),
+  };
+}
+
 export async function getHistoricalMigrationApprovalHistory(
   groupId: number,
   importId: number,
