@@ -1408,6 +1408,33 @@ status TEXT NOT NULL DEFAULT 'active',
     CREATE INDEX IF NOT EXISTS idx_historical_migration_approvals_group_date
       ON historical_migration_approvals(group_id, approved_at DESC);
 
+    CREATE TABLE IF NOT EXISTS historical_migration_closures (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL UNIQUE,
+      signed_off_by_member_id INTEGER NOT NULL,
+      signed_off_at TEXT NOT NULL,
+      closure_date TEXT NOT NULL,
+      active_member_count INTEGER NOT NULL DEFAULT 0,
+      approved_import_count INTEGER NOT NULL DEFAULT 0,
+      approved_draft_count INTEGER NOT NULL DEFAULT 0,
+      rejected_import_count INTEGER NOT NULL DEFAULT 0,
+      verified_group_cash REAL NOT NULL DEFAULT 0 CHECK (verified_group_cash >= 0),
+      verified_insurance_fund REAL NOT NULL DEFAULT 0 CHECK (verified_insurance_fund >= 0),
+      verified_fines_fund REAL NOT NULL DEFAULT 0 CHECK (verified_fines_fund >= 0),
+      verified_outstanding_loans REAL NOT NULL DEFAULT 0 CHECK (verified_outstanding_loans >= 0),
+      paper_ledgers_reviewed INTEGER NOT NULL CHECK (paper_ledgers_reviewed = 1),
+      member_balances_reviewed INTEGER NOT NULL CHECK (member_balances_reviewed = 1),
+      group_funds_reconciled INTEGER NOT NULL CHECK (group_funds_reconciled = 1),
+      unresolved_items_resolved INTEGER NOT NULL CHECK (unresolved_items_resolved = 1),
+      rejected_items_reviewed INTEGER NOT NULL CHECK (rejected_items_reviewed = 1),
+      final_backup_completed INTEGER NOT NULL CHECK (final_backup_completed = 1),
+      closure_notes TEXT NOT NULL,
+      FOREIGN KEY (group_id) REFERENCES groups(id),
+      FOREIGN KEY (signed_off_by_member_id) REFERENCES members(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_historical_migration_closures_signed_off
+      ON historical_migration_closures(group_id, signed_off_at DESC);
+
     CREATE TABLE IF NOT EXISTS historical_extra_entries (
       id INTEGER PRIMARY KEY AUTOINCREMENT, group_id INTEGER NOT NULL, member_id INTEGER, transaction_id INTEGER,
       entry_type TEXT NOT NULL CHECK (entry_type IN ('fine', 'insurance', 'external_loan')),
@@ -2850,7 +2877,7 @@ const BACKUP_TABLES = [
   'member_auth_attempts', 'member_transaction_signatures', 'app_access_sessions',
   'app_access_authorizers', 'meeting_attendance', 'meeting_closures',
   'financial_accounts', 'financial_collections', 'financial_collection_items',
-  'financial_transactions', 'historical_transaction_imports', 'historical_extra_entries', 'historical_member_loan_balances', 'historical_migration_imports', 'historical_migration_drafts', 'historical_migration_approvals', 'financial_transaction_reversals', 'receipts',
+  'financial_transactions', 'historical_transaction_imports', 'historical_extra_entries', 'historical_member_loan_balances', 'historical_migration_imports', 'historical_migration_drafts', 'historical_migration_approvals', 'historical_migration_closures', 'financial_transaction_reversals', 'receipts',
   'notification_queue', 'notification_delivery', 'meeting_audit_records',
   'sync_queue', 'member_passbook_records', 'member_statement_records',
   'loan_interest_charges', 'meeting_loan_interest_charges', 'loan_policy_settings', 'loan_committee_members', 'loan_applications',
@@ -2909,7 +2936,7 @@ export async function createGroupDatabaseBackup(groupId: number): Promise<string
     'loan_emergency_freezes', 'loan_audit_log', 'member_opening_balances',
     'onboarding_balance_audit', 'historical_transaction_imports',
     'historical_extra_entries', 'historical_member_loan_balances',
-    'historical_migration_imports', 'historical_migration_drafts', 'historical_migration_approvals',
+    'historical_migration_imports', 'historical_migration_drafts', 'historical_migration_approvals', 'historical_migration_closures',
   ]);
   const memberTables = new Set([
     'deleted_member_numbers', 'member_next_of_kin', 'next_of_kin_change_history',
@@ -3037,7 +3064,7 @@ export async function restoreGroupDatabaseBackup(
     throw new Error('Backup group identity does not match the requested KYA group. No local data was changed.');
   }
 
-  const optionalNewTables = new Set(['historical_migration_imports', 'historical_migration_drafts', 'historical_migration_approvals']);
+  const optionalNewTables = new Set(['historical_migration_imports', 'historical_migration_drafts', 'historical_migration_approvals', 'historical_migration_closures']);
   for (const table of BACKUP_TABLES) {
     if (!Array.isArray(parsed.tables[table])) {
       if (optionalNewTables.has(table)) parsed.tables[table] = [];
@@ -3094,7 +3121,7 @@ export async function restoreGroupDatabaseBackup(
     'loan_deductions', 'loan_emergency_freezes', 'loan_audit_log',
     'member_opening_balances', 'onboarding_balance_audit', 'historical_transaction_imports',
     'historical_extra_entries', 'historical_member_loan_balances',
-    'historical_migration_imports', 'historical_migration_drafts', 'historical_migration_approvals',
+    'historical_migration_imports', 'historical_migration_drafts', 'historical_migration_approvals', 'historical_migration_closures',
   ]);
   const backupMeetingIds = new Set(
     (parsed.tables.group_meetings as Record<string, unknown>[]).map((meeting) => Number(meeting.id)),
@@ -3119,6 +3146,9 @@ export async function restoreGroupDatabaseBackup(
       }
       if (table === 'loan_repayment_schedule' && !backupLoanIds.has(Number(row.loan_id))) {
         throw new Error('Backup table loan_repayment_schedule contains a repayment schedule for a loan outside this group. No local data was changed.');
+      }
+      if (table === 'historical_migration_closures' && !memberIds.has(Number(row.signed_off_by_member_id))) {
+        throw new Error('Backup historical migration closure refers to an unknown sign-off member. No local data was changed.');
       }
       if (groupOwnedTables.has(table) && names.has('group_id') && Number(row.group_id) !== groupId) {
         throw new Error(`Backup table ${table} contains a row for another group. No local data was changed.`);
@@ -12012,10 +12042,21 @@ export type HistoricalMigrationDraft = {
   created_at: string; updated_at: string;
 };
 
+async function assertHistoricalMigrationOpen(groupId: number): Promise<void> {
+  const db = await getDatabase();
+  const closure = await db.getFirstAsync<{ id: number }>(
+    'SELECT id FROM historical_migration_closures WHERE group_id = ? LIMIT 1', groupId,
+  );
+  if (closure) {
+    throw new Error('Historical migration has been formally closed for this group. Existing approved records remain available, but new historical imports and changes are locked.');
+  }
+}
+
 export async function createHistoricalMigrationImport(input: {
   group_id: number; evidence_type: HistoricalMigrationEvidenceType; evidence_name?: string;
   evidence_uri?: string; source_reference?: string; notes?: string; created_by_member_id?: number | null;
 }): Promise<number> {
+  await assertHistoricalMigrationOpen(input.group_id);
   const db = await getDatabase();
   const group = await db.getFirstAsync<{ id: number }>('SELECT id FROM groups WHERE id = ? LIMIT 1', input.group_id);
   if (!group) throw new Error('The selected group could not be found.');
@@ -12042,6 +12083,7 @@ export async function updateHistoricalMigrationImportStatus(
   groupId: number, importId: number, status: Exclude<HistoricalMigrationStatus, 'approved'>, notes?: string,
 ): Promise<void> {
   if (!['pending_review','processing','needs_correction','awaiting_verification','rejected'].includes(status)) throw new Error('Invalid import status.');
+  await assertHistoricalMigrationOpen(groupId);
   const db = await getDatabase();
   const row = await db.getFirstAsync<{ id: number; status: string }>(
     'SELECT id, status FROM historical_migration_imports WHERE id = ? AND group_id = ? LIMIT 1', importId, groupId,
@@ -12059,6 +12101,7 @@ export async function createHistoricalMigrationDraft(input: {
   import_id: number; group_id: number; member_id?: number | null; category: HistoricalMigrationCategory;
   transaction_date: string; amount: number; is_opening_balance?: boolean; description?: string; source_reference?: string;
 }): Promise<number> {
+  await assertHistoricalMigrationOpen(input.group_id);
   const db = await getDatabase();
   const imp = await db.getFirstAsync<{ id: number; status: string }>(
     'SELECT id, status FROM historical_migration_imports WHERE id = ? AND group_id = ? LIMIT 1', input.import_id, input.group_id,
@@ -12106,6 +12149,7 @@ export async function updateHistoricalMigrationDraft(input: {
   id: number; import_id: number; group_id: number; member_id?: number | null; category: HistoricalMigrationCategory;
   transaction_date: string; amount: number; is_opening_balance?: boolean; description?: string; source_reference?: string;
 }): Promise<void> {
+  await assertHistoricalMigrationOpen(input.group_id);
   const db = await getDatabase();
   const imp = await db.getFirstAsync<{ status: string }>(
     'SELECT status FROM historical_migration_imports WHERE id = ? AND group_id = ? LIMIT 1', input.import_id, input.group_id,
@@ -12135,6 +12179,7 @@ export async function updateHistoricalMigrationDraft(input: {
 }
 
 export async function deleteHistoricalMigrationDraft(id: number, importId: number, groupId: number): Promise<void> {
+  await assertHistoricalMigrationOpen(groupId);
   const db = await getDatabase();
   const imp = await db.getFirstAsync<{ status: string }>(
     'SELECT status FROM historical_migration_imports WHERE id = ? AND group_id = ? LIMIT 1', importId, groupId,
@@ -12144,6 +12189,7 @@ export async function deleteHistoricalMigrationDraft(id: number, importId: numbe
 }
 
 export async function setHistoricalMigrationDraftsAwaitingVerification(importId: number, groupId: number): Promise<void> {
+  await assertHistoricalMigrationOpen(groupId);
   const db = await getDatabase();
   const count = await db.getFirstAsync<{ count: number }>(
     'SELECT COUNT(*) AS count FROM historical_migration_drafts WHERE import_id = ? AND group_id = ?', importId, groupId,
@@ -12165,6 +12211,7 @@ export async function returnHistoricalMigrationImportForCorrection(
   groupId: number, importId: number, reviewerMemberId: number, reason = 'Returned by administrator for correction.',
 ): Promise<void> {
   await requireHistoricalGroupAdmin(groupId, reviewerMemberId);
+  await assertHistoricalMigrationOpen(groupId);
   const db = await getDatabase();
   const row = await db.getFirstAsync<{ status: string; notes: string }>(
     'SELECT status, notes FROM historical_migration_imports WHERE id = ? AND group_id = ? LIMIT 1', importId, groupId,
@@ -12203,6 +12250,7 @@ export async function approveHistoricalMigrationImport(input: {
 }): Promise<HistoricalMigrationApprovalResult> {
   const { group_id: groupId, import_id: importId, approver_member_id: approverId } = input;
   await requireHistoricalGroupAdmin(groupId, approverId);
+  await assertHistoricalMigrationOpen(groupId);
   if (input.evidence_reviewed !== true || input.amounts_reviewed !== true) {
     throw new Error('Confirm that the original ledger evidence and every amount/date have been reviewed before approval.');
   }
@@ -12215,6 +12263,10 @@ export async function approveHistoricalMigrationImport(input: {
   };
 
   await db.withTransactionAsync(async () => {
+    const existingClosure = await db.getFirstAsync<{ id: number }>(
+      'SELECT id FROM historical_migration_closures WHERE group_id = ? LIMIT 1', groupId,
+    );
+    if (existingClosure) throw new Error('Historical migration has already been closed for this group.');
     const imp = await db.getFirstAsync<{
       id: number; group_id: number; status: string; evidence_name: string; source_reference: string;
     }>(
@@ -12545,5 +12597,201 @@ export async function getHistoricalMigrationApprovalHistory(
      WHERE a.group_id = ? AND a.import_id = ? ORDER BY a.id ASC`,
     groupId, importId,
   );
+}
+
+/* ============================================================
+   HISTORICAL LEDGER MIGRATION — STEP 5 (FINAL)
+   One-time, immutable group sign-off. This closes historical imports only;
+   it does not stop normal ongoing digital VSLA transactions.
+   ============================================================ */
+
+export type HistoricalMigrationClosure = {
+  id: number;
+  group_id: number;
+  signed_off_by_member_id: number;
+  signed_off_by_name: string;
+  signed_off_by_number: string;
+  signed_off_at: string;
+  closure_date: string;
+  active_member_count: number;
+  approved_import_count: number;
+  approved_draft_count: number;
+  rejected_import_count: number;
+  verified_group_cash: number;
+  verified_insurance_fund: number;
+  verified_fines_fund: number;
+  verified_outstanding_loans: number;
+  paper_ledgers_reviewed: number;
+  member_balances_reviewed: number;
+  group_funds_reconciled: number;
+  unresolved_items_resolved: number;
+  rejected_items_reviewed: number;
+  final_backup_completed: number;
+  closure_notes: string;
+};
+
+export type HistoricalMigrationClosureStatus = {
+  closed: boolean;
+  closure: HistoricalMigrationClosure | null;
+  active_member_count: number;
+  total_imports: number;
+  approved_imports: number;
+  rejected_imports: number;
+  unresolved_imports: number;
+  total_drafts: number;
+  approved_drafts: number;
+  unapproved_drafts: number;
+};
+
+export async function getHistoricalMigrationClosureStatus(
+  groupId: number,
+): Promise<HistoricalMigrationClosureStatus> {
+  const db = await getDatabase();
+  const [closure, members, imports, drafts] = await Promise.all([
+    db.getFirstAsync<HistoricalMigrationClosure>(
+      `SELECT c.*, m.full_name AS signed_off_by_name, m.member_number AS signed_off_by_number
+       FROM historical_migration_closures c
+       JOIN members m ON m.id = c.signed_off_by_member_id
+       WHERE c.group_id = ? LIMIT 1`, groupId,
+    ),
+    db.getFirstAsync<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM members WHERE group_id = ? AND status = 'active'", groupId,
+    ),
+    db.getFirstAsync<{
+      total: number; approved: number; rejected: number; unresolved: number;
+    }>(
+      `SELECT COUNT(*) AS total,
+        COALESCE(SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END),0) AS approved,
+        COALESCE(SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END),0) AS rejected,
+        COALESCE(SUM(CASE WHEN status IN ('pending_review','processing','needs_correction','awaiting_verification') THEN 1 ELSE 0 END),0) AS unresolved
+       FROM historical_migration_imports WHERE group_id = ?`, groupId,
+    ),
+    db.getFirstAsync<{ total: number; approved: number; unapproved: number }>(
+      `SELECT COUNT(*) AS total,
+        COALESCE(SUM(CASE WHEN d.status = 'approved' THEN 1 ELSE 0 END),0) AS approved,
+        COALESCE(SUM(CASE WHEN d.status != 'approved' AND i.status != 'rejected' THEN 1 ELSE 0 END),0) AS unapproved
+       FROM historical_migration_drafts d
+       JOIN historical_migration_imports i ON i.id = d.import_id AND i.group_id = d.group_id
+       WHERE d.group_id = ?`, groupId,
+    ),
+  ]);
+  return {
+    closed: !!closure,
+    closure: closure ? {
+      ...closure,
+      active_member_count: Number(closure.active_member_count || 0),
+      approved_import_count: Number(closure.approved_import_count || 0),
+      approved_draft_count: Number(closure.approved_draft_count || 0),
+      rejected_import_count: Number(closure.rejected_import_count || 0),
+      verified_group_cash: Number(closure.verified_group_cash || 0),
+      verified_insurance_fund: Number(closure.verified_insurance_fund || 0),
+      verified_fines_fund: Number(closure.verified_fines_fund || 0),
+      verified_outstanding_loans: Number(closure.verified_outstanding_loans || 0),
+    } : null,
+    active_member_count: Number(members?.count || 0),
+    total_imports: Number(imports?.total || 0),
+    approved_imports: Number(imports?.approved || 0),
+    rejected_imports: Number(imports?.rejected || 0),
+    unresolved_imports: Number(imports?.unresolved || 0),
+    total_drafts: Number(drafts?.total || 0),
+    approved_drafts: Number(drafts?.approved || 0),
+    unapproved_drafts: Number(drafts?.unapproved || 0),
+  };
+}
+
+export async function closeHistoricalMigration(input: {
+  group_id: number;
+  signed_off_by_member_id: number;
+  verified_group_cash: number;
+  verified_insurance_fund: number;
+  verified_fines_fund: number;
+  verified_outstanding_loans: number;
+  paper_ledgers_reviewed: boolean;
+  member_balances_reviewed: boolean;
+  group_funds_reconciled: boolean;
+  unresolved_items_resolved: boolean;
+  rejected_items_reviewed: boolean;
+  final_backup_completed: boolean;
+  closure_notes: string;
+}): Promise<number> {
+  const groupId = Number(input.group_id);
+  const signerId = Number(input.signed_off_by_member_id);
+  await requireHistoricalGroupAdmin(groupId, signerId);
+  const confirmations = [
+    input.paper_ledgers_reviewed,
+    input.member_balances_reviewed,
+    input.group_funds_reconciled,
+    input.unresolved_items_resolved,
+    input.rejected_items_reviewed,
+    input.final_backup_completed,
+  ];
+  if (confirmations.some((value) => value !== true)) {
+    throw new Error('Complete all six migration sign-off checks before closing the historical migration.');
+  }
+  const values = [
+    input.verified_group_cash,
+    input.verified_insurance_fund,
+    input.verified_fines_fund,
+    input.verified_outstanding_loans,
+  ].map(Number);
+  if (values.some((value) => !Number.isFinite(value) || value < 0)) {
+    throw new Error('Enter valid non-negative UGX figures for cash, insurance, fines and outstanding loans.');
+  }
+  const notes = normalizeText(input.closure_notes || '');
+  if (notes.length < 12) throw new Error('Enter a sign-off note of at least 12 characters describing the final ledger comparison.');
+
+  const db = await getDatabase();
+  const timestamp = now();
+  const date = timestamp.slice(0, 10);
+  let closureId = 0;
+  await db.withTransactionAsync(async () => {
+    const alreadyClosed = await db.getFirstAsync<{ id: number }>(
+      'SELECT id FROM historical_migration_closures WHERE group_id = ? LIMIT 1', groupId,
+    );
+    if (alreadyClosed) throw new Error('Historical migration has already been closed. The sign-off is permanent.');
+    const unresolved = await db.getFirstAsync<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM historical_migration_imports
+       WHERE group_id = ? AND status IN ('pending_review','processing','needs_correction','awaiting_verification')`, groupId,
+    );
+    const unapproved = await db.getFirstAsync<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM historical_migration_drafts d
+       JOIN historical_migration_imports i ON i.id = d.import_id AND i.group_id = d.group_id
+       WHERE d.group_id = ? AND d.status != 'approved' AND i.status != 'rejected'`, groupId,
+    );
+    const approvedDrafts = await db.getFirstAsync<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM historical_migration_drafts WHERE group_id = ? AND status = 'approved'", groupId,
+    );
+    const approvedImports = await db.getFirstAsync<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM historical_migration_imports WHERE group_id = ? AND status = 'approved'", groupId,
+    );
+    const rejectedImports = await db.getFirstAsync<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM historical_migration_imports WHERE group_id = ? AND status = 'rejected'", groupId,
+    );
+    const activeMembers = await db.getFirstAsync<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM members WHERE group_id = ? AND status = 'active'", groupId,
+    );
+    const unresolvedCount = Number(unresolved?.count || 0);
+    const unapprovedCount = Number(unapproved?.count || 0);
+    const approvedDraftCount = Number(approvedDrafts?.count || 0);
+    const activeMemberCount = Number(activeMembers?.count || 0);
+    if (unresolvedCount > 0) throw new Error(`Resolve all pending, processing, correction and awaiting-verification imports first. ${unresolvedCount} import(s) remain unresolved.`);
+    if (unapprovedCount > 0) throw new Error(`Approve or reject every remaining draft before closure. ${unapprovedCount} draft(s) remain unapproved.`);
+    if (approvedDraftCount === 0) throw new Error('No historical transaction drafts have been approved. Complete the ledger migration before signing it off.');
+    if (activeMemberCount === 0) throw new Error('This group has no active members to verify.');
+    const inserted = await db.runAsync(
+      `INSERT INTO historical_migration_closures (
+        group_id, signed_off_by_member_id, signed_off_at, closure_date,
+        active_member_count, approved_import_count, approved_draft_count, rejected_import_count,
+        verified_group_cash, verified_insurance_fund, verified_fines_fund, verified_outstanding_loans,
+        paper_ledgers_reviewed, member_balances_reviewed, group_funds_reconciled,
+        unresolved_items_resolved, rejected_items_reviewed, final_backup_completed, closure_notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1, 1, 1, ?)`,
+      groupId, signerId, timestamp, date, activeMemberCount,
+      Number(approvedImports?.count || 0), approvedDraftCount, Number(rejectedImports?.count || 0),
+      values[0], values[1], values[2], values[3], notes,
+    );
+    closureId = Number(inserted.lastInsertRowId);
+  });
+  return closureId;
 }
 
