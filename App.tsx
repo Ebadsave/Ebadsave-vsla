@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AppState, AppStateStatus, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AppState, AppStateStatus, InteractionManager, Pressable, StyleSheet, Text, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createNavigationContainerRef, NavigationContainer, NavigationState, PartialState } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -33,8 +33,6 @@ import HistoricalMigrationScreen from './src/screens/HistoricalMigrationScreen';
 import ShareOutCalculationScreen from './src/screens/ShareOutCalculationScreen';
 import MemberPassbookLoginScreen from './src/screens/MemberPassbookLoginScreen';
 import MemberPassbookScreen from './src/screens/MemberPassbookScreen';
-import './src/services/backupBackground';
-import { initializeAutomaticBackupTask } from './src/services/backupBackground';
 
 export type RootStackParamList = {
   Onboarding: undefined;
@@ -239,10 +237,18 @@ export default function App() {
   const [navigationStateLoaded, setNavigationStateLoaded] = useState(false);
   const lastActiveRef = useRef<number>(Date.now());
 
+  // Load optional background-backup native modules only after the first
+  // screen has rendered. Failure here must not block the main app navigation.
   useEffect(() => {
-    void initializeAutomaticBackupTask().catch((error: unknown) =>
-      console.warn('Could not initialize automatic backups:', error),
-    );
+    const task = InteractionManager.runAfterInteractions(() => {
+      void import('./src/services/backupBackground')
+        .then(({ initializeAutomaticBackupTask }) => initializeAutomaticBackupTask())
+        .catch((error: unknown) => {
+          console.warn('Automatic backup initialization unavailable:', error);
+        });
+    });
+
+    return () => task.cancel();
   }, []);
 
   useEffect(() => {
