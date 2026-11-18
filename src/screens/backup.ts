@@ -75,6 +75,13 @@ function makeTimestamp(): string {
   return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 }
 
+function normalizeGroupNumber(input: string): string {
+  const digits = String(input || '').replace(/\D/g, '');
+  if (digits.length >= 4) {
+    return `KYA${digits.slice(-4)}`;
+  }
+  return String(input || '').trim().toUpperCase();
+  }
 function parseAndValidateBackup(contents: string): BackupEnvelope {
   let parsed: unknown;
   try {
@@ -483,6 +490,51 @@ export async function listCloudGroupBackups(
   error?: string;
 }> {
   try {
+    const normalizedGroup = normalizeGroupNumber(groupNumberInput);
+    if (!/^KYA\d{4}$/.test(normalizedGroup)) {
+      throw new Error('Enter a valid group number, for example 2010 or KYA2010.');
+    }
+
+    const requestedGroupNumber = normalizedGroup.slice(3);
+    await assertCloudflareGroupMatches(requestedGroupNumber);
+    const response = await cloudflareBinaryRequest('/v1/backups', 'GET');
+    const payload = await response.json() as {
+      backups?: Array<{ backupId: string; bytes?: number; createdAt: string }>;
+    };
+
+    const backups = (payload.backups ?? []).map((item) => ({
+      objectId: item.backupId,
+      name: `${normalizedGroup} — encrypted cloud backup`,
+      createdAt: item.createdAt,
+      backupCreatedAt: item.createdAt,
+      fileUrl: '',
+      vaultId: '',
+      bytes: item.bytes,
+    }));
+
+    return {
+      success: true,
+      message: backups.length
+        ? `${backups.length} cloud backup(s) found.`
+        : 'No cloud backups found for this authenticated group.',
+      backups,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown Cloudflare list error.';
+    return { success: false, message: 'Could not list cloud backups.', backups: [], error: message };
+  }
+}
+
+export async function listCloudGroupBackups(
+  _passphrase: string,
+  groupNumberInput: string,
+): Promise<{
+  success: boolean;
+  message: string;
+  backups: CloudBackupFileInfo[];
+  error?: string;
+}> {
+  try {
     const requested = groupNumberInput.trim().toUpperCase().replace(/\s/g, '');
     if (!/^KYA\d{4}$/.test(requested)) throw new Error('Enter a valid group number, for example KYA2000.');
 
@@ -520,6 +572,11 @@ export async function restoreCloudGroupDatabaseBackup(
   expectedGroupNumber: string,
 ): Promise<{ success: boolean; message: string; error?: string }> {
   try {
+    const normalizedGroup = normalizeGroupNumber(expectedGroupNumber);
+    if (!/^KYA\d{4}$/.test(normalizedGroup)) {
+      throw new Error('Enter a valid group number, for example 2010 or KYA2010.');
+    }
+
     const response = await cloudflareBinaryRequest(
       `/v1/backups/${encodeURIComponent(backup.objectId)}`,
       'GET',
@@ -529,20 +586,20 @@ export async function restoreCloudGroupDatabaseBackup(
     const plaintext = decryptCloudBackup(encryptedContents, passphrase);
     const parsed = parseAndValidateBackup(plaintext);
 
-    const actualGroup = String(parsed.group_number ?? '').replace(/^KYA\s*/i, '');
-    const expectedGroup = expectedGroupNumber.trim().toUpperCase().replace(/^KYA\s*/i, '');
-    await assertCloudflareGroupMatches(expectedGroup);
-    if (!actualGroup || actualGroup !== expectedGroup) {
+    const actualGroup = normalizeGroupNumber(String(parsed.group_number ?? ''));
+    const expectedGroupNumberOnly = normalizedGroup.slice(3);
+    await assertCloudflareGroupMatches(expectedGroupNumberOnly);
+    if (actualGroup !== normalizedGroup) {
       throw new Error('The downloaded backup belongs to a different group. No data was changed.');
     }
 
-    await restoreGroupDatabaseBackup(plaintext, expectedGroup);
+    await restoreGroupDatabaseBackup(plaintext, expectedGroupNumberOnly);
     return {
       success: true,
-      message: `Group KYA ${actualGroup} was restored and its backup integrity was verified.`,
+      message: `Group ${normalizedGroup} was restored and its backup integrity was verified.`,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown cloud recovery error.';
     return { success: false, message: 'Group recovery failed.', error: message };
   }
-}
+      }
