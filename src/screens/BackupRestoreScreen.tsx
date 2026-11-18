@@ -1232,6 +1232,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 5,
     flexDirection: 'row',
-    alignItems: 'center',
-    justify,
-  '}'
+    alignItems: 'center', 
+   },
