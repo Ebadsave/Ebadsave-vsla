@@ -1,7 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
-// Change this after we create your Worker - for now it uses a placeholder
-export const CLOUDFLARE_WORKER_URL = 'https://ebadsave-cloud-backup.YOUR-SUBDOMAIN.workers.dev';
+export const CLOUDFLARE_WORKER_URL = 'https://ebadsave-vsla-cloudflare.info-ebadsave.workers.dev';
 
 export type BackupPayload = {
   groupCode: string;
