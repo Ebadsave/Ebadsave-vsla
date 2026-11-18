@@ -50,7 +50,9 @@ function getCloudflareGroupNumber(
   groupId: string | null,
 ): string | null {
   if (!groupId) return null;
+
   const match = groupId.match(/(\d{4})$/);
+
   return match?.[1] ?? null;
 }
 
@@ -62,28 +64,39 @@ export default function BackupRestoreScreen() {
   const navigation = useNavigation<any>();
 
   const [groupCloudBusy, setGroupCloudBusy] = useState(false);
+
   const [cloudBackupConsent, setCloudBackupConsent] =
     useState<boolean | null>(null);
+
   const [changingConsent, setChangingConsent] = useState(false);
+
   const [cloudBackupStatus, setCloudBackupStatus] = useState(
     'Checking automatic cloud backup status...',
   );
 
   const [groups, setGroups] = useState<GroupRecord[]>([]);
+
   const [selectedGroupId, setSelectedGroupId] =
     useState<number | null>(null);
 
   const [cloudAdminName, setCloudAdminName] = useState('');
+
   const [cloudAdminMemberNumber, setCloudAdminMemberNumber] =
     useState('');
+
   const [cloudAdminPin, setCloudAdminPin] = useState('');
+
   const [showCloudAdminPin, setShowCloudAdminPin] = useState(false);
+
   const [cloudAdminSignedIn, setCloudAdminSignedIn] = useState(false);
 
   const [recoveryPassphrase, setRecoveryPassphrase] = useState('');
+
   const [showRecoveryPassphrase, setShowRecoveryPassphrase] =
     useState(false);
+
   const [groupNumberInput, setGroupNumberInput] = useState('');
+
   const [cloudGroupBackups, setCloudGroupBackups] =
     useState<CloudBackupFileInfo[]>([]);
 
@@ -94,14 +107,20 @@ export default function BackupRestoreScreen() {
   const loadConsent = useCallback(async () => {
     try {
       const enabled = await getAutomaticCloudBackupConsent();
+
       setCloudBackupConsent(enabled);
+
       setCloudBackupStatus(
         enabled
           ? 'Automatic encrypted Cloudflare backups are enabled.'
           : 'Automatic cloud backups are currently disabled.',
       );
     } catch (error) {
-      console.error('Could not load automatic cloud backup setting:', error);
+      console.error(
+        'Could not load automatic cloud backup setting:',
+        error,
+      );
+
       setCloudBackupStatus(
         'Unable to check automatic cloud backup settings.',
       );
@@ -115,26 +134,28 @@ export default function BackupRestoreScreen() {
   const loadGroups = useCallback(async () => {
     try {
       const result = await getAllGroups();
+
       setGroups(result);
 
       const cloudGroupId = await getCloudflareSessionGroupId();
 
       if (cloudGroupId) {
-        const cloudNumber = getCloudflareGroupNumber(cloudGroupId);
+        const cloudNumber =
+          getCloudflareGroupNumber(cloudGroupId);
 
         if (!cloudNumber) {
           console.warn(
             'Could not extract group number from Cloudflare session:',
             cloudGroupId,
           );
+
           return;
         }
 
-        // Populate the restore group number even on a new phone
-        // whose local SQLite database does not contain this group.
+        // Populate group number even on a replacement phone.
         setGroupNumberInput(cloudNumber);
 
-        // A local match is needed for backup, not for cloud restore.
+        // Local group is required for backup, not cloud restore.
         const matchingGroup = result.find(
           group =>
             normalizeGroupNumber(group.group_number) === cloudNumber,
@@ -144,20 +165,24 @@ export default function BackupRestoreScreen() {
           setSelectedGroupId(matchingGroup.id);
         } else {
           setSelectedGroupId(null);
+
           console.log(
             `KYA ${cloudNumber} is not registered locally. Cloud restore remains available.`,
           );
         }
+
         return;
       }
 
       setSelectedGroupId(current =>
-        current !== null && result.some(group => group.id === current)
+        current !== null &&
+        result.some(group => group.id === current)
           ? current
           : result[0]?.id ?? null,
       );
     } catch (error) {
       console.error('Could not load local groups:', error);
+
       setGroups([]);
       setSelectedGroupId(null);
     }
@@ -192,12 +217,16 @@ export default function BackupRestoreScreen() {
     }
 
     if (!cloudAdminPin.trim()) {
-      Alert.alert('PIN Required', 'Enter the administrator PIN.');
+      Alert.alert(
+        'PIN Required',
+        'Enter the administrator PIN.',
+      );
       return;
     }
 
     try {
       setGroupCloudBusy(true);
+
       await signInCloudflareBackupAdmin(
         cloudAdminName.trim(),
         cloudAdminMemberNumber.trim(),
@@ -207,6 +236,7 @@ export default function BackupRestoreScreen() {
       setCloudAdminPin('');
       setCloudAdminSignedIn(true);
       setCloudGroupBackups([]);
+
       await loadGroups();
 
       Alert.alert(
@@ -228,10 +258,13 @@ export default function BackupRestoreScreen() {
   const handleCloudflareAdminSignOut = async () => {
     try {
       setGroupCloudBusy(true);
+
       await signOutCloudflareBackupAdmin();
+
       setCloudAdminSignedIn(false);
       setCloudGroupBackups([]);
       setGroupNumberInput('');
+
       await loadGroups();
 
       Alert.alert(
@@ -241,7 +274,9 @@ export default function BackupRestoreScreen() {
     } catch (error) {
       Alert.alert(
         'Sign Out Failed',
-        error instanceof Error ? error.message : 'Could not sign out.',
+        error instanceof Error
+          ? error.message
+          : 'Could not sign out.',
       );
     } finally {
       setGroupCloudBusy(false);
@@ -273,30 +308,37 @@ export default function BackupRestoreScreen() {
       setGroupCloudBusy(true);
 
       const localGroups = await getAllGroups();
+
       setGroups(localGroups);
 
-      const cloudGroupId = await getCloudflareSessionGroupId();
+      const cloudGroupId =
+        await getCloudflareSessionGroupId();
+
       if (!cloudGroupId) {
         throw new Error(
           'Cloudflare group session is missing. Sign in again.',
         );
       }
 
-      const cloudGroupNumber = getCloudflareGroupNumber(cloudGroupId);
+      const cloudGroupNumber =
+        getCloudflareGroupNumber(cloudGroupId);
+
       if (!cloudGroupNumber) {
         throw new Error(
           'Could not identify the authenticated Cloudflare group.',
         );
       }
 
-      // BACKUP requires the authenticated group to exist locally.
+      // Backup requires the authenticated group locally.
       const matchingGroup = localGroups.find(
         group =>
-          normalizeGroupNumber(group.group_number) === cloudGroupNumber,
+          normalizeGroupNumber(group.group_number) ===
+          cloudGroupNumber,
       );
 
       if (!matchingGroup) {
         setSelectedGroupId(null);
+
         throw new Error(
           `KYA ${cloudGroupNumber} was not found in this phone's local SQLite database.\n\n` +
             'A cloud backup requires the original local group and its records to exist on this phone.\n\n' +
@@ -306,7 +348,10 @@ export default function BackupRestoreScreen() {
 
       setSelectedGroupId(matchingGroup.id);
 
-      const local = await exportGroupDatabaseBackup(matchingGroup.id);
+      const local = await exportGroupDatabaseBackup(
+        matchingGroup.id,
+      );
+
       if (!local.success) {
         throw new Error(local.error || local.message);
       }
@@ -349,8 +394,13 @@ export default function BackupRestoreScreen() {
       return;
     }
 
-    const normalizedNumber = normalizeGroupNumber(groupNumberInput);
-    if (!normalizedNumber || normalizedNumber.length !== 4) {
+    const normalizedNumber =
+      normalizeGroupNumber(groupNumberInput);
+
+    if (
+      !normalizedNumber ||
+      normalizedNumber.length !== 4
+    ) {
       Alert.alert(
         'Invalid Group Number',
         'Enter the four-digit KYA group number, for example 2010.',
@@ -368,12 +418,16 @@ export default function BackupRestoreScreen() {
 
     try {
       setGroupCloudBusy(true);
+
       setCloudGroupBackups([]);
+
       setGroupNumberInput(normalizedNumber);
 
+      // IMPORTANT:
+      // backup.ts expects KYA2010, not just 2010.
       const result = await listCloudGroupBackups(
         recoveryPassphrase,
-        normalizedNumber,
+        `KYA${normalizedNumber}`,
       );
 
       if (!result.success) {
@@ -405,7 +459,9 @@ export default function BackupRestoreScreen() {
   // RESTORE GROUP FROM CLOUDFLARE
   // =======================================================
 
-  const handleRestoreCloudGroup = (backup: CloudBackupFileInfo) => {
+  const handleRestoreCloudGroup = (
+    backup: CloudBackupFileInfo,
+  ) => {
     if (!cloudAdminSignedIn) {
       Alert.alert(
         'Sign-in Required',
@@ -414,7 +470,9 @@ export default function BackupRestoreScreen() {
       return;
     }
 
-    const normalizedNumber = normalizeGroupNumber(groupNumberInput);
+    const normalizedNumber =
+      normalizeGroupNumber(groupNumberInput);
+
     if (normalizedNumber.length !== 4) {
       Alert.alert(
         'Invalid Group Number',
@@ -437,26 +495,35 @@ export default function BackupRestoreScreen() {
         'This is intended for restoring a group on a new phone where the group may not yet exist in local SQLite.\n\n' +
         'Existing local records must be protected by the restore implementation.',
       [
-        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
         {
           text: 'Restore',
           onPress: async () => {
             try {
               setGroupCloudBusy(true);
 
-              // Do not require a local matchingGroup here:
-              // a replacement phone may have an empty SQLite database.
-              const result = await restoreCloudGroupDatabaseBackup(
-                backup,
-                recoveryPassphrase,
-                normalizedNumber,
-              );
+              // Do not require a local group on a replacement phone.
+              const result =
+                await restoreCloudGroupDatabaseBackup(
+                  backup,
+                  recoveryPassphrase,
+                  normalizedNumber,
+                );
 
               if (!result.success) {
-                throw new Error(result.error || result.message);
+                throw new Error(
+                  result.error || result.message,
+                );
               }
 
-              Alert.alert('Group Restored', result.message);
+              Alert.alert(
+                'Group Restored',
+                result.message,
+              );
+
               await loadGroups();
             } catch (error) {
               Alert.alert(
@@ -505,11 +572,17 @@ export default function BackupRestoreScreen() {
           );
         }
 
-        await saveAutomaticCloudBackupPassphrase(recoveryPassphrase);
+        await saveAutomaticCloudBackupPassphrase(
+          recoveryPassphrase,
+        );
       }
 
-      const saved = await setAutomaticCloudBackupConsent(nextValue);
-      if (!saved.success) throw new Error(saved.message);
+      const saved =
+        await setAutomaticCloudBackupConsent(nextValue);
+
+      if (!saved.success) {
+        throw new Error(saved.message);
+      }
 
       if (nextValue) {
         setCloudBackupConsent(true);
@@ -519,11 +592,13 @@ export default function BackupRestoreScreen() {
         } = await import('../services/backupBackground');
 
         await initializeAutomaticBackupTask();
+
         setCloudBackupStatus(
           'Automatic encrypted cloud backup enabled. Starting the first backup.',
         );
 
         const result = await runAutomaticCloudBackup(true);
+
         setCloudBackupStatus(result.message);
 
         if (!result.success && !result.skipped) {
@@ -538,7 +613,9 @@ export default function BackupRestoreScreen() {
         } = await import('../services/backupBackground');
 
         await unregisterAutomaticBackupTask();
+
         setCloudBackupConsent(false);
+
         setCloudBackupStatus(
           'Automatic Cloudflare backups have been disabled.',
         );
@@ -548,6 +625,7 @@ export default function BackupRestoreScreen() {
         await setAutomaticCloudBackupConsent(false).catch(
           () => undefined,
         );
+
         setCloudBackupConsent(false);
       }
 
@@ -591,25 +669,35 @@ export default function BackupRestoreScreen() {
             }
           }}
         >
-          <Text style={styles.backButtonText}>‹ Back</Text>
+          <Text style={styles.backButtonText}>
+            ‹ Back
+          </Text>
         </TouchableOpacity>
 
-        <Text style={styles.title}>Cloud Backup &amp; Restore</Text>
+        <Text style={styles.title}>
+          Cloud Backup &amp; Restore
+        </Text>
+
         <Text style={styles.subtitle}>
           Securely back up and restore your VSLA group using Cloudflare.
         </Text>
       </View>
 
       {/* ADMINISTRATOR SIGN IN */}
+
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
           1. Group Administrator Sign In
         </Text>
+
         <Text style={styles.bodyText}>
           Sign in using the registered group administrator details.
         </Text>
 
-        <Text style={styles.label}>Administrator Full Name</Text>
+        <Text style={styles.label}>
+          Administrator Full Name
+        </Text>
+
         <TextInput
           value={cloudAdminName}
           onChangeText={setCloudAdminName}
@@ -620,7 +708,10 @@ export default function BackupRestoreScreen() {
           style={styles.recoveryInput}
         />
 
-        <Text style={styles.label}>Administrator Member Number</Text>
+        <Text style={styles.label}>
+          Administrator Member Number
+        </Text>
+
         <TextInput
           value={cloudAdminMemberNumber}
           onChangeText={setCloudAdminMemberNumber}
@@ -631,7 +722,10 @@ export default function BackupRestoreScreen() {
           style={styles.recoveryInput}
         />
 
-        <Text style={styles.label}>Administrator PIN</Text>
+        <Text style={styles.label}>
+          Administrator PIN
+        </Text>
+
         <View style={styles.inputRow}>
           <TextInput
             value={cloudAdminPin}
@@ -643,9 +737,12 @@ export default function BackupRestoreScreen() {
             autoCapitalize="none"
             style={styles.flexInput}
           />
+
           <TouchableOpacity
             accessibilityRole="button"
-            onPress={() => setShowCloudAdminPin(value => !value)}
+            onPress={() =>
+              setShowCloudAdminPin(value => !value)
+            }
             style={styles.visibilityButton}
           >
             <Text style={styles.visibilityText}>
@@ -690,16 +787,21 @@ export default function BackupRestoreScreen() {
       </View>
 
       {/* CLOUD PASSPHRASE */}
+
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
           2. Cloud Backup Passphrase
         </Text>
+
         <Text style={styles.bodyText}>
           Enter the same passphrase used when the encrypted backup was
           created. It must contain at least 12 characters.
         </Text>
 
-        <Text style={styles.label}>Recovery Passphrase</Text>
+        <Text style={styles.label}>
+          Recovery Passphrase
+        </Text>
+
         <View style={styles.inputRow}>
           <TextInput
             value={recoveryPassphrase}
@@ -710,6 +812,7 @@ export default function BackupRestoreScreen() {
             autoCorrect={false}
             style={styles.flexInput}
           />
+
           <TouchableOpacity
             accessibilityRole="button"
             onPress={() =>
@@ -722,6 +825,7 @@ export default function BackupRestoreScreen() {
             </Text>
           </TouchableOpacity>
         </View>
+
         <Text style={styles.helperText}>
           Keep this passphrase safe. Without it, an encrypted backup
           cannot be decrypted.
@@ -729,26 +833,34 @@ export default function BackupRestoreScreen() {
       </View>
 
       {/* GROUP CLOUD BACKUP AND RESTORE */}
+
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
           3. Group Cloud Backup &amp; Recovery
         </Text>
+
         <Text style={styles.bodyText}>
           Enter the four-digit group number to locate encrypted backups
           stored in Cloudflare.
         </Text>
 
-        <Text style={styles.label}>KYA Group Number</Text>
+        <Text style={styles.label}>
+          KYA Group Number
+        </Text>
+
         <TextInput
-  value={groupNumberInput}
-  onChangeText={(text) => setGroupNumberInput(text.toUpperCase())}
-  placeholder="Example: 2010 or KYA2010"
-  autoCapitalize="characters"
-  autoCorrect={false}
-  keyboardType="default"
-  returnKeyType="search"
-  style={styles.recoveryInput}
-/>
+          value={groupNumberInput}
+          onChangeText={text => {
+            setGroupNumberInput(text.toUpperCase());
+            setCloudGroupBackups([]);
+          }}
+          placeholder="Example: 2010 or KYA2010"
+          autoCapitalize="characters"
+          autoCorrect={false}
+          keyboardType="default"
+          returnKeyType="search"
+          style={styles.recoveryInput}
+        />
 
         <TouchableOpacity
           accessibilityRole="button"
@@ -757,7 +869,9 @@ export default function BackupRestoreScreen() {
             styles.importButton,
             groupCloudBusy && styles.disabledButton,
           ]}
-          onPress={() => void handleFindCloudGroupBackups()}
+          onPress={() =>
+            void handleFindCloudGroupBackups()
+          }
           disabled={groupCloudBusy}
         >
           {groupCloudBusy ? (
@@ -776,7 +890,10 @@ export default function BackupRestoreScreen() {
 
           {cloudGroupBackups.length === 0 ? (
             <View style={styles.emptyBox}>
-              <Text style={styles.emptyTitle}>No backups displayed</Text>
+              <Text style={styles.emptyTitle}>
+                No backups displayed
+              </Text>
+
               <Text style={styles.emptyText}>
                 Sign in, enter your passphrase and group number, then tap
                 Find Group Backups in Cloud.
@@ -784,9 +901,15 @@ export default function BackupRestoreScreen() {
             </View>
           ) : (
             cloudGroupBackups.map(backup => (
-              <View key={backup.objectId} style={styles.backupCard}>
+              <View
+                key={backup.objectId}
+                style={styles.backupCard}
+              >
                 <View style={styles.backupInfo}>
-                  <Text style={styles.backupName}>{backup.name}</Text>
+                  <Text style={styles.backupName}>
+                    {backup.name}
+                  </Text>
+
                   <Text style={styles.backupDetails}>
                     {backup.backupCreatedAt || backup.createdAt}
                   </Text>
@@ -800,10 +923,14 @@ export default function BackupRestoreScreen() {
                     styles.restoreButton,
                     groupCloudBusy && styles.disabledButton,
                   ]}
-                  onPress={() => handleRestoreCloudGroup(backup)}
+                  onPress={() =>
+                    handleRestoreCloudGroup(backup)
+                  }
                   disabled={groupCloudBusy}
                 >
-                  <Text style={styles.restoreIcon}>↩</Text>
+                  <Text style={styles.restoreIcon}>
+                    ↩
+                  </Text>
                 </TouchableOpacity>
               </View>
             ))
@@ -812,10 +939,12 @@ export default function BackupRestoreScreen() {
       </View>
 
       {/* CREATE GROUP CLOUD BACKUP */}
+
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
           4. Create Encrypted Group Backup
         </Text>
+
         <Text style={styles.bodyText}>
           This operation backs up an existing local group. The group must
           already be registered on this phone. Cloud restoration on a new
@@ -830,7 +959,9 @@ export default function BackupRestoreScreen() {
           groups.map(group => (
             <TouchableOpacity
               key={group.id}
-              onPress={() => setSelectedGroupId(group.id)}
+              onPress={() =>
+                setSelectedGroupId(group.id)
+              }
               style={[
                 styles.groupChoice,
                 selectedGroupId === group.id &&
@@ -859,7 +990,9 @@ export default function BackupRestoreScreen() {
             styles.primaryButton,
             groupCloudBusy && styles.disabledButton,
           ]}
-          onPress={() => void handleUploadGroupBackup()}
+          onPress={() =>
+            void handleUploadGroupBackup()
+          }
           disabled={groupCloudBusy}
         >
           {groupCloudBusy ? (
@@ -873,11 +1006,15 @@ export default function BackupRestoreScreen() {
       </View>
 
       {/* AUTOMATIC CLOUD BACKUP */}
+
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
           Automatic Cloudflare Backup
         </Text>
-        <Text style={styles.bodyText}>{cloudBackupStatus}</Text>
+
+        <Text style={styles.bodyText}>
+          {cloudBackupStatus}
+        </Text>
 
         <TouchableOpacity
           accessibilityRole="button"
@@ -888,9 +1025,12 @@ export default function BackupRestoreScreen() {
               : styles.primaryButton,
             changingConsent && styles.disabledButton,
           ]}
-          onPress={() => void handleCloudBackupConsent()}
+          onPress={() =>
+            void handleCloudBackupConsent()
+          }
           disabled={
-            changingConsent || cloudBackupConsent === null
+            changingConsent ||
+            cloudBackupConsent === null
           }
         >
           {changingConsent ? (
@@ -912,22 +1052,30 @@ export default function BackupRestoreScreen() {
       </View>
 
       {/* SECURITY INFORMATION */}
+
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Cloud Backup Security</Text>
+        <Text style={styles.sectionTitle}>
+          Cloud Backup Security
+        </Text>
+
         <View style={styles.infoBox}>
           <Text style={styles.infoText}>
             • Administrator authentication is required.
           </Text>
+
           <Text style={styles.infoText}>
             • Cloud backups are encrypted before upload.
           </Text>
+
           <Text style={styles.infoText}>
             • A recovery passphrase of at least 12 characters is required.
           </Text>
+
           <Text style={styles.infoText}>
             • Group recovery does not require the group to exist in local
             SQLite beforehand.
           </Text>
+
           <Text style={styles.infoText}>
             • Keep your recovery passphrase secure.
           </Text>
@@ -946,13 +1094,16 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f9fafb',
   },
+
   content: {
     padding: 16,
     paddingBottom: 40,
   },
+
   header: {
     marginBottom: 24,
   },
+
   backButton: {
     alignSelf: 'flex-start',
     paddingVertical: 10,
@@ -961,22 +1112,26 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: '#e5e7eb',
   },
+
   backButtonText: {
     color: '#1f2937',
     fontSize: 16,
     fontWeight: '700',
   },
+
   title: {
     fontSize: 26,
     fontWeight: 'bold',
     color: '#1f2937',
     marginBottom: 6,
   },
+
   subtitle: {
     fontSize: 14,
     color: '#6b7280',
     lineHeight: 20,
   },
+
   section: {
     marginBottom: 26,
     padding: 14,
@@ -985,18 +1140,21 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e5e7eb',
   },
+
   sectionTitle: {
     fontSize: 17,
     fontWeight: '700',
     color: '#1f2937',
     marginBottom: 12,
   },
+
   bodyText: {
     fontSize: 13,
     color: '#4b5563',
     lineHeight: 20,
     marginBottom: 12,
   },
+
   label: {
     fontSize: 13,
     fontWeight: '600',
@@ -1004,6 +1162,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginBottom: 6,
   },
+
   recoveryInput: {
     height: 50,
     minHeight: 50,
@@ -1018,12 +1177,14 @@ const styles = StyleSheet.create({
     marginTop: 0,
     width: '100%',
   },
+
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
     width: '100%',
     marginTop: 0,
   },
+
   flexInput: {
     flex: 1,
     height: 50,
@@ -1037,6 +1198,7 @@ const styles = StyleSheet.create({
     color: '#111827',
     fontSize: 14,
   },
+
   visibilityButton: {
     height: 50,
     minHeight: 50,
@@ -1050,149 +1212,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+
   visibilityText: {
     color: '#166534',
-    fontWeight: '700',
-    fontSize: 13,
+    fontWeight: '600',
+    fontSize: 10,
   },
+
   helperText: {
-    fontSize: 12,
+    fontSize: 5,
     color: '#6b7280',
-    lineHeight: 18,
-    marginTop: 8,
+    lineHeight: 15,
+    marginTop: 5,
   },
+
   button: {
-    minHeight: 50,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 8,
+    minHeight: 40,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 5,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 14,
-  },
-  primaryButton: {
-    backgroundColor: '#16a34a',
-  },
-  importButton: {
-    backgroundColor: '#dbeafe',
-  },
-  disableAutoButton: {
-    backgroundColor: '#dc2626',
-  },
-  buttonText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  importButtonText: {
-    color: '#1d4ed8',
-    fontSize: 14,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  disabledButton: {
-    opacity: 0.55,
-  },
-  infoBox: {
-    backgroundColor: '#ecfdf5',
-    borderLeftWidth: 4,
-    borderLeftColor: '#16a34a',
-    padding: 12,
-    borderRadius: 8,
-    marginTop: 14,
-  },
-  infoText: {
-    fontSize: 13,
-    color: '#047857',
-    lineHeight: 21,
-  },
-  groupChoice: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 8,
-    padding: 12,
-    marginTop: 8,
-    backgroundColor: '#ffffff',
-  },
-  groupChoiceSelected: {
-    borderColor: '#16a34a',
-    backgroundColor: '#f0fdf4',
-  },
-  groupChoiceText: {
-    color: '#1f2937',
-    fontSize: 13,
-    fontWeight: '500',
-  },
-  resultsContainer: {
-    marginTop: 20,
-  },
-  resultsTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#1f2937',
-    marginBottom: 10,
-  },
-  emptyBox: {
-    backgroundColor: '#f3f4f6',
-    borderRadius: 8,
-    padding: 18,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  emptyTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#374151',
-    marginBottom: 6,
-  },
-  emptyText: {
-    fontSize: 12,
-    color: '#6b7280',
-    lineHeight: 19,
-    textAlign: 'center',
-  },
-  backupCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  backupInfo: {
-    flex: 1,
-    marginRight: 10,
-  },
-  backupName: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#1f2937',
-    marginBottom: 5,
-  },
-  backupDetails: {
-    fontSize: 11,
-    color: '#6b7280',
-  },
-  iconButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  restoreButton: {
-    backgroundColor: '#dcfce7',
-    borderWidth: 1,
-    borderColor: '#86efac',
-  },
-  restoreIcon: {
-    fontSize: 25,
-    fontWeight: 'bold',
-    color: '#166534',
-  },
-});
+    justify
