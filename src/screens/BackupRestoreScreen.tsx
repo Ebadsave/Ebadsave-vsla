@@ -915,6 +915,16 @@ export default function BackupRestoreScreen() {
                   </Text>
                 </View>
 
+                        <View style={styles.resultsContainer}>
+          {cloudBackups.length === 0 ? (
+            <Text style={styles.emptyText}>
+              No cloud backups found for this group.
+            </Text>
+          ) : (
+            cloudBackups.map((backup) => (
+              <View key={backup.id} style={styles.backupCard}>
+                {/* Keep your existing backup details here */}
+
                 <TouchableOpacity
                   accessibilityRole="button"
                   accessibilityLabel="Restore this cloud backup"
@@ -923,21 +933,16 @@ export default function BackupRestoreScreen() {
                     styles.restoreButton,
                     groupCloudBusy && styles.disabledButton,
                   ]}
-                  onPress={() =>
-                    handleRestoreCloudGroup(backup)
-                  }
+                  onPress={() => handleRestoreCloudGroup(backup)}
                   disabled={groupCloudBusy}
                 >
-                  <Text style={styles.restoreIcon}>
-                    ↩
-                  </Text>
+                  <Text style={styles.restoreIcon}>↩</Text>
                 </TouchableOpacity>
               </View>
             ))
           )}
         </View>
       </View>
-
       {/* CREATE GROUP CLOUD BACKUP */}
 
       <View style={styles.section}>
