@@ -106,9 +106,10 @@ const AUTH_TEXT = {
 } as const;
 
 function getAuthText() {
-  const code = i18n.language.split('-')[0] as keyof typeof AUTH_TEXT;
+  const language = typeof i18n.language === 'string' ? i18n.language : 'en';
+  const code = language.split('-')[0] as keyof typeof AUTH_TEXT;
   return AUTH_TEXT[code] ?? AUTH_TEXT.en;
-}
+    }
 
 export default function PreAppAuthorizationScreen({ navigation }: Props) {
   const [groups, setGroups] = useState<GroupRecord[]>([]);
