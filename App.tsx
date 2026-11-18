@@ -37,31 +37,6 @@ import CloudHomeScreen from './src/screens/CloudHomeScreen';
 import CloudRecoveryScreen from './src/screens/CloudRecoveryScreen';
 import CloudBackupScreen from './src/screens/CloudBackupScreen';
 
-<import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import CloudHomeScreen from './src/screens/CloudHomeScreen';
-import CloudRecoveryScreen from './src/screens/CloudRecoveryScreen';
-import CloudBackupScreen from './src/screens/CloudBackupScreen';
-// ... your other screens
-
-const Stack = createNativeStackNavigator();
-
-export default function App() {
-  return (
-    // ONE parent only - NavigationContainer
-    <NavigationContainer>
-      <Stack.Navigator initialRouteName="Dashboard">
-        <Stack.Screen name="Dashboard" component={DashboardScreen} />
-        <Stack.Screen name="CloudHome" component={CloudHomeScreen} options={{ title: 'Cloud Backup & Restore' }} />
-        <Stack.Screen name="CloudRecovery" component={CloudRecoveryScreen} options={{ title: 'Cloud Recovery' }} />
-        <Stack.Screen name="CloudBackup" component={CloudBackupScreen} options={{ title: 'Cloud Backup' }} />
-        {/* All other Stack.Screen must be INSIDE here, not outside */}
-      </Stack.Navigator>
-    </NavigationContainer>
-  );
-  }
-
 export type RootStackParamList = {
   Onboarding: undefined;
   Welcome: undefined;
@@ -76,6 +51,9 @@ export type RootStackParamList = {
   Home: undefined;
   Constitution: undefined;
   BackupRestore: undefined;
+  CloudHome: undefined;
+  CloudRecovery: undefined;
+  CloudBackup: undefined;
   CloudflareAdminSetup: undefined;
   CloudflarePassbookSync: undefined;
   MemberPassbookLogin: undefined;
@@ -218,7 +196,6 @@ function WelcomeScreen({ navigation }: { navigation: any }) {
   );
 }
 
-
 function EntryFlowScreen({ route, navigation }: { route: any; navigation: any }) {
   const config: Record<string, { title: string; description: string; action: string; next?: string }> = {
     CreateGroupStart: { title: 'Create new group', description: 'Start group registration. The constitution opens only after you choose Continue.', action: 'CONTINUE TO GROUP REGISTRATION', next: 'Constitution' },
@@ -265,8 +242,6 @@ export default function App() {
   const [navigationStateLoaded, setNavigationStateLoaded] = useState(false);
   const lastActiveRef = useRef<number>(Date.now());
 
-  // Load optional background-backup native modules only after the first
-  // screen has rendered. Failure here must not block the main app navigation.
   useEffect(() => {
     const task = InteractionManager.runAfterInteractions(() => {
       void import('./src/services/backupBackground')
@@ -275,13 +250,11 @@ export default function App() {
           console.warn('Automatic backup initialization unavailable:', error);
         });
     });
-
     return () => task.cancel();
   }, []);
 
   useEffect(() => {
     let mounted = true;
-
     const restore = async () => {
       try {
         const [savedState, savedLastActive] = await Promise.all([
@@ -291,9 +264,7 @@ export default function App() {
         const lastActive = savedLastActive ? Number(savedLastActive) : 0;
         lastActiveRef.current = lastActive;
         const sessionExpired = !Number.isFinite(lastActive) || lastActive <= 0 || Date.now() - lastActive >= SESSION_TIMEOUT_MS;
-
         if (mounted && sessionExpired && savedState) {
-          // Expired session: clear the old stack and return to PIN authorization.
           setInitialNavigationState(AUTH_REQUIRED_STATE);
           await AsyncStorage.removeItem(NAVIGATION_STATE_KEY);
         } else if (mounted && savedState) {
@@ -302,7 +273,6 @@ export default function App() {
             setInitialNavigationState(parsed);
           }
         }
-
         lastActiveRef.current = Date.now();
         await AsyncStorage.setItem(LAST_ACTIVE_AT_KEY, String(lastActiveRef.current));
       } catch (error) {
@@ -311,7 +281,6 @@ export default function App() {
         if (mounted) setNavigationStateLoaded(true);
       }
     };
-
     void restore();
     return () => { mounted = false; };
   }, []);
@@ -328,13 +297,11 @@ export default function App() {
 
   useEffect(() => {
     if (!navigationStateLoaded) return;
-
     const saveActivityTime = (time: number) => {
       void AsyncStorage.setItem(LAST_ACTIVE_AT_KEY, String(time)).catch((error) =>
         console.warn('Could not update app activity time:', error),
       );
     };
-
     const subscription = AppState.addEventListener('change', (nextState: AppStateStatus) => {
       const now = Date.now();
       if (nextState === 'active') {
@@ -346,12 +313,10 @@ export default function App() {
         lastActiveRef.current = now;
         saveActivityTime(now);
       } else if (nextState === 'background' || nextState === 'inactive') {
-        // Store the time the app left the foreground, not the time it later resumes.
         lastActiveRef.current = now;
         saveActivityTime(now);
       }
     });
-
     return () => subscription.remove();
   }, [navigationStateLoaded]);
 
@@ -388,107 +353,30 @@ export default function App() {
         <Stack.Screen name="HistoricalRecords" component={HistoricalRecordsScreen} />
         <Stack.Screen name="HistoricalMigration" component={HistoricalMigrationScreen} />
         <Stack.Screen name="ShareOutCalculation" component={ShareOutCalculationScreen} />
-
-        <Stack.Screen
-          name="PreAppAuthorization"
-          component={PreAppAuthorizationScreen}
-        />
-
-        <Stack.Screen
-          name="Home"
-          component={HomeScreen}
-        />
-
-        <Stack.Screen
-          name="Constitution"
-          component={ConstitutionScreen}
-        />
-
-        <Stack.Screen
-          name="BackupRestore"
-          component={BackupRestoreScreen}
-        />
-
-        <Stack.Screen
-          name="SetupRules"
-          component={SetupRulesScreen}
-        />
-
-        <Stack.Screen
-          name="GroupManagement"
-          component={GroupManagementScreen}
-        />
-
-        <Stack.Screen
-          name="AddMembers"
-          component={AddMembersScreen}
-        />
-
-        <Stack.Screen
-          name="NewMeeting"
-          component={NewMeetingScreen}
-        />
-
-        <Stack.Screen
-          name="CloseMeeting"
-          component={CloseMeetingScreen}
-        />
-
-        <Stack.Screen
-          name="MeetingRollCall"
-          component={RollCallScreen}
-        />
-
-        <Stack.Screen
-          name="FinancialTransactions"
-          component={FinancialTransactionsScreen}
-        />
-
-        <Stack.Screen
-          name="Savings"
-          component={SavingsScreen}
-        />
-
-        <Stack.Screen
-          name="LoanDisbursement"
-          component={LoanDisbursementScreen}
-        />
-
-        <Stack.Screen
-          name="Fines"
-          component={FinesScreen}
-        />
-
-        <Stack.Screen
-          name="Insurance"
-          component={InsuranceScreen}
-        />
-
-        <Stack.Screen
-          name="ExternalFunds"
-          component={ExternalFundsScreen}
-        />
-
-        <Stack.Screen
-          name="Repayment"
-          component={LoanRepaymentScreen}
-        />
-
-        <Stack.Screen
-          name="Loans"
-          component={LoansScreen}
-        />
-
-        <Stack.Screen
-          name="MiscellaneousExpense"
-          component={MiscellaneousExpenseScreen}
-        />
-
-        <Stack.Screen
-          name="Expenditure"
-          component={ExpenditureScreen}
-        />
+        <Stack.Screen name="PreAppAuthorization" component={PreAppAuthorizationScreen} />
+        <Stack.Screen name="Home" component={HomeScreen} />
+        <Stack.Screen name="Constitution" component={ConstitutionScreen} />
+        <Stack.Screen name="BackupRestore" component={BackupRestoreScreen} />
+        <Stack.Screen name="CloudHome" component={CloudHomeScreen} />
+        <Stack.Screen name="CloudRecovery" component={CloudRecoveryScreen} />
+        <Stack.Screen name="CloudBackup" component={CloudBackupScreen} />
+        <Stack.Screen name="SetupRules" component={SetupRulesScreen} />
+        <Stack.Screen name="GroupManagement" component={GroupManagementScreen} />
+        <Stack.Screen name="AddMembers" component={AddMembersScreen} />
+        <Stack.Screen name="NewMeeting" component={NewMeetingScreen} />
+        <Stack.Screen name="CloseMeeting" component={CloseMeetingScreen} />
+        <Stack.Screen name="MeetingRollCall" component={RollCallScreen} />
+        <Stack.Screen name="FinancialTransactions" component={FinancialTransactionsScreen} />
+        <Stack.Screen name="Savings" component={SavingsScreen} />
+        <Stack.Screen name="LoanDisbursement" component={LoanDisbursementScreen} />
+        <Stack.Screen name="Fines" component={FinesScreen} />
+        <Stack.Screen name="Insurance" component={InsuranceScreen} />
+        <Stack.Screen name="ExternalFunds" component={ExternalFundsScreen} />
+        <Stack.Screen name="Repayment" component={LoanRepaymentScreen} />
+        <Stack.Screen name="Loans" component={LoansScreen} />
+        <Stack.Screen name="MiscellaneousExpense" component={MiscellaneousExpenseScreen} />
+        <Stack.Screen name="Expenditure" component={ExpenditureScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );
-}
+  }
