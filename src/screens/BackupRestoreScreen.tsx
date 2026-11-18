@@ -740,16 +740,15 @@ export default function BackupRestoreScreen() {
 
         <Text style={styles.label}>KYA Group Number</Text>
         <TextInput
-          value={groupNumberInput}
-          onChangeText={value =>
-            setGroupNumberInput(value.replace(/\D/g, '').slice(0, 4))
-          }
-          placeholder="Example: 2010"
-          keyboardType="number-pad"
-          maxLength={4}
-          autoCapitalize="none"
-          style={styles.recoveryInput}
-        />
+  value={groupNumberInput}
+  onChangeText={(text) => setGroupNumberInput(text.toUpperCase())}
+  placeholder="Example: 2010 or KYA2010"
+  autoCapitalize="characters"
+  autoCorrect={false}
+  keyboardType="default"
+  returnKeyType="search"
+  style={styles.recoveryInput}
+/>
 
         <TouchableOpacity
           accessibilityRole="button"
