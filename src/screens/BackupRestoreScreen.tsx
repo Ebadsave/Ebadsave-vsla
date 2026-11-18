@@ -915,16 +915,6 @@ export default function BackupRestoreScreen() {
                   </Text>
                 </View>
 
-                        <View style={styles.resultsContainer}>
-          {cloudBackups.length === 0 ? (
-            <Text style={styles.emptyText}>
-              No cloud backups found for this group.
-            </Text>
-          ) : (
-            cloudBackups.map((backup) => (
-              <View key={backup.id} style={styles.backupCard}>
-                {/* Keep your existing backup details here */}
-
                 <TouchableOpacity
                   accessibilityRole="button"
                   accessibilityLabel="Restore this cloud backup"
@@ -1099,16 +1089,11 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f9fafb',
   },
-
   content: {
     padding: 16,
     paddingBottom: 40,
   },
-
-  header: {
-    marginBottom: 24,
-  },
-
+  header: { marginBottom: 24 },
   backButton: {
     alignSelf: 'flex-start',
     paddingVertical: 10,
@@ -1117,26 +1102,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: '#e5e7eb',
   },
-
-  backButtonText: {
-    color: '#1f2937',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-
-  title: {
-    fontSize: 26,
-    fontWeight: 'bold',
-    color: '#1f2937',
-    marginBottom: 6,
-  },
-
-  subtitle: {
-    fontSize: 14,
-    color: '#6b7280',
-    lineHeight: 20,
-  },
-
+  backButtonText: { color: '#1f2937', fontSize: 16, fontWeight: '700' },
+  title: { fontSize: 26, fontWeight: 'bold', color: '#1f2937', marginBottom: 6 },
+  subtitle: { fontSize: 14, color: '#6b7280', lineHeight: 20 },
   section: {
     marginBottom: 26,
     padding: 14,
@@ -1145,29 +1113,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e5e7eb',
   },
-
-  sectionTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#1f2937',
-    marginBottom: 12,
-  },
-
-  bodyText: {
-    fontSize: 13,
-    color: '#4b5563',
-    lineHeight: 20,
-    marginBottom: 12,
-  },
-
-  label: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#374151',
-    marginTop: 12,
-    marginBottom: 6,
-  },
-
+  sectionTitle: { fontSize: 17, fontWeight: '700', color: '#1f2937', marginBottom: 12 },
+  bodyText: { fontSize: 13, color: '#4b5563', lineHeight: 20, marginBottom: 12 },
+  label: { fontSize: 13, fontWeight: '600', color: '#374151', marginTop: 12, marginBottom: 6 },
   recoveryInput: {
     height: 50,
     minHeight: 50,
@@ -1179,17 +1127,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     color: '#111827',
     fontSize: 14,
-    marginTop: 0,
     width: '100%',
   },
-
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    width: '100%',
-    marginTop: 0,
-  },
-
+  inputRow: { flexDirection: 'row', alignItems: 'center', width: '100%' },
   flexInput: {
     flex: 1,
     height: 50,
@@ -1203,7 +1143,6 @@ const styles = StyleSheet.create({
     color: '#111827',
     fontSize: 14,
   },
-
   visibilityButton: {
     height: 50,
     minHeight: 50,
@@ -1217,26 +1156,56 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-
-  visibilityText: {
-    color: '#166534',
-    fontWeight: '600',
-    fontSize: 10,
-  },
-
-  helperText: {
-    fontSize: 5,
-    color: '#6b7280',
-    lineHeight: 15,
-    marginTop: 5,
-  },
-
+  visibilityText: { color: '#166534', fontWeight: '600', fontSize: 12 },
+  helperText: { fontSize: 12, color: '#6b7280', lineHeight: 18, marginTop: 5 },
   button: {
-    minHeight: 40,
+    minHeight: 46,
     paddingVertical: 10,
     paddingHorizontal: 12,
-    borderRadius: 5,
+    borderRadius: 8,
     flexDirection: 'row',
-    alignItems: 'center', 
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 12,
   },
-   });
+  primaryButton: { backgroundColor: '#16a34a' },
+  importButton: { backgroundColor: '#dbeafe' },
+  importButtonText: { color: '#1d4ed8', fontWeight: '700', fontSize: 14 },
+  disableAutoButton: { backgroundColor: '#b91c1c' },
+  disabledButton: { opacity: 0.5 },
+  buttonText: { color: '#ffffff', fontWeight: '700', fontSize: 14 },
+  infoBox: { marginTop: 12, padding: 12, borderRadius: 8, backgroundColor: '#f0fdf4' },
+  infoText: { color: '#166534', fontSize: 12, lineHeight: 18, marginBottom: 4 },
+  resultsContainer: { marginTop: 18 },
+  resultsTitle: { fontSize: 16, fontWeight: '700', color: '#166534', marginBottom: 10 },
+  emptyBox: { padding: 14, borderRadius: 8, backgroundColor: '#f3f4f6' },
+  emptyTitle: { fontSize: 14, fontWeight: '700', color: '#374151', marginBottom: 5 },
+  emptyText: { fontSize: 13, color: '#6b7280', lineHeight: 19 },
+  backupCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 12,
+    marginBottom: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
+  backupInfo: { flex: 1, paddingRight: 10 },
+  backupName: { fontSize: 14, fontWeight: '700', color: '#1f2937' },
+  backupDetails: { marginTop: 4, fontSize: 11, color: '#6b7280' },
+  iconButton: {
+    minWidth: 44,
+    minHeight: 44,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  restoreButton: { backgroundColor: '#dcfce7', borderWidth: 1, borderColor: '#16a34a' },
+  restoreIcon: { color: '#166534', fontSize: 22, fontWeight: '700' },
+  groupChoice: { padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#d1d5db', borderRadius: 8 },
+  groupChoiceSelected: { borderColor: '#16a34a', backgroundColor: '#f0fdf4' },
+  groupChoiceText: { color: '#1f2937', fontSize: 13 },
+});
