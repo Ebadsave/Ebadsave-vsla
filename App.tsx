@@ -33,6 +33,13 @@ import HistoricalMigrationScreen from './src/screens/HistoricalMigrationScreen';
 import ShareOutCalculationScreen from './src/screens/ShareOutCalculationScreen';
 import MemberPassbookLoginScreen from './src/screens/MemberPassbookLoginScreen';
 import MemberPassbookScreen from './src/screens/MemberPassbookScreen';
+import CloudHomeScreen from './src/screens/CloudHomeScreen';
+import CloudRecoveryScreen from './src/screens/CloudRecoveryScreen';
+import CloudBackupScreen from './src/screens/CloudBackupScreen';
+
+<Stack.Screen name="CloudHome" component={CloudHomeScreen} />
+<Stack.Screen name="CloudRecovery" component={CloudRecoveryScreen} />
+<Stack.Screen name="CloudBackup" component={CloudBackupScreen} />
 
 export type RootStackParamList = {
   Onboarding: undefined;
