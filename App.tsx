@@ -37,9 +37,30 @@ import CloudHomeScreen from './src/screens/CloudHomeScreen';
 import CloudRecoveryScreen from './src/screens/CloudRecoveryScreen';
 import CloudBackupScreen from './src/screens/CloudBackupScreen';
 
-<Stack.Screen name="CloudHome" component={CloudHomeScreen} />
-<Stack.Screen name="CloudRecovery" component={CloudRecoveryScreen} />
-<Stack.Screen name="CloudBackup" component={CloudBackupScreen} />
+<import React from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import CloudHomeScreen from './src/screens/CloudHomeScreen';
+import CloudRecoveryScreen from './src/screens/CloudRecoveryScreen';
+import CloudBackupScreen from './src/screens/CloudBackupScreen';
+// ... your other screens
+
+const Stack = createNativeStackNavigator();
+
+export default function App() {
+  return (
+    // ONE parent only - NavigationContainer
+    <NavigationContainer>
+      <Stack.Navigator initialRouteName="Dashboard">
+        <Stack.Screen name="Dashboard" component={DashboardScreen} />
+        <Stack.Screen name="CloudHome" component={CloudHomeScreen} options={{ title: 'Cloud Backup & Restore' }} />
+        <Stack.Screen name="CloudRecovery" component={CloudRecoveryScreen} options={{ title: 'Cloud Recovery' }} />
+        <Stack.Screen name="CloudBackup" component={CloudBackupScreen} options={{ title: 'Cloud Backup' }} />
+        {/* All other Stack.Screen must be INSIDE here, not outside */}
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+  }
 
 export type RootStackParamList = {
   Onboarding: undefined;
