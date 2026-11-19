@@ -148,6 +148,39 @@ jobs:
       - name: Generate Android project
         run: npx expo prebuild --platform android --non-interactive
 
+      - name: Fix Kotlin Maven dependency resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="android/settings.gradle"
+
+          python3 - "$FILE" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+
+          mirror = 'maven { url "https://maven-central.storage-download.googleapis.com/maven2" }'
+
+          if mirror not in text:
+              match = re.search(
+                  r'pluginManagement\s*\{',
+                  text
+              )
+
+              if match:
+                  text = text[:match.end()] + '\n    repositories {\n        ' + mirror + '\n    }\n' + text[match.end():]
+              else:
+                  text = 'pluginManagement {\n    repositories {\n        ' + mirror + '\n        google()\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\n\n' + text
+
+              path.write_text(text)
+
+          print("Kotlin Maven mirror configured.")
+          PY
+          
       - name: Check application icon
         run: |
           if [ ! -f assets/icon/app_icon.png ]; then
