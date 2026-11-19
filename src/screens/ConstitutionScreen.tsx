@@ -249,7 +249,7 @@ export default function ConstitutionScreen({
       setRegistrationMessage(
         error instanceof Error
           ? error.message
-          : 'Unable to register the group with Back4App. Check the internet connection and try again.',
+          : 'Unable to register the group with Cloudflare. Check the internet connection and try again.',
       );
     } finally {
       setRegistering(false);
@@ -407,7 +407,7 @@ export default function ConstitutionScreen({
                         </Text>
 
                         <Text style={styles.registrationHelp}>
-                          Internet is required to register a new production group and reserve its unique KYA number (2010–9090). Back4App must confirm the reservation before the group becomes active. Test groups use KYA 2000–2009 locally.
+                          Internet is required to register a new production group and reserve its unique KYA number (2010–9090). Cloudflare must confirm the reservation before the group becomes active. Test groups use KYA 2000–2009 locally.
                         </Text>
 
                         <Text style={styles.offlineHelp}>
