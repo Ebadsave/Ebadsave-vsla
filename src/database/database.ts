@@ -1,3 +1,5 @@
+import { cloudflareRequest } from '../services/cloudflareApi';
+import { CLOUDFLARE_ENDPOINTS } from '../config/cloudflare';
 import * as SQLite from 'expo-sqlite';
 import * as FileSystem from 'expo-file-system';
 import * as Crypto from 'expo-crypto';
@@ -17,6 +19,7 @@ export type GroupRecord = {
   last_activity_at: string;
   /** Legacy local column retained for existing database compatibility. */
   firebase_registration_id?: string | null;
+  cloudflare_group_id?: string | null;
   onboarding_mode?: 'new' | 'existing';
   onboarding_locked?: number;
   onboarding_locked_at?: string | null;
@@ -980,6 +983,7 @@ status TEXT NOT NULL DEFAULT 'active',
       created_at TEXT NOT NULL,
       last_activity_at TEXT NOT NULL,
       firebase_registration_id TEXT,
+      cloudflare_group_id TEXT,
       back4app_registration_id TEXT,
       onboarding_mode TEXT NOT NULL DEFAULT 'new' CHECK (onboarding_mode IN ('new', 'existing')),
       onboarding_locked INTEGER NOT NULL DEFAULT 0 CHECK (onboarding_locked IN (0, 1)),
@@ -2192,6 +2196,7 @@ status TEXT NOT NULL DEFAULT 'active',
   await refreshGroupDormancy(db);
 
   await addColumnIfMissing(db, 'groups', 'firebase_registration_id', 'TEXT'); // legacy column; no longer used for registration
+  await addColumnIfMissing(db, 'groups', 'cloudflare_group_id', 'TEXT');
   await addColumnIfMissing(db, 'groups', 'back4app_registration_id', 'TEXT');
   await addColumnIfMissing(db, 'groups', 'onboarding_mode', "TEXT NOT NULL DEFAULT 'new'");
   await addColumnIfMissing(db, 'groups', 'onboarding_locked', 'INTEGER NOT NULL DEFAULT 0');
@@ -3348,10 +3353,11 @@ export async function createGroup(
   district: string,
   country: string,
   isTestGroup: boolean = false,
+  reservedGroupNumber?: number,
+  cloudflareGroupId?: string,
 ): Promise<number> {
-  if (!isTestGroup) {
-    const registered = await registerGroupLocally({ groupName, district, country });
-    return registered.id;
+  if (!isTestGroup && (!Number.isInteger(reservedGroupNumber) || reservedGroupNumber! < GROUP_START || reservedGroupNumber! > GROUP_END)) {
+    throw new Error('A Cloudflare-reserved production group number is required.');
   }
 
   const db = await getDatabase();
@@ -3377,16 +3383,17 @@ export async function createGroup(
     throw new Error('Country is required.');
   }
 
-  const groupNumber =
-    await findNextAvailableGroupNumber(
-      db,
-      isTestGroup
-        ? TEST_GROUP_START
-        : GROUP_START,
-      isTestGroup
-        ? TEST_GROUP_END
-        : GROUP_END,
+  const groupNumber = isTestGroup
+    ? await findNextAvailableGroupNumber(db, TEST_GROUP_START, TEST_GROUP_END)
+    : reservedGroupNumber!;
+
+  if (!isTestGroup) {
+    const duplicate = await db.getFirstAsync<{ id: number }>(
+      'SELECT id FROM groups WHERE CAST(group_number AS INTEGER) = ? LIMIT 1',
+      groupNumber,
     );
+    if (duplicate) throw new Error(`KYA ${groupNumber} is already stored on this device. Contact support to reconcile this registration.`);
+  }
 
   const timestamp = now();
 
@@ -3399,15 +3406,17 @@ export async function createGroup(
         country,
         status,
         created_at,
-        last_activity_at
+        last_activity_at,
+        cloudflare_group_id
       )
-      VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+      VALUES (?, ?, ?, ?, 'active', ?, ?, ?)`,
       groupNumber,
       cleanName,
       cleanDistrict,
       cleanCountry,
       timestamp,
       timestamp,
+      cloudflareGroupId ?? null,
     );
 
   const groupId =
@@ -3449,26 +3458,7 @@ export async function registerGroup(input: {
     return testGroup;
   }
 
-  return registerGroupLocally(input);
-}
-
-/**
- * Creates a group in the device SQLite database. Cloudflare remains the
- * remote backup/authentication provider; no removed Back4App service is used.
- * Group number allocation here is device-local until a Cloudflare reservation
- * endpoint is implemented server-side.
- */
-async function registerGroupLocally(input: {
-  groupName: string;
-  district: string;
-  country: string;
-}): Promise<GroupRecord> {
-  const groupId = await createGroup(
-    input.groupName, input.district, input.country, false,
-  );
-  const group = await getGroupById(groupId);
-  if (!group) throw new Error('Group was created but could not be loaded.');
-  return group;
+  return registerGroupWithCloudflare(input);
 }
 
 export async function registerGroupWithCloudflare(input: {
@@ -3476,7 +3466,24 @@ export async function registerGroupWithCloudflare(input: {
   district: string;
   country: string;
 }): Promise<GroupRecord> {
-  return registerGroupLocally(input);
+  const groupName = normalizeText(input.groupName);
+  const district = normalizeText(input.district);
+  const country = normalizeText(input.country);
+  if (!groupName || !district || !country) throw new Error('Group name, district and country are required.');
+
+  // Cloudflare is the sole authority for production KYA allocation.
+  const reservation = await cloudflareRequest<{ ok: boolean; groupNumber: number; groupId: string }>(
+    CLOUDFLARE_ENDPOINTS.registerGroup,
+    { method: 'POST', body: { groupName, district, country } },
+  );
+  if (!reservation.ok || !Number.isInteger(reservation.groupNumber) || !reservation.groupId) {
+    throw new Error('Cloudflare did not return a valid production group reservation.');
+  }
+
+  const groupId = await createGroup(groupName, district, country, false, reservation.groupNumber, reservation.groupId);
+  const group = await getGroupById(groupId);
+  if (!group) throw new Error('Cloudflare reserved the group number, but the local group could not be loaded. Contact support; do not register again.');
+  return group;
 }
 
 export async function deleteGroup(
