@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, ScrollView } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 
 export default function CloudBackupScreen() {
@@ -27,7 +27,6 @@ export default function CloudBackupScreen() {
     }
     setIsBackingUp(true);
     setProgress(0);
-    // Fake progress for now - later we connect to Cloudflare
     let p = 0;
     const timer = setInterval(() => {
       p += 20;
@@ -43,7 +42,7 @@ export default function CloudBackupScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>Cloud Backup</Text>
       <Text style={styles.subtitle}>Step 4 - Choose what to backup</Text>
 
@@ -52,7 +51,8 @@ export default function CloudBackupScreen() {
         <Text style={styles.lastValue}>{lastBackup}</Text>
         <Text style={styles.lastOk}>✓ Cloud is up to date</Text>
       </View>
-            {options.map((o) => {
+
+      {options.map((o) => {
         const active = selected.includes(o.id);
         return (
           <TouchableOpacity key={o.id} style={[styles.card, active ? styles.cardActive : null]} onPress={() => toggle(o.id)}>
@@ -69,7 +69,7 @@ export default function CloudBackupScreen() {
 
       {isBackingUp && (
         <View style={styles.progressBox}>
-          <ActivityIndicator color="#16a34a" />
+          <ActivityIndicator color="#16a34a" size="small" />
           <Text style={styles.progressText}>Backing up... {progress}%</Text>
           <View style={styles.barBg}>
             <View style={[styles.barFill, { width: `${progress}%` }]} />
@@ -89,36 +89,36 @@ export default function CloudBackupScreen() {
       <TouchableOpacity style={styles.doneBtn} onPress={() => navigation.navigate('Home')}>
         <Text style={styles.doneText}>Done - Go to Home</Text>
       </TouchableOpacity>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: '#fff', justifyContent: 'center' },
-  title: { fontSize: 24, fontWeight: '800', textAlign: 'center' },
-  subtitle: { fontSize: 14, color: '#666', textAlign: 'center', marginTop: 4, marginBottom: 16 },
-  lastBox: { backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0', borderRadius: 12, padding: 14, marginBottom: 16 },
-  lastLabel: { fontSize: 12, color: '#64748b', fontWeight: '700' },
-  lastValue: { fontSize: 14, fontWeight: '600', marginTop: 2 },
-  lastOk: { fontSize: 13, color: '#16a34a', fontWeight: '700', marginTop: 4 },
-  card: { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: '#e2e8f0', borderRadius: 12, padding: 12, marginBottom: 10 },
+  container: { flexGrow: 1, padding: 14, backgroundColor: '#fff', justifyContent: 'center' },
+  title: { fontSize: 16, fontWeight: '800', textAlign: 'center' },
+  subtitle: { fontSize: 10.5, color: '#666', textAlign: 'center', marginTop: 3, marginBottom: 10 },
+  lastBox: { backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0', borderRadius: 9, padding: 9, marginBottom: 10 },
+  lastLabel: { fontSize: 10, color: '#64748b', fontWeight: '700' },
+  lastValue: { fontSize: 11, fontWeight: '600', marginTop: 2 },
+  lastOk: { fontSize: 10.5, color: '#16a34a', fontWeight: '700', marginTop: 2 },
+  card: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 9, padding: 9, marginBottom: 7 },
   cardActive: { borderColor: '#16a34a', backgroundColor: '#f0fdf4' },
-  check: { width: 26, height: 26, borderRadius: 13, borderWidth: 2, borderColor: '#cbd5e1', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  check: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: '#cbd5e1', alignItems: 'center', justifyContent: 'center', marginRight: 8 },
   checkActive: { backgroundColor: '#16a34a', borderColor: '#16a34a' },
-  checkText: { color: '#fff', fontWeight: '800' },
-  cardLabel: { fontSize: 15, fontWeight: '700' },
-  cardDesc: { fontSize: 13, color: '#64748b', marginTop: 2 },
-  progressBox: { alignItems: 'center', marginTop: 12 },
-  progressText: { marginTop: 6, fontWeight: '600' },
-  barBg: { height: 8, width: '100%', backgroundColor: '#e2e8f0', borderRadius: 4, marginTop: 8, overflow: 'hidden' },
-  barFill: { height: 8, backgroundColor: '#16a34a' },
-  navRow: { flexDirection: 'row', marginTop: 16 },
-  btn: { flex: 1, padding: 14, borderRadius: 12, alignItems: 'center', marginHorizontal: 5 },
+  checkText: { color: '#fff', fontWeight: '800', fontSize: 10 },
+  cardLabel: { fontSize: 12, fontWeight: '700' },
+  cardDesc: { fontSize: 10.5, color: '#64748b', marginTop: 1 },
+  progressBox: { alignItems: 'center', marginTop: 8 },
+  progressText: { marginTop: 5, fontWeight: '600', fontSize: 11 },
+  barBg: { height: 6, width: '100%', backgroundColor: '#e2e8f0', borderRadius: 3, marginTop: 6, overflow: 'hidden' },
+  barFill: { height: 6, backgroundColor: '#16a34a' },
+  navRow: { flexDirection: 'row', marginTop: 12 },
+  btn: { flex: 1, padding: 10, borderRadius: 9, alignItems: 'center', marginHorizontal: 4 },
   back: { backgroundColor: '#e2e8f0' },
   next: { backgroundColor: '#16a34a' },
   disabled: { opacity: 0.6 },
-  btnText: { fontWeight: '700', color: '#fff', fontSize: 16 },
+  btnText: { fontWeight: '700', color: '#fff', fontSize: 12 },
   backText: { color: '#0f172a' },
-  doneBtn: { marginTop: 12, padding: 12, alignItems: 'center' },
-  doneText: { color: '#16a34a', fontWeight: '700', fontSize: 15 },
+  doneBtn: { marginTop: 8, padding: 9, alignItems: 'center' },
+  doneText: { color: '#16a34a', fontWeight: '700', fontSize: 11.5 },
 });
