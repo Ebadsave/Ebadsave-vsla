@@ -81,7 +81,8 @@ function normalizeGroupNumber(input: string): string {
     return `KYA${digits.slice(-4)}`;
   }
   return String(input || '').trim().toUpperCase();
-  }
+}
+
 function parseAndValidateBackup(contents: string): BackupEnvelope {
   let parsed: unknown;
   try {
@@ -203,31 +204,67 @@ async function encryptBackupForCloud(
   };
 }
 
-function decryptCloudBackup(encryptedContents: string, passphraseInput: string): string {
-  const passphrase = requirePassphrase(passphraseInput);
-  let envelope: Partial<EncryptedCloudEnvelope>;
-
-  try {
-    envelope = JSON.parse(encryptedContents) as Partial<EncryptedCloudEnvelope>;
-  } catch {
-    throw new Error('The internet backup file is damaged or unsupported.');
+function validateEncryptedEnvelope(
+  value: unknown,
+): asserts value is EncryptedCloudEnvelope {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('The downloaded cloud backup is not a valid encrypted file.');
   }
 
+  const envelope = value as Partial<EncryptedCloudEnvelope>;
   if (
     envelope.format !== 'EBADSAVE_ENCRYPTED_CLOUD_BACKUP' ||
-    envelope.version !== CLOUD_BACKUP_VERSION ||
-    typeof envelope.salt !== 'string' ||
-    typeof envelope.iv !== 'string' ||
-    typeof envelope.ciphertext !== 'string' ||
-    typeof envelope.mac !== 'string'
+    envelope.version !== CLOUD_BACKUP_VERSION
   ) {
     throw new Error('This is not a supported encrypted Ebadsave cloud backup.');
   }
 
+  if (
+    typeof envelope.created_at !== 'string' ||
+    typeof envelope.salt !== 'string' ||
+    !/^[0-9a-f]{32}$/i.test(envelope.salt) ||
+    typeof envelope.iv !== 'string' ||
+    !/^[0-9a-f]{32}$/i.test(envelope.iv) ||
+    typeof envelope.ciphertext !== 'string' ||
+    envelope.ciphertext.length === 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(envelope.ciphertext) ||
+    envelope.ciphertext.length % 4 !== 0 ||
+    typeof envelope.mac !== 'string' ||
+    !/^[0-9a-f]{64}$/i.test(envelope.mac)
+  ) {
+    throw new Error(
+      'The downloaded cloud backup is damaged or incomplete. Its encryption metadata is invalid.',
+    );
+  }
+
+  // AES-CBC ciphertext must contain complete 16-byte blocks.
+  const ciphertextBytes = CryptoJS.enc.Base64.parse(envelope.ciphertext).sigBytes;
+  if (ciphertextBytes < 16 || ciphertextBytes % 16 !== 0) {
+    throw new Error(
+      'The downloaded cloud backup is damaged or incomplete. Its encrypted data has an invalid length.',
+    );
+  }
+}
+
+function decryptCloudBackup(encryptedContents: string, passphraseInput: string): string {
+  const passphrase = requirePassphrase(passphraseInput);
+  let parsedEnvelope: unknown;
+
+  try {
+    parsedEnvelope = JSON.parse(encryptedContents);
+  } catch {
+    throw new Error(
+      'The downloaded cloud backup is not valid JSON. The file may be damaged or incomplete.',
+    );
+  }
+
+  validateEncryptedEnvelope(parsedEnvelope);
+  const envelope = parsedEnvelope;
+
   const unsignedEnvelope: Omit<EncryptedCloudEnvelope, 'mac'> = {
     format: envelope.format,
     version: envelope.version,
-    created_at: envelope.created_at || '',
+    created_at: envelope.created_at,
     salt: envelope.salt,
     iv: envelope.iv,
     ciphertext: envelope.ciphertext,
@@ -238,8 +275,12 @@ function decryptCloudBackup(encryptedContents: string, passphraseInput: string):
     deriveAuthenticationKey(passphrase, envelope.salt),
   ).toString(CryptoJS.enc.Hex);
 
-  if (!constantTimeEquals(expectedMac, envelope.mac)) {
-    throw new Error('The passphrase is incorrect or the cloud backup has been altered.');
+  if (!constantTimeEquals(expectedMac.toLowerCase(), envelope.mac.toLowerCase())) {
+    // Version 1 has no independent passphrase verifier. A failed MAC therefore
+    // cannot conclusively distinguish a wrong passphrase from modified data.
+    throw new Error(
+      'Backup verification failed. The passphrase may be incorrect, or the cloud backup may have been altered.',
+    );
   }
 
   let plaintext = '';
@@ -254,11 +295,15 @@ function decryptCloudBackup(encryptedContents: string, passphraseInput: string):
       },
     ).toString(CryptoJS.enc.Utf8);
   } catch {
-    throw new Error('The passphrase is incorrect or the cloud backup is damaged.');
+    throw new Error(
+      'The backup passed its authentication check but could not be decoded. The encrypted file may be damaged.',
+    );
   }
 
   if (!plaintext) {
-    throw new Error('The passphrase is incorrect or the cloud backup is damaged.');
+    throw new Error(
+      'The backup passed its authentication check but contains no readable data.',
+    );
   }
 
   parseAndValidateBackup(plaintext);
@@ -301,14 +346,15 @@ async function cloudflareBinaryRequest(
   });
 
   if (!response.ok) {
-    let code = `Cloudflare request failed (${response.status}).`;
+    let message = `Cloudflare request failed (${response.status}).`;
     try {
-      const payload = await response.json() as { error?: string };
-      if (payload.error) code = payload.error;
+      const payload = await response.json() as { error?: string; message?: string };
+      if (payload.message) message = payload.message;
+      else if (payload.error) message = payload.error;
     } catch {
       // Keep the HTTP status message when the response is not JSON.
     }
-    throw new Error(code);
+    throw new Error(message);
   }
   return response;
 }
@@ -333,14 +379,20 @@ async function assertCloudflareGroupMatches(groupNumber: string): Promise<string
 }
 
 function bytesToUtf8(bytes: Uint8Array): string {
-  const words: number[] = [];
-  for (let index = 0; index < bytes.length; index += 1) {
-    words[index >>> 2] = (words[index >>> 2] || 0) |
-      (bytes[index] << (24 - (index % 4) * 8));
+  try {
+    const words: number[] = [];
+    for (let index = 0; index < bytes.length; index += 1) {
+      words[index >>> 2] = (words[index >>> 2] || 0) |
+        (bytes[index] << (24 - (index % 4) * 8));
+    }
+    return CryptoJS.enc.Utf8.stringify(
+      CryptoJS.lib.WordArray.create(words, bytes.length),
+    );
+  } catch {
+    throw new Error(
+      'The downloaded cloud backup is not valid UTF-8. The file may be damaged or incomplete.',
+    );
   }
-  return CryptoJS.enc.Utf8.stringify(
-    CryptoJS.lib.WordArray.create(words, bytes.length),
-  );
 }
 
 export async function signInCloudflareBackupAdmin(
@@ -374,10 +426,13 @@ export async function signInCloudflareBackupAdmin(
   const payload = await response.json() as {
     accessToken?: string;
     error?: string;
+    message?: string;
   };
 
   if (!response.ok || !payload.accessToken) {
-    throw new Error(payload.error || `Cloudflare sign-in failed (${response.status}).`);
+    throw new Error(
+      payload.message || payload.error || `Cloudflare sign-in failed (${response.status}).`,
+    );
   }
 
   const claims = decodeJwtPayload(payload.accessToken);
@@ -469,6 +524,11 @@ export async function uploadGroupDatabaseBackupToCloud(
 
     const result = await response.json() as { backupId?: string; bytes?: number };
     if (!result.backupId) throw new Error('Cloudflare did not confirm the backup upload.');
+    if (typeof result.bytes === 'number' && result.bytes !== bytes.byteLength) {
+      throw new Error(
+        'Cloudflare confirmed an unexpected backup size. The uploaded backup may be incomplete.',
+      );
+    }
 
     return {
       success: true,
@@ -540,7 +600,24 @@ export async function restoreCloudGroupDatabaseBackup(
       `/v1/backups/${encodeURIComponent(backup.objectId)}`,
       'GET',
     );
+
     const encryptedBytes = new Uint8Array(await response.arrayBuffer());
+    if (encryptedBytes.byteLength === 0) {
+      throw new Error('Cloudflare returned an empty backup file. No data was changed.');
+    }
+
+    // The list endpoint records the original upload size. Compare it before
+    // decoding so truncated or unexpectedly modified downloads are detected.
+    if (
+      typeof backup.bytes === 'number' &&
+      backup.bytes > 0 &&
+      encryptedBytes.byteLength !== backup.bytes
+    ) {
+      throw new Error(
+        `The downloaded backup is incomplete: expected ${backup.bytes} bytes but received ${encryptedBytes.byteLength} bytes. No data was changed.`,
+      );
+    }
+
     const encryptedContents = bytesToUtf8(encryptedBytes);
     const plaintext = decryptCloudBackup(encryptedContents, passphrase);
     const parsed = parseAndValidateBackup(plaintext);
@@ -561,4 +638,4 @@ export async function restoreCloudGroupDatabaseBackup(
     const message = error instanceof Error ? error.message : 'Unknown cloud recovery error.';
     return { success: false, message: 'Group recovery failed.', error: message };
   }
-      }
+}
