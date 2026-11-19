@@ -1,69 +1,53 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+// Ebadsave Cloud Backup - uses JWT from Member Login
 export const CLOUDFLARE_WORKER_URL = 'https://ebadsave-vsla-cloudflare.info-ebadsave.workers.dev';
 
-export type BackupPayload = {
-  groupCode: string;
-  createdAt: string;
-  data: Record<string, any>;
-};
+let jwtToken = localStorage.getItem('ebadsave_jwt') || '';
 
-export async function collectLocalData(): Promise<Record<string, any>> {
-  // These are the keys your app already uses - we grab all of them
-  const keys = await AsyncStorage.getAllKeys();
-  const entries = await AsyncStorage.multiGet(keys);
-  const data: Record<string, any> = {};
-  for (const [k, v] of entries) {
-    try {
-      data[k] = v ? JSON.parse(v) : null;
-    } catch {
-      data[k] = v;
-    }
+function headers(withAuth = true) {
+  const h: any = { 'Content-Type': 'application/json' };
+  if (withAuth && jwtToken) h['Authorization'] = `Bearer ${jwtToken}`;
+  return h;
+}
+
+// Call this right after Member Number + Name + PIN unlock
+export async function loginToCloud(memberNumber: string, memberName: string, pin: string) {
+  const res = await fetch(`${CLOUDFLARE_WORKER_URL}/login`, {
+    method: 'POST',
+    headers: headers(false),
+    body: JSON.stringify({ memberNumber, memberName, pin }),
+  });
+  const data = await res.json();
+  // Worker returns { ok:true, token: "eyJ..." } or { token }
+  const token = data.token || data.jwt || data.accessToken;
+  if (token) {
+    jwtToken = token;
+    localStorage.setItem('ebadsave_jwt', token);
+    return { success: true };
   }
-  return data;
+  return { success: false, error: data.message || data.error || 'Login failed' };
 }
 
-export async function uploadBackup(groupCode: string): Promise<{ ok: boolean; id?: string; message: string }> {
-  try {
-    const data = await collectLocalData();
-    const payload: BackupPayload = {
-      groupCode,
-      createdAt: new Date().toISOString(),
-      data,
-    };
-    const res = await fetch(`${CLOUDFLARE_WORKER_URL}/backup`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const json: any = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, message: json.error || `Upload failed: ${res.status}` };
-    return { ok: true, id: json.id, message: 'Backup uploaded to cloud' };
-  } catch (e: any) {
-    return { ok: false, message: e.message || 'Network error' };
+export async function cloudBackup(groupId: string, data: any) {
+  const res = await fetch(`${CLOUDFLARE_WORKER_URL}/backup`, {
+    method: 'POST',
+    headers: headers(true),
+    body: JSON.stringify({ groupId, data }),
+  });
+  return await res.json();
+}
+
+export async function cloudRestore(groupId: string) {
+  const res = await fetch(`${CLOUDFLARE_WORKER_URL}/backup/latest?groupId=${groupId}`, {
+    headers: headers(true),
+  });
+  return await res.json();
+}
+
+export function isCloudLoggedIn() {
+  return !!jwtToken;
+}
+
+export function cloudLogout() {
+  jwtToken = '';
+  localStorage.removeItem('ebadsave_jwt');
   }
-}
-
-export async function listBackups(groupCode: string): Promise<any[]> {
-  try {
-    const res = await fetch(`${CLOUDFLARE_WORKER_URL}/backups?groupCode=${encodeURIComponent(groupCode)}`);
-    const json: any = await res.json().catch(() => ({}));
-    return Array.isArray(json.backups) ? json.backups : [];
-  } catch {
-    return [];
-  }
-}
-
-export async function downloadBackup(id: string): Promise<any | null> {
-  try {
-    const res = await fetch(`${CLOUDFLARE_WORKER_URL}/backup/${id}`);
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-export async function restoreBackup(backupData: Record<string, any>): Promise<void> {
-  const pairs: [string, string][] = Object.entries(backupData).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]);
-  if (pairs.length > 0) await AsyncStorage.multiSet(pairs);
-}
