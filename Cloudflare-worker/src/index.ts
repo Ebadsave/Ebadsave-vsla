@@ -1005,6 +1005,45 @@ export default {
       return cors(response, request);
     }
 
+    if (url.pathname === '/v1/groups/register' && request.method === 'POST') {
+      const body = await readJson(request);
+      if (!body || typeof body.groupName !== 'string' || typeof body.district !== 'string' || typeof body.country !== 'string') {
+        return cors(json({ error: 'group_name_district_and_country_required' }, 400), request);
+      }
+      const groupName = body.groupName.trim();
+      const district = body.district.trim();
+      const country = body.country.trim();
+      if (!groupName || !district || !country || groupName.length > 120 || district.length > 120 || country.length > 80) {
+        return cors(json({ error: 'invalid_group_details' }, 400), request);
+      }
+
+      // The unique D1 primary key is the final concurrency guard. If two
+      // devices race for the same next number, the loser retries allocation.
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const candidate = await env.DB.prepare(
+          `WITH RECURSIVE numbers(n) AS (
+             SELECT 2010 UNION ALL SELECT n + 1 FROM numbers WHERE n < 9090
+           )
+           SELECT n AS groupNumber FROM numbers
+           WHERE NOT EXISTS (SELECT 1 FROM production_group_registry r WHERE r.group_number = n)
+           ORDER BY n LIMIT 1`,
+        ).first<{ groupNumber: number }>();
+        if (!candidate) return cors(json({ error: 'production_group_numbers_exhausted' }, 409), request);
+        const groupId = `kya-${candidate.groupNumber}`;
+        try {
+          await env.DB.prepare(
+            `INSERT INTO production_group_registry
+             (group_number, group_id, group_name, district, country, status, registered_at, last_activity_at)
+             VALUES (?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))`,
+          ).bind(candidate.groupNumber, groupId, groupName, district, country).run();
+          return cors(json({ ok: true, groupNumber: candidate.groupNumber, groupId }, 201), request);
+        } catch (error) {
+          if (attempt === 7) throw error;
+        }
+      }
+      return cors(json({ error: 'group_number_reservation_failed' }, 503), request);
+    }
+
     if (
   url.pathname === '/v1/registrations' &&
   request.method === 'POST'
