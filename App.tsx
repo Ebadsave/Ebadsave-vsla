@@ -150,7 +150,7 @@ const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
 // Navigation is restored during ordinary breaks. After 24 hours without app
 // activity, the user must complete the existing group PIN authorization again.
-const NAVIGATION_STATE_KEY = '@ebadsave/navigation-state/v2';
+const NAVIGATION_STATE_KEY = '@ebadsave/navigation-state/v3';
 const LAST_ACTIVE_AT_KEY = '@ebadsave/last-active-at/v1';
 const SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const AUTH_REQUIRED_STATE = {
