@@ -264,9 +264,8 @@ export default function HomeScreen({ navigation, route }: HomeScreenProps) {
   };
 
   const openBackupRestore = () => {
-    // Keep backup and restore available even when no active group is selected.
-    navigation.navigate('BackupRestore');
-  };
+  navigation.navigate('CloudHome'); // Screen 1 of your 3 screens
+};
 
   const cards = [
     { title: 'Total Savings', value: money(dashboard.currency, dashboard.savings), icon: 'S', action: () => navigateWithGroup('FinancialTransactions') },
