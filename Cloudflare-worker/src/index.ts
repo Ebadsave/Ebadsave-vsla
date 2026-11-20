@@ -12,28 +12,37 @@ interface R2ObjectBody {
   body: ReadableStream<Uint8Array> | null;
   writeHttpMetadata(headers: Headers): void;
 }
+
 interface R2Bucket {
-  put(key: string, value: ArrayBuffer, options?: {
-    httpMetadata?: { contentType?: string; cacheControl?: string };
-    customMetadata?: Record<string, string>;
-  }): Promise<unknown>;
+  put(
+    key: string,
+    value: ArrayBuffer,
+    options?: {
+      httpMetadata?: { contentType?: string; cacheControl?: string };
+      customMetadata?: Record<string, string>;
+    },
+  ): Promise<unknown>;
   get(key: string): Promise<R2ObjectBody | null>;
 }
+
 interface D1Result<T = Record<string, unknown>> {
   results?: T[];
   success: boolean;
   meta?: Record<string, unknown>;
 }
+
 interface D1PreparedStatement {
   bind(...values: unknown[]): D1PreparedStatement;
   run(): Promise<D1Result>;
   all<T = Record<string, unknown>>(): Promise<D1Result<T>>;
   first<T = Record<string, unknown>>(columnName?: string): Promise<T | null>;
 }
+
 interface D1Database {
   prepare(query: string): D1PreparedStatement;
   batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
 }
+
 export interface Env extends AuthEnv {
   BACKUPS: R2Bucket;
   DB: D1Database;
@@ -43,8 +52,14 @@ export interface Env extends AuthEnv {
 }
 
 type JwtRole = AuthRole;
+
 type JwtClaims = {
-  sub: string; groupId: string; role: JwtRole; exp: number; iat: number; jti: string;
+  sub: string;
+  groupId: string;
+  role: JwtRole;
+  exp: number;
+  iat: number;
+  jti: string;
 };
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -65,6 +80,7 @@ const ERROR_MESSAGES: Record<string, string> = {
 
 const json = (data: unknown, status = 200): Response => {
   let payload = data;
+
   if (isRecord(data) && typeof data.error === 'string') {
     const code = data.error;
     payload = {
@@ -72,9 +88,13 @@ const json = (data: unknown, status = 200): Response => {
       ok: false,
       code,
       httpStatus: status,
-      message: typeof data.message === 'string' ? data.message : (ERROR_MESSAGES[code] ?? code.replace(/_/g, ' ')),
+      message:
+        typeof data.message === 'string'
+          ? data.message
+          : (ERROR_MESSAGES[code] ?? code.replace(/_/g, ' ')),
     };
   }
+
   return new Response(JSON.stringify(payload), {
     status,
     headers: {
@@ -89,56 +109,90 @@ const json = (data: unknown, status = 200): Response => {
 function cors(response: Response, request: Request): Response {
   const headers = new Headers(response.headers);
   const origin = request.headers.get('origin');
-  // Configure a specific production app origin if the mobile/web client requires CORS.
+
   if (origin) headers.set('access-control-allow-origin', origin);
-  headers.set('access-control-allow-methods', 'GET,POST,OPTIONS');
-  headers.set('access-control-allow-headers', 'authorization,content-type,x-backup-id,x-backup-encrypted,x-group-id,x-group-number');
+
+  headers.set(
+    'access-control-allow-methods',
+    'GET,POST,OPTIONS',
+  );
+  headers.set(
+    'access-control-allow-headers',
+    'authorization,content-type,x-backup-id,x-backup-encrypted,x-group-id,x-group-number',
+  );
   headers.set('access-control-expose-headers', 'x-request-id');
-  if (!headers.has('x-request-id')) headers.set('x-request-id', crypto.randomUUID());
+
+  if (!headers.has('x-request-id')) {
+    headers.set('x-request-id', crypto.randomUUID());
+  }
+
   headers.set('access-control-max-age', '86400');
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 function backupKey(groupId: string, backupId: string): string {
   return `groups/${groupId}/backups/${backupId}.enc`;
 }
-function validId(value: string): boolean { return /^[A-Za-z0-9_-]{1,80}$/.test(value); }
-function validMemberNumber(value: string): boolean { return /^KYA\s?\d{7}$/.test(value); }
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+
+function validId(value: string): boolean {
+  return /^[A-Za-z0-9_-]{1,80}$/.test(value);
 }
-async function readJson(request: Request): Promise<Record<string, unknown> | null> {
+
+function validMemberNumber(value: string): boolean {
+  return /^KYA\s?\d{7}$/.test(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object'
+    && value !== null
+    && !Array.isArray(value);
+}
+
+async function readJson(
+  request: Request,
+): Promise<Record<string, unknown> | null> {
   try {
     const contentType = request.headers.get('content-type') ?? '';
     if (!contentType.toLowerCase().includes('application/json')) return null;
+
     const body: unknown = await request.json();
     return isRecord(body) ? body : null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
-async function audit(env: Env, actorId: string, groupId: string, action: string, result: string, backupId?: string) {
+
+async function audit(
+  env: Env,
+  actorId: string,
+  groupId: string,
+  action: string,
+  result: string,
+  backupId?: string,
+) {
   await env.DB.prepare(
-    `INSERT INTO audit_events (actor_id, group_id, action, result, backup_id, created_at)
+    `INSERT INTO audit_events
+       (actor_id, group_id, action, result, backup_id, created_at)
      VALUES (?, ?, ?, ?, ?, datetime('now'))`,
-  ).bind(actorId, groupId, action, result, backupId ?? null).run();
+  )
+    .bind(actorId, groupId, action, result, backupId ?? null)
+    .run();
 }
 
-async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
-  // Backend-only bootstrap: the mobile app never receives or sends this secret.
-  // Each group can claim only its own first administrator; no global administrator exists.
-  if (!env.ADMIN_BOOTSTRAP_SECRET || env.ADMIN_BOOTSTRAP_SECRET.length < 32) {
-    return json({ error: 'server_bootstrap_secret_not_configured' }, 500);
-  }
-  if (!env.PIN_PEPPER || env.PIN_PEPPER.length < 32) {
-    return json({ error: 'server_pin_pepper_not_configured' }, 500);
-  }
-
-  async function resetMemberPin(
+async function bootstrapAdmin(
   request: Request,
   env: Env,
-  claims: JwtClaims,
 ): Promise<Response> {
-  if (claims.role !== 'admin') {
-    return json({ error: 'admin_required' }, 403);
+  if (
+    !env.ADMIN_BOOTSTRAP_SECRET ||
+    env.ADMIN_BOOTSTRAP_SECRET.length < 32
+  ) {
+    return json({ error: 'server_bootstrap_secret_not_configured' }, 500);
   }
 
   if (!env.PIN_PEPPER || env.PIN_PEPPER.length < 32) {
@@ -146,111 +200,67 @@ async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
   }
 
   const body = await readJson(request);
+
   if (
     !body ||
+    typeof body.groupNumber !== 'string' ||
     typeof body.memberNumber !== 'string' ||
+    typeof body.memberName !== 'string' ||
     typeof body.pin !== 'string' ||
     typeof body.confirmPin !== 'string'
   ) {
-    return json({ error: 'member_number_and_pin_confirmation_required' }, 400);
+    return json(
+      { error: 'group_admin_name_member_number_pin_and_confirmation_required' },
+      400,
+    );
   }
 
-  const memberNumber = normalizeMemberNumber(body.memberNumber)
-    .replace(/\s+/g, '');
-
-  if (!validMemberNumber(memberNumber)) {
-    return json({ error: 'invalid_member_number' }, 400);
-  }
-  if (!/^\d{6,12}$/.test(body.pin)) {
-    return json({ error: 'invalid_pin' }, 400);
-  }
   if (body.pin !== body.confirmPin) {
     return json({ error: 'pin_confirmation_mismatch' }, 400);
   }
 
-  // The target lookup and update are both scoped to the authenticated admin's
-  // group. Admin accounts themselves are deliberately excluded from this flow.
-  const target = await env.DB.prepare(
-    `SELECT user_id AS userId, role
-     FROM auth_users
-     WHERE group_id = ?
-       AND UPPER(REPLACE(member_number, ' ', '')) = ?
-       AND status = 'active'
-       AND role IN ('member', 'executive')
-     LIMIT 1`,
-  )
-    .bind(claims.groupId, memberNumber)
-    .first<{ userId: string; role: string }>();
+  const groupNumber = body.groupNumber
+    .trim()
+    .toUpperCase()
+    .replace(/^KYA\s*/, '');
 
-  if (!target) {
-    return json({ error: 'active_group_member_not_found' }, 404);
-  }
-
-  const verifier = await createPinVerifier(body.pin, env.PIN_PEPPER);
-
-  const updated = await env.DB.prepare(
-    `UPDATE auth_users
-     SET pin_hash = ?,
-         pin_salt = ?,
-         failed_attempts = 0,
-         locked_until = NULL,
-         updated_at = datetime('now')
-     WHERE user_id = ?
-       AND group_id = ?
-       AND status = 'active'
-       AND role IN ('member', 'executive')`,
-  )
-    .bind(verifier.pinHash, verifier.pinSalt, target.userId, claims.groupId)
-    .run();
-
-  if (Number(updated.meta?.changes ?? 0) !== 1) {
-    return json({ error: 'member_pin_reset_not_applied' }, 409);
-  }
-
-  await env.DB.prepare(
-    `INSERT INTO auth_events
-     (user_id, group_id, event_type, result, created_at)
-     VALUES (?, ?, 'member_pin_reset_by_admin', 'success', datetime('now'))`,
-  )
-    .bind(target.userId, claims.groupId)
-    .run();
-
-  return json({ ok: true, memberNumber, pinReset: true });
-}
-  
-  const body = await readJson(request);
-  if (!body || typeof body.groupNumber !== 'string' ||
-      typeof body.memberNumber !== 'string' || typeof body.memberName !== 'string' ||
-      typeof body.pin !== 'string' || typeof body.confirmPin !== 'string') {
-    return json({ error: 'group_admin_name_member_number_pin_and_confirmation_required' }, 400);
-  }
-  if (body.pin !== body.confirmPin) return json({ error: 'pin_confirmation_mismatch' }, 400);
-
-  const groupNumber = body.groupNumber.trim().toUpperCase().replace(/^KYA\s*/, '');
   if (!/^\d{4}$/.test(groupNumber)) {
     return json({ error: 'invalid_group_number' }, 400);
   }
+
   const numericGroup = Number(groupNumber);
   const validGroupRange =
-    (numericGroup >= 2000 && numericGroup <= 2009) ||
-    (numericGroup >= 2010 && numericGroup <= 9090);
-  if (!validGroupRange) return json({ error: 'group_number_out_of_range' }, 400);
+    (numericGroup >= 2000 && numericGroup <= 2009)
+    || (numericGroup >= 2010 && numericGroup <= 9090);
+
+  if (!validGroupRange) {
+    return json({ error: 'group_number_out_of_range' }, 400);
+  }
 
   const groupId = `kya-${groupNumber}`;
-  const memberNumber = body.memberNumber.trim().toUpperCase().replace(/\s+/g, '');
+  const memberNumber = body.memberNumber
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '');
+
   if (!new RegExp(`^KYA${groupNumber}\\d{3}$`).test(memberNumber)) {
-    return json({ error: 'admin_member_number_must_belong_to_group' }, 400);
+    return json(
+      { error: 'admin_member_number_must_belong_to_group' },
+      400,
+    );
   }
-  if (body.memberName.trim().length < 2 || body.memberName.trim().length > 100) {
+
+  if (
+    body.memberName.trim().length < 2
+    || body.memberName.trim().length > 100
+  ) {
     return json({ error: 'invalid_admin_name' }, 400);
   }
+
   if (!/^\d{6,12}$/.test(body.pin)) {
     return json({ error: 'invalid_pin' }, 400);
   }
 
-  // Ensure the per-group administrator registry exists before querying it.
-  // Without this table, D1 throws before the setup handler can return a useful
-  // response, which appears in the app as "Administrator setup unavailable".
   await env.DB.prepare(
     `CREATE TABLE IF NOT EXISTS group_admin_bootstrap_claims (
       group_id TEXT PRIMARY KEY,
@@ -270,53 +280,79 @@ async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
     )`,
   ).run();
 
-  // Each group can claim only its own unique group ID and group number.
   const existingGroup = await env.DB.prepare(
-    `SELECT admin_user_id FROM group_admin_bootstrap_claims
-     WHERE group_id = ? OR group_number = ? LIMIT 1`,
-  ).bind(groupId, `KYA ${groupNumber}`).first<{ admin_user_id: string }>();
-  if (existingGroup) return json({ error: 'group_already_bootstrapped' }, 409);
+    `SELECT admin_user_id
+     FROM group_admin_bootstrap_claims
+     WHERE group_id = ? OR group_number = ?
+     LIMIT 1`,
+  )
+    .bind(groupId, `KYA ${groupNumber}`)
+    .first<{ admin_user_id: string }>();
+
+  if (existingGroup) {
+    return json({ error: 'group_already_bootstrapped' }, 409);
+  }
 
   const existingMember = await env.DB.prepare(
-    `SELECT user_id FROM auth_users
-     WHERE group_id = ? AND UPPER(REPLACE(member_number, ' ', '')) = ? LIMIT 1`,
-  ).bind(groupId, memberNumber).first<{ user_id: string }>();
-  if (existingMember) return json({ error: 'member_number_already_registered' }, 409);
+    `SELECT user_id
+     FROM auth_users
+     WHERE group_id = ?
+       AND UPPER(REPLACE(member_number, ' ', '')) = ?
+     LIMIT 1`,
+  )
+    .bind(groupId, memberNumber)
+    .first<{ user_id: string }>();
+
+  if (existingMember) {
+    return json({ error: 'member_number_already_registered' }, 409);
+  }
 
   const verifier = await createPinVerifier(body.pin, env.PIN_PEPPER);
   const userId = crypto.randomUUID();
-  // D1 batch runs these statements as one transaction. A failed profile/event
-  // insert therefore cannot leave a claimed group or orphaned auth account.
+
   try {
     await env.DB.batch([
       env.DB.prepare(
-        `INSERT INTO group_admin_bootstrap_claims (group_id, group_number, admin_user_id)
+        `INSERT INTO group_admin_bootstrap_claims
+         (group_id, group_number, admin_user_id)
          VALUES (?, ?, ?)`,
       ).bind(groupId, `KYA ${groupNumber}`, userId),
+
       env.DB.prepare(
         `INSERT INTO auth_users
          (user_id, group_id, member_number, role, pin_hash, pin_salt, status)
          VALUES (?, ?, ?, 'admin', ?, ?, 'active')`,
-      ).bind(userId, groupId, memberNumber, verifier.pinHash, verifier.pinSalt),
+      ).bind(
+        userId,
+        groupId,
+        memberNumber,
+        verifier.pinHash,
+        verifier.pinSalt,
+      ),
+
       env.DB.prepare(
-        `INSERT INTO group_admin_profiles (user_id, group_id, member_name)
+        `INSERT INTO group_admin_profiles
+         (user_id, group_id, member_name)
          VALUES (?, ?, ?)`,
       ).bind(userId, groupId, body.memberName.trim()),
+
       env.DB.prepare(
-        `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
+        `INSERT INTO auth_events
+         (user_id, group_id, event_type, result, created_at)
          VALUES (?, ?, 'group_admin_setup', 'success', datetime('now'))`,
       ).bind(userId, groupId),
     ]);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+
     if (/unique constraint failed.*group_admin_bootstrap_claims/i.test(detail)) {
       return json({ error: 'group_already_bootstrapped' }, 409);
     }
+
     if (/unique constraint failed.*auth_users/i.test(detail)) {
       return json({ error: 'member_number_already_registered' }, 409);
     }
-    // Let the outer request handler log the technical detail and return the
-    // shared WORKER_UNHANDLED_ERROR code plus a request ID. Do not hide D1 errors.
+
     throw error;
   }
 
@@ -329,275 +365,691 @@ async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
   }, 201);
 }
 
-function constantTimeSecretEqual(candidate: string, expected: string): boolean {
+async function resetMemberPin(
+  request: Request,
+  env: Env,
+  claims: JwtClaims,
+): Promise<Response> {
+  if (claims.role !== 'admin') {
+    return json({ error: 'admin_required' }, 403);
+  }
+
+  if (!env.PIN_PEPPER || env.PIN_PEPPER.length < 32) {
+    return json({ error: 'server_pin_pepper_not_configured' }, 500);
+  }
+
+  const body = await readJson(request);
+
+  if (
+    !body ||
+    typeof body.memberNumber !== 'string' ||
+    typeof body.pin !== 'string' ||
+    typeof body.confirmPin !== 'string'
+  ) {
+    return json(
+      { error: 'member_number_and_pin_confirmation_required' },
+      400,
+    );
+  }
+
+  const memberNumber = normalizeMemberNumber(body.memberNumber)
+    .replace(/\s+/g, '');
+
+  if (!validMemberNumber(memberNumber)) {
+    return json({ error: 'invalid_member_number' }, 400);
+  }
+
+  if (!/^\d{6,12}$/.test(body.pin)) {
+    return json({ error: 'invalid_pin' }, 400);
+  }
+
+  if (body.pin !== body.confirmPin) {
+    return json({ error: 'pin_confirmation_mismatch' }, 400);
+  }
+
+  const target = await env.DB.prepare(
+    `SELECT user_id AS userId
+     FROM auth_users
+     WHERE group_id = ?
+       AND UPPER(REPLACE(member_number, ' ', '')) = ?
+       AND status = 'active'
+       AND role IN ('member', 'executive')
+     LIMIT 1`,
+  )
+    .bind(claims.groupId, memberNumber)
+    .first<{ userId: string }>();
+
+  if (!target) {
+    return json({ error: 'active_group_member_not_found' }, 404);
+  }
+
+  const verifier = await createPinVerifier(body.pin, env.PIN_PEPPER);
+
+  const updated = await env.DB.prepare(
+    `UPDATE auth_users
+     SET pin_hash = ?,
+         pin_salt = ?,
+         failed_attempts = 0,
+         locked_until = NULL,
+         updated_at = datetime('now')
+     WHERE user_id = ?
+       AND group_id = ?
+       AND status = 'active'
+       AND role IN ('member', 'executive')`,
+  )
+    .bind(
+      verifier.pinHash,
+      verifier.pinSalt,
+      target.userId,
+      claims.groupId,
+    )
+    .run();
+
+  if (Number(updated.meta?.changes ?? 0) !== 1) {
+    return json({ error: 'member_pin_reset_not_applied' }, 409);
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO auth_events
+     (user_id, group_id, event_type, result, created_at)
+     VALUES (?, ?, 'member_pin_reset_by_admin', 'success', datetime('now'))`,
+  )
+    .bind(target.userId, claims.groupId)
+    .run();
+
+  return json({
+    ok: true,
+    memberNumber,
+    pinReset: true,
+  });
+}
+
+function constantTimeSecretEqual(
+  candidate: string,
+  expected: string,
+): boolean {
   const encoder = new TextEncoder();
   const a = encoder.encode(candidate);
   const b = encoder.encode(expected);
-  // Include length difference and iterate over the longer input to avoid early exits.
+
   let difference = a.length ^ b.length;
   const length = Math.max(a.length, b.length);
-  for (let i = 0; i < length; i++) difference |= (a[i] ?? 0) ^ (b[i] ?? 0);
+
+  for (let i = 0; i < length; i++) {
+    difference |= (a[i] ?? 0) ^ (b[i] ?? 0);
+  }
+
   return difference === 0;
 }
 
 async function login(request: Request, env: Env): Promise<Response> {
   const body = await readJson(request);
-  if (!body || typeof body.memberNumber !== 'string' || typeof body.pin !== 'string') {
+
+  if (
+    !body ||
+    typeof body.memberNumber !== 'string' ||
+    typeof body.pin !== 'string'
+  ) {
     return json({ error: 'member_number_and_pin_required' }, 400);
   }
-  if (body.memberName !== undefined && typeof body.memberName !== 'string') {
+
+  if (
+    body.memberName !== undefined &&
+    typeof body.memberName !== 'string'
+  ) {
     return json({ error: 'invalid_member_name' }, 400);
   }
+
   const memberNumber = normalizeMemberNumber(body.memberNumber);
   const pin = body.pin;
+
   if (!validMemberNumber(memberNumber) || !/^\d{6,12}$/.test(pin)) {
     return json({ error: 'invalid_credentials' }, 401);
   }
 
-  // Member numbers are expected to be globally unique. Refuse ambiguous matches.
   const lookup = await env.DB.prepare(
-    `SELECT user_id AS userId, group_id AS groupId, member_number AS memberNumber,
-            role, pin_hash AS pinHash, pin_salt AS pinSalt,
-            failed_attempts AS failedAttempts, locked_until AS lockedUntil, status
+    `SELECT user_id AS userId,
+            group_id AS groupId,
+            member_number AS memberNumber,
+            role,
+            pin_hash AS pinHash,
+            pin_salt AS pinSalt,
+            failed_attempts AS failedAttempts,
+            locked_until AS lockedUntil,
+            status
      FROM auth_users
      WHERE UPPER(REPLACE(member_number, ' ', '')) = ?
      LIMIT 2`,
-  ).bind(memberNumber.replace(/\s/g, '')).all<{
-    userId: string; groupId: string; memberNumber: string; role: AuthRole;
-    pinHash: string; pinSalt: string; failedAttempts: number; lockedUntil: string | null;
-    status: string;
-  }>();
+  )
+    .bind(memberNumber.replace(/\s/g, ''))
+    .all<{
+      userId: string;
+      groupId: string;
+      memberNumber: string;
+      role: AuthRole;
+      pinHash: string;
+      pinSalt: string;
+      failedAttempts: number;
+      lockedUntil: string | null;
+      status: string;
+    }>();
+
   const rows = lookup.results ?? [];
+
   if (rows.length !== 1 || rows[0].status !== 'active') {
     return json({ error: 'invalid_credentials' }, 401);
   }
+
   const user = rows[0];
-  if (!['admin', 'executive', 'member'].includes(user.role)) return json({ error: 'invalid_credentials' }, 401);
+
+  if (
+    !['admin', 'executive', 'member'].includes(user.role)
+  ) {
+    return json({ error: 'invalid_credentials' }, 401);
+  }
+
   if (user.role === 'admin') {
-    if (typeof body.memberName !== 'string' || body.memberName.trim().length < 2) {
+    if (
+      typeof body.memberName !== 'string'
+      || body.memberName.trim().length < 2
+    ) {
       return json({ error: 'admin_name_required' }, 401);
     }
-    if (url.pathname === '/v1/auth/users/reset-pin' && request.method === 'POST') {
-  response = await resetMemberPin(request, env, claims);
-  return cors(response, request);
-    }
+
     const adminProfile = await env.DB.prepare(
-      `SELECT member_name AS memberName FROM group_admin_profiles
-       WHERE user_id = ? AND group_id = ? LIMIT 1`,
-    ).bind(user.userId, user.groupId).first<{ memberName: string }>();
-    // Existing group administrators may predate the profile table; use their
-    // already-synced passbook name as a compatibility fallback.
-    const storedAdminName = adminProfile?.memberName ?? (await env.DB.prepare(
-      `SELECT member_name AS memberName FROM passbook_accounts
-       WHERE group_id = ? AND UPPER(REPLACE(member_number, ' ', '')) = ? LIMIT 1`,
-    ).bind(user.groupId, memberNumber.replace(/\s/g, '')).first<{ memberName: string }>())?.memberName;
-    if (!storedAdminName || storedAdminName.trim().toLowerCase() !== body.memberName.trim().toLowerCase()) {
+      `SELECT member_name AS memberName
+       FROM group_admin_profiles
+       WHERE user_id = ? AND group_id = ?
+       LIMIT 1`,
+    )
+      .bind(user.userId, user.groupId)
+      .first<{ memberName: string }>();
+
+    const fallbackProfile = adminProfile
+      ? null
+      : await env.DB.prepare(
+          `SELECT member_name AS memberName
+           FROM passbook_accounts
+           WHERE group_id = ?
+             AND UPPER(REPLACE(member_number, ' ', '')) = ?
+           LIMIT 1`,
+        )
+          .bind(
+            user.groupId,
+            memberNumber.replace(/\s/g, ''),
+          )
+          .first<{ memberName: string }>();
+
+    const storedAdminName =
+      adminProfile?.memberName
+      ?? fallbackProfile?.memberName;
+
+    if (
+      !storedAdminName
+      || storedAdminName.trim().toLowerCase()
+        !== body.memberName.trim().toLowerCase()
+    ) {
       return json({ error: 'invalid_credentials' }, 401);
     }
   }
 
   if (user.lockedUntil) {
-    const lockTime = Date.parse(`${user.lockedUntil.replace(' ', 'T')}Z`);
+    const lockTime = Date.parse(
+      `${user.lockedUntil.replace(' ', 'T')}Z`,
+    );
+
     if (Number.isFinite(lockTime) && lockTime > Date.now()) {
-      return json({ error: 'account_locked', retryAfterSeconds: Math.ceil((lockTime - Date.now()) / 1000) }, 423);
+      return json(
+        {
+          error: 'account_locked',
+          retryAfterSeconds:
+            Math.ceil((lockTime - Date.now()) / 1000),
+        },
+        423,
+      );
     }
+
     await env.DB.prepare(
-      `UPDATE auth_users SET failed_attempts = 0, locked_until = NULL, updated_at = datetime('now')
+      `UPDATE auth_users
+       SET failed_attempts = 0,
+           locked_until = NULL,
+           updated_at = datetime('now')
        WHERE user_id = ?`,
-    ).bind(user.userId).run();
+    )
+      .bind(user.userId)
+      .run();
+
     user.failedAttempts = 0;
     user.lockedUntil = null;
   }
 
-  const correct = await verifyPin(pin, user.pinHash, user.pinSalt, env.PIN_PEPPER);
+  const correct = await verifyPin(
+    pin,
+    user.pinHash,
+    user.pinSalt,
+    env.PIN_PEPPER,
+  );
+
   if (!correct) {
     const attempts = Number(user.failedAttempts || 0) + 1;
+
     if (attempts >= 5) {
       await env.DB.prepare(
-        `UPDATE auth_users SET failed_attempts = 5,
-         locked_until = datetime('now', '+15 minutes'), updated_at = datetime('now')
+        `UPDATE auth_users
+         SET failed_attempts = 5,
+             locked_until = datetime('now', '+15 minutes'),
+             updated_at = datetime('now')
          WHERE user_id = ?`,
-      ).bind(user.userId).run();
+      )
+        .bind(user.userId)
+        .run();
     } else {
       await env.DB.prepare(
-        `UPDATE auth_users SET failed_attempts = ?, updated_at = datetime('now') WHERE user_id = ?`,
-      ).bind(attempts, user.userId).run();
+        `UPDATE auth_users
+         SET failed_attempts = ?,
+             updated_at = datetime('now')
+         WHERE user_id = ?`,
+      )
+        .bind(attempts, user.userId)
+        .run();
     }
+
     await env.DB.prepare(
-      `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
+      `INSERT INTO auth_events
+       (user_id, group_id, event_type, result, created_at)
        VALUES (?, ?, 'login', 'failure', datetime('now'))`,
-    ).bind(user.userId, user.groupId).run();
+    )
+      .bind(user.userId, user.groupId)
+      .run();
+
     return attempts >= 5
-      ? json({ error: 'account_locked', retryAfterSeconds: 900 }, 423)
-      : json({ error: 'invalid_credentials', attemptsRemaining: 5 - attempts }, 401);
+      ? json(
+          {
+            error: 'account_locked',
+            retryAfterSeconds: 900,
+          },
+          423,
+        )
+      : json(
+          {
+            error: 'invalid_credentials',
+            attemptsRemaining: 5 - attempts,
+          },
+          401,
+        );
   }
 
   await env.DB.prepare(
-    `UPDATE auth_users SET failed_attempts = 0, locked_until = NULL, updated_at = datetime('now')
+    `UPDATE auth_users
+     SET failed_attempts = 0,
+         locked_until = NULL,
+         updated_at = datetime('now')
      WHERE user_id = ?`,
-  ).bind(user.userId).run();
+  )
+    .bind(user.userId)
+    .run();
+
   await env.DB.prepare(
-    `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
+    `INSERT INTO auth_events
+     (user_id, group_id, event_type, result, created_at)
      VALUES (?, ?, 'login', 'success', datetime('now'))`,
-  ).bind(user.userId, user.groupId).run();
-  const token = await issueAccessToken(env, { userId: user.userId, groupId: user.groupId, role: user.role });
-  return json({ ok: true, tokenType: 'Bearer', accessToken: token.accessToken, expiresIn: token.expiresIn });
+  )
+    .bind(user.userId, user.groupId)
+    .run();
+
+  const token = await issueAccessToken(env, {
+    userId: user.userId,
+    groupId: user.groupId,
+    role: user.role,
+  });
+
+  return json({
+    ok: true,
+    tokenType: 'Bearer',
+    accessToken: token.accessToken,
+    expiresIn: token.expiresIn,
+  });
 }
 
-async function getMyPassbook(env: Env, claims: JwtClaims): Promise<Response> {
-  // Resolve the member number from the authenticated identity, never from a client-supplied ID.
+async function getMyPassbook(
+  env: Env,
+  claims: JwtClaims,
+): Promise<Response> {
   const identity = await env.DB.prepare(
-    `SELECT member_number AS memberNumber FROM auth_users
-     WHERE user_id = ? AND group_id = ? AND status = 'active' LIMIT 1`,
-  ).bind(claims.sub, claims.groupId).first<{ memberNumber: string }>();
-  if (!identity) return json({ error: 'unauthorized' }, 401);
+    `SELECT member_number AS memberNumber
+     FROM auth_users
+     WHERE user_id = ?
+       AND group_id = ?
+       AND status = 'active'
+     LIMIT 1`,
+  )
+    .bind(claims.sub, claims.groupId)
+    .first<{ memberNumber: string }>();
 
-  const normalizedNumber = identity.memberNumber.replace(/\s/g, '').toUpperCase();
+  if (!identity) {
+    return json({ error: 'unauthorized' }, 401);
+  }
+
+  const normalizedNumber = identity.memberNumber
+    .replace(/\s/g, '')
+    .toUpperCase();
+
   const account = await env.DB.prepare(
-    `SELECT member_number AS memberNumber, member_name AS memberName,
-            total_savings_ugx AS totalSavingsUgx, loan_balance_ugx AS loanBalanceUgx,
-            loan_due_date AS loanDueDate, updated_at AS updatedAt
+    `SELECT member_number AS memberNumber,
+            member_name AS memberName,
+            total_savings_ugx AS totalSavingsUgx,
+            loan_balance_ugx AS loanBalanceUgx,
+            loan_due_date AS loanDueDate,
+            updated_at AS updatedAt
      FROM passbook_accounts
-     WHERE group_id = ? AND UPPER(REPLACE(member_number, ' ', '')) = ? LIMIT 1`,
-  ).bind(claims.groupId, normalizedNumber).first<{
-    memberNumber: string; memberName: string; totalSavingsUgx: number;
-    loanBalanceUgx: number; loanDueDate: string | null; updatedAt: string;
-  }>();
-  if (!account) return json({ error: 'passbook_not_synced' }, 404);
+     WHERE group_id = ?
+       AND UPPER(REPLACE(member_number, ' ', '')) = ?
+     LIMIT 1`,
+  )
+    .bind(claims.groupId, normalizedNumber)
+    .first<{
+      memberNumber: string;
+      memberName: string;
+      totalSavingsUgx: number;
+      loanBalanceUgx: number;
+      loanDueDate: string | null;
+      updatedAt: string;
+    }>();
+
+  if (!account) {
+    return json({ error: 'passbook_not_synced' }, 404);
+  }
 
   const transactions = await env.DB.prepare(
-    `SELECT transaction_id AS transactionId, transaction_type AS transactionType,
-            amount_ugx AS amountUgx, description, transaction_date AS transactionDate
+    `SELECT transaction_id AS transactionId,
+            transaction_type AS transactionType,
+            amount_ugx AS amountUgx,
+            description,
+            transaction_date AS transactionDate
      FROM passbook_transactions
-     WHERE group_id = ? AND UPPER(REPLACE(member_number, ' ', '')) = ?
-     ORDER BY transaction_date DESC LIMIT 500`,
-  ).bind(claims.groupId, normalizedNumber).all();
-  return json({ passbook: { ...account, transactions: transactions.results ?? [] } });
+     WHERE group_id = ?
+       AND UPPER(REPLACE(member_number, ' ', '')) = ?
+     ORDER BY transaction_date DESC
+     LIMIT 500`,
+  )
+    .bind(claims.groupId, normalizedNumber)
+    .all();
+
+  return json({
+    passbook: {
+      ...account,
+      transactions: transactions.results ?? [],
+    },
+  });
 }
 
-async function syncPassbook(request: Request, env: Env, claims: JwtClaims): Promise<Response> {
-  if (claims.role !== 'admin') return json({ error: 'admin_required' }, 403);
+async function syncPassbook(
+  request: Request,
+  env: Env,
+  claims: JwtClaims,
+): Promise<Response> {
+  if (claims.role !== 'admin') {
+    return json({ error: 'admin_required' }, 403);
+  }
+
   const body = await readJson(request);
-  if (!body || !Array.isArray(body.members) || body.members.length < 1 || body.members.length > 500) {
+
+  if (
+    !body ||
+    !Array.isArray(body.members) ||
+    body.members.length < 1 ||
+    body.members.length > 500
+  ) {
     return json({ error: 'members_array_required_max_500' }, 400);
   }
-  const db = env.DB;
 
-  // Preflight every member before writing anything. This prevents a missing
-  // authentication account from causing a partial group synchronisation.
+  const db = env.DB;
   const missingMemberNumbers: string[] = [];
+
   for (const item of body.members) {
     if (!isRecord(item) || typeof item.memberNumber !== 'string') {
       return json({ error: 'invalid_member_record' }, 400);
     }
+
     const normalized = normalizeMemberNumber(item.memberNumber);
+
     const identity = await db.prepare(
-      `SELECT user_id FROM auth_users WHERE group_id = ? AND UPPER(REPLACE(member_number, ' ', '')) = ? AND status = 'active' LIMIT 1`,
-    ).bind(claims.groupId, normalized.replace(/\s/g, '')).first<{ user_id: string }>();
-    if (!identity) missingMemberNumbers.push(normalized);
+      `SELECT user_id
+       FROM auth_users
+       WHERE group_id = ?
+         AND UPPER(REPLACE(member_number, ' ', '')) = ?
+         AND status = 'active'
+       LIMIT 1`,
+    )
+      .bind(
+        claims.groupId,
+        normalized.replace(/\s/g, ''),
+      )
+      .first<{ user_id: string }>();
+
+    if (!identity) {
+      missingMemberNumbers.push(normalized);
+    }
   }
+
   if (missingMemberNumbers.length) {
-    return json({ error: 'member_auth_account_missing', missingMemberNumbers }, 409);
+    return json(
+      {
+        error: 'member_auth_account_missing',
+        missingMemberNumbers,
+      },
+      409,
+    );
   }
 
   let synced = 0;
+
   for (const item of body.members) {
-    if (!isRecord(item) || typeof item.memberNumber !== 'string' || typeof item.memberName !== 'string' ||
-        !Number.isSafeInteger(item.totalSavingsUgx) || !Number.isSafeInteger(item.loanBalanceUgx) ||
-        (item.loanDueDate !== null && item.loanDueDate !== undefined && typeof item.loanDueDate !== 'string') ||
-        !Array.isArray(item.transactions) || item.transactions.length > 2000) {
+    if (
+      !isRecord(item)
+      || typeof item.memberNumber !== 'string'
+      || typeof item.memberName !== 'string'
+      || !Number.isSafeInteger(item.totalSavingsUgx)
+      || !Number.isSafeInteger(item.loanBalanceUgx)
+      || (
+        item.loanDueDate !== null
+        && item.loanDueDate !== undefined
+        && typeof item.loanDueDate !== 'string'
+      )
+      || !Array.isArray(item.transactions)
+      || item.transactions.length > 2000
+    ) {
       return json({ error: 'invalid_member_record' }, 400);
     }
+
     const memberNumber = normalizeMemberNumber(item.memberNumber);
-    if (!validMemberNumber(memberNumber) || item.memberName.length < 1 || item.memberName.length > 160 ||
-        (item.totalSavingsUgx as number) < 0 || (item.loanBalanceUgx as number) < 0) {
+
+    if (
+      !validMemberNumber(memberNumber)
+      || item.memberName.length < 1
+      || item.memberName.length > 160
+      || (item.totalSavingsUgx as number) < 0
+      || (item.loanBalanceUgx as number) < 0
+    ) {
       return json({ error: 'invalid_member_record' }, 400);
     }
-    const identity = await db.prepare(
-      `SELECT user_id FROM auth_users WHERE group_id = ? AND UPPER(REPLACE(member_number, ' ', '')) = ? AND status = 'active' LIMIT 1`,
-    ).bind(claims.groupId, memberNumber.replace(/\s/g, '')).first<{ user_id: string }>();
-    if (!identity) return json({ error: 'member_auth_account_missing', memberNumber }, 409);
 
     await db.prepare(
       `INSERT INTO passbook_accounts
-       (group_id, member_number, member_name, total_savings_ugx, loan_balance_ugx, loan_due_date, updated_at)
+       (group_id, member_number, member_name, total_savings_ugx,
+        loan_balance_ugx, loan_due_date, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-       ON CONFLICT(group_id, member_number) DO UPDATE SET
-       member_name = excluded.member_name, total_savings_ugx = excluded.total_savings_ugx,
-       loan_balance_ugx = excluded.loan_balance_ugx, loan_due_date = excluded.loan_due_date,
-       updated_at = datetime('now')`,
-    ).bind(claims.groupId, memberNumber, item.memberName.trim(), item.totalSavingsUgx,
-      item.loanBalanceUgx, item.loanDueDate ?? null).run();
+       ON CONFLICT(group_id, member_number)
+       DO UPDATE SET
+         member_name = excluded.member_name,
+         total_savings_ugx = excluded.total_savings_ugx,
+         loan_balance_ugx = excluded.loan_balance_ugx,
+         loan_due_date = excluded.loan_due_date,
+         updated_at = datetime('now')`,
+    )
+      .bind(
+        claims.groupId,
+        memberNumber,
+        item.memberName.trim(),
+        item.totalSavingsUgx,
+        item.loanBalanceUgx,
+        item.loanDueDate ?? null,
+      )
+      .run();
 
-    // Each sync is a complete transaction snapshot for that member: replace the old list atomically per member.
     await db.prepare(
-      'DELETE FROM passbook_transactions WHERE group_id = ? AND UPPER(REPLACE(member_number, \' \', \'\')) = ?',
-    ).bind(claims.groupId, memberNumber.replace(/\s/g, '')).run();
+      `DELETE FROM passbook_transactions
+       WHERE group_id = ?
+         AND UPPER(REPLACE(member_number, ' ', '')) = ?`,
+    )
+      .bind(
+        claims.groupId,
+        memberNumber.replace(/\s/g, ''),
+      )
+      .run();
+
     for (const tx of item.transactions) {
-      if (!isRecord(tx) || typeof tx.transactionId !== 'string' || !validId(tx.transactionId) ||
-          typeof tx.transactionType !== 'string' || tx.transactionType.length < 1 || tx.transactionType.length > 60 ||
-          !Number.isSafeInteger(tx.amountUgx) || (tx.amountUgx as number) < 0 ||
-          typeof tx.transactionDate !== 'string' || tx.transactionDate.length > 40 ||
-          (tx.description !== undefined && typeof tx.description !== 'string')) {
-        return json({ error: 'invalid_transaction_record', memberNumber }, 400);
+      if (
+        !isRecord(tx)
+        || typeof tx.transactionId !== 'string'
+        || !validId(tx.transactionId)
+        || typeof tx.transactionType !== 'string'
+        || tx.transactionType.length < 1
+        || tx.transactionType.length > 60
+        || !Number.isSafeInteger(tx.amountUgx)
+        || (tx.amountUgx as number) < 0
+        || typeof tx.transactionDate !== 'string'
+        || tx.transactionDate.length > 40
+        || (
+          tx.description !== undefined
+          && typeof tx.description !== 'string'
+        )
+      ) {
+        return json(
+          { error: 'invalid_transaction_record', memberNumber },
+          400,
+        );
       }
+
       await db.prepare(
         `INSERT INTO passbook_transactions
-         (transaction_id, group_id, member_number, transaction_type, amount_ugx, description, transaction_date)
+         (transaction_id, group_id, member_number, transaction_type,
+          amount_ugx, description, transaction_date)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(tx.transactionId, claims.groupId, memberNumber, tx.transactionType,
-        tx.amountUgx, (tx.description as string | undefined ?? '').slice(0, 240), tx.transactionDate).run();
+      )
+        .bind(
+          tx.transactionId,
+          claims.groupId,
+          memberNumber,
+          tx.transactionType,
+          tx.amountUgx,
+          (tx.description as string | undefined ?? '').slice(0, 240),
+          tx.transactionDate,
+        )
+        .run();
     }
+
     synced++;
   }
 
-  // Store the group-level figures alongside the individual passbooks.
   if (isRecord(body.groupSummary)) {
     const summary = body.groupSummary;
     const numericFields = [
-      'totalSavingsUgx', 'availableLoanFundUgx', 'outstandingLoansUgx',
-      'insuranceFundUgx', 'finesFundUgx', 'registeredMembers', 'activeMembers',
-      'totalExpenditureUgx', 'previousPeriodExpenditureUgx',
+      'totalSavingsUgx',
+      'availableLoanFundUgx',
+      'outstandingLoansUgx',
+      'insuranceFundUgx',
+      'finesFundUgx',
+      'registeredMembers',
+      'activeMembers',
+      'totalExpenditureUgx',
+      'previousPeriodExpenditureUgx',
     ];
+
     for (const field of numericFields) {
-      if (!Number.isSafeInteger(summary[field]) || (summary[field] as number) < 0) {
-        return json({ error: 'invalid_group_summary', field }, 400);
+      if (
+        !Number.isSafeInteger(summary[field])
+        || (summary[field] as number) < 0
+      ) {
+        return json(
+          { error: 'invalid_group_summary', field },
+          400,
+        );
       }
     }
-    if (typeof summary.groupNumber !== 'string' || typeof summary.groupName !== 'string' ||
-        typeof summary.currency !== 'string' || typeof summary.reportingPeriod !== 'string' ||
-        typeof summary.previousReportingPeriod !== 'string') {
+
+    if (
+      typeof summary.groupNumber !== 'string'
+      || typeof summary.groupName !== 'string'
+      || typeof summary.currency !== 'string'
+      || typeof summary.reportingPeriod !== 'string'
+      || typeof summary.previousReportingPeriod !== 'string'
+    ) {
       return json({ error: 'invalid_group_summary' }, 400);
     }
+
     await db.prepare(
       `INSERT INTO passbook_group_summaries
-       (group_id, group_number, group_name, currency, total_savings_ugx,
-        available_loan_fund_ugx, outstanding_loans_ugx, insurance_fund_ugx,
-        fines_fund_ugx, registered_members, active_members, total_expenditure_ugx,
-        previous_period_expenditure_ugx, reporting_period, previous_reporting_period, updated_at)
+       (group_id, group_number, group_name, currency,
+        total_savings_ugx, available_loan_fund_ugx,
+        outstanding_loans_ugx, insurance_fund_ugx,
+        fines_fund_ugx, registered_members, active_members,
+        total_expenditure_ugx, previous_period_expenditure_ugx,
+        reporting_period, previous_reporting_period, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-       ON CONFLICT(group_id) DO UPDATE SET
-        group_number = excluded.group_number, group_name = excluded.group_name,
-        currency = excluded.currency, total_savings_ugx = excluded.total_savings_ugx,
-        available_loan_fund_ugx = excluded.available_loan_fund_ugx,
-        outstanding_loans_ugx = excluded.outstanding_loans_ugx,
-        insurance_fund_ugx = excluded.insurance_fund_ugx, fines_fund_ugx = excluded.fines_fund_ugx,
-        registered_members = excluded.registered_members, active_members = excluded.active_members,
-        total_expenditure_ugx = excluded.total_expenditure_ugx,
-        previous_period_expenditure_ugx = excluded.previous_period_expenditure_ugx,
-        reporting_period = excluded.reporting_period,
-        previous_reporting_period = excluded.previous_reporting_period, updated_at = datetime('now')`,
-    ).bind(
-      claims.groupId, summary.groupNumber, summary.groupName, summary.currency,
-      summary.totalSavingsUgx, summary.availableLoanFundUgx, summary.outstandingLoansUgx,
-      summary.insuranceFundUgx, summary.finesFundUgx, summary.registeredMembers,
-      summary.activeMembers, summary.totalExpenditureUgx, summary.previousPeriodExpenditureUgx,
-      summary.reportingPeriod, summary.previousReportingPeriod,
-    ).run();
+       ON CONFLICT(group_id)
+       DO UPDATE SET
+         group_number = excluded.group_number,
+         group_name = excluded.group_name,
+         currency = excluded.currency,
+         total_savings_ugx = excluded.total_savings_ugx,
+         available_loan_fund_ugx = excluded.available_loan_fund_ugx,
+         outstanding_loans_ugx = excluded.outstanding_loans_ugx,
+         insurance_fund_ugx = excluded.insurance_fund_ugx,
+         fines_fund_ugx = excluded.fines_fund_ugx,
+         registered_members = excluded.registered_members,
+         active_members = excluded.active_members,
+         total_expenditure_ugx = excluded.total_expenditure_ugx,
+         previous_period_expenditure_ugx =
+           excluded.previous_period_expenditure_ugx,
+         reporting_period = excluded.reporting_period,
+         previous_reporting_period =
+           excluded.previous_reporting_period,
+         updated_at = datetime('now')`,
+    )
+      .bind(
+        claims.groupId,
+        summary.groupNumber,
+        summary.groupName,
+        summary.currency,
+        summary.totalSavingsUgx,
+        summary.availableLoanFundUgx,
+        summary.outstandingLoansUgx,
+        summary.insuranceFundUgx,
+        summary.finesFundUgx,
+        summary.registeredMembers,
+        summary.activeMembers,
+        summary.totalExpenditureUgx,
+        summary.previousPeriodExpenditureUgx,
+        summary.reportingPeriod,
+        summary.previousReportingPeriod,
+      )
+      .run();
   }
 
-  await audit(env, claims.sub, claims.groupId, 'passbook_sync', 'success');
-  return json({ ok: true, membersSynced: synced, groupSummarySynced: isRecord(body.groupSummary) });
+  await audit(
+    env,
+    claims.sub,
+    claims.groupId,
+    'passbook_sync',
+    'success',
+  );
+
+  return json({
+    ok: true,
+    membersSynced: synced,
+    groupSummarySynced: isRecord(body.groupSummary),
+  });
 }
 
 function cleanRegistrationText(
@@ -636,10 +1088,13 @@ async function createMemberRegistration(
     .trim();
 
   if (
-    !/^\d{4}$/.test(groupDigits) ||
-    !/^\d{6,12}$/.test(body.pin)
+    !/^\d{4}$/.test(groupDigits)
+    || !/^\d{6,12}$/.test(body.pin)
   ) {
-    return json({ error: 'invalid_group_number_or_pin' }, 400);
+    return json(
+      { error: 'invalid_group_number_or_pin' },
+      400,
+    );
   }
 
   const fullName = cleanRegistrationText(body.fullName, 160);
@@ -658,37 +1113,54 @@ async function createMemberRegistration(
       : cleanRegistrationText(body.nextOfKin, 160);
 
   if (
-    !fullName ||
-    !gender ||
-    !cell ||
-    !district ||
-    (body.phone !== undefined && body.phone !== '' && !phone) ||
-    (body.nextOfKin !== undefined &&
-      body.nextOfKin !== '' &&
-      !nextOfKin)
+    !fullName
+    || !gender
+    || !cell
+    || !district
+    || (
+      body.phone !== undefined
+      && body.phone !== ''
+      && !phone
+    )
+    || (
+      body.nextOfKin !== undefined
+      && body.nextOfKin !== ''
+      && !nextOfKin
+    )
   ) {
-    return json({
-      error: 'required_registration_fields_missing_or_invalid',
-    }, 400);
+    return json(
+      { error: 'required_registration_fields_missing_or_invalid' },
+      400,
+    );
   }
 
   if (!env.PIN_PEPPER || env.PIN_PEPPER.length < 32) {
-    return json({
-      error: 'server_pin_pepper_not_configured',
-    }, 500);
+    return json(
+      { error: 'server_pin_pepper_not_configured' },
+      500,
+    );
   }
 
-  // Resolve the group using trusted server-side records.
   const groups = await env.DB.prepare(
-    `SELECT group_id AS groupId, group_number AS groupNumber
+    `SELECT group_id AS groupId,
+            group_number AS groupNumber
      FROM group_admin_bootstrap_claims
-     WHERE REPLACE(REPLACE(UPPER(group_number), 'KYA', ''), ' ', '') = ?
+     WHERE REPLACE(
+             REPLACE(UPPER(group_number), 'KYA', ''),
+             ' ',
+             ''
+           ) = ?
 
      UNION
 
-     SELECT group_id AS groupId, group_number AS groupNumber
+     SELECT group_id AS groupId,
+            group_number AS groupNumber
      FROM passbook_group_summaries
-     WHERE REPLACE(REPLACE(UPPER(group_number), 'KYA', ''), ' ', '') = ?
+     WHERE REPLACE(
+             REPLACE(UPPER(group_number), 'KYA', ''),
+             ' ',
+             ''
+           ) = ?
 
      LIMIT 2`,
   )
@@ -702,7 +1174,7 @@ async function createMemberRegistration(
       error: matches.length
         ? 'group_identity_ambiguous'
         : 'group_not_found',
-    }, 404);
+    }, matches.length ? 404 : 404);
   }
 
   const group = matches[0];
@@ -720,12 +1192,12 @@ async function createMemberRegistration(
     .first<{ application_id: string }>();
 
   if (duplicate) {
-    return json({
-      error: 'registration_already_pending',
-    }, 409);
+    return json(
+      { error: 'registration_already_pending' },
+      409,
+    );
   }
 
-  // Hash the PIN on the server. Never store the plaintext PIN.
   const verifier = await createPinVerifier(
     body.pin,
     env.PIN_PEPPER,
@@ -735,21 +1207,9 @@ async function createMemberRegistration(
 
   await env.DB.prepare(
     `INSERT INTO member_registration_applications
-     (
-       application_id,
-       group_id,
-       group_number,
-       full_name,
-       gender,
-       age,
-       phone,
-       next_of_kin,
-       cell,
-       district,
-       pin_hash,
-       pin_salt,
-       status
-     )
+     (application_id, group_id, group_number, full_name,
+      gender, age, phone, next_of_kin, cell, district,
+      pin_hash, pin_salt, status)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
   )
     .bind(
@@ -793,17 +1253,16 @@ async function listPendingRegistrations(
   }
 
   const rows = await env.DB.prepare(
-    `SELECT
-       application_id AS applicationId,
-       group_number AS groupNumber,
-       full_name AS fullName,
-       gender,
-       age,
-       phone,
-       next_of_kin AS nextOfKin,
-       cell,
-       district,
-       created_at AS createdAt
+    `SELECT application_id AS applicationId,
+            group_number AS groupNumber,
+            full_name AS fullName,
+            gender,
+            age,
+            phone,
+            next_of_kin AS nextOfKin,
+            cell,
+            district,
+            created_at AS createdAt
      FROM member_registration_applications
      WHERE group_id = ?
        AND status = 'pending'
@@ -822,7 +1281,8 @@ function generateMemberSuffix(): string {
   const value = new Uint32Array(1);
   crypto.getRandomValues(value);
 
-  return String((value[0] % 999) + 1).padStart(3, '0');
+  return String((value[0] % 999) + 1)
+    .padStart(3, '0');
 }
 
 async function reviewMemberRegistration(
@@ -837,14 +1297,13 @@ async function reviewMemberRegistration(
   }
 
   const application = await env.DB.prepare(
-    `SELECT
-       application_id AS applicationId,
-       group_id AS groupId,
-       group_number AS groupNumber,
-       full_name AS fullName,
-       pin_hash AS pinHash,
-       pin_salt AS pinSalt,
-       status
+    `SELECT application_id AS applicationId,
+            group_id AS groupId,
+            group_number AS groupNumber,
+            full_name AS fullName,
+            pin_hash AS pinHash,
+            pin_salt AS pinSalt,
+            status
      FROM member_registration_applications
      WHERE application_id = ?
        AND group_id = ?
@@ -866,7 +1325,10 @@ async function reviewMemberRegistration(
   }
 
   if (application.status !== 'pending') {
-    return json({ error: 'registration_already_reviewed' }, 409);
+    return json(
+      { error: 'registration_already_reviewed' },
+      409,
+    );
   }
 
   if (decision === 'reject') {
@@ -876,7 +1338,10 @@ async function reviewMemberRegistration(
       : null;
 
     if (!reason) {
-      return json({ error: 'rejection_reason_required' }, 400);
+      return json(
+        { error: 'rejection_reason_required' },
+        400,
+      );
     }
 
     const updated = await env.DB.prepare(
@@ -896,13 +1361,17 @@ async function reviewMemberRegistration(
       .run();
 
     if (Number(updated.meta?.changes ?? 0) !== 1) {
-      return json({ error: 'registration_already_reviewed' }, 409);
+      return json(
+        { error: 'registration_already_reviewed' },
+        409,
+      );
     }
 
     await env.DB.prepare(
       `INSERT INTO auth_events
        (user_id, group_id, event_type, result, created_at)
-       VALUES (?, ?, 'member_registration_review', 'rejected', datetime('now'))`,
+       VALUES (?, ?, 'member_registration_review',
+               'rejected', datetime('now'))`,
     )
       .bind(applicationId, claims.groupId)
       .run();
@@ -914,12 +1383,14 @@ async function reviewMemberRegistration(
   }
 
   if (!application.pinHash || !application.pinSalt) {
-    return json({
-      error: 'pending_pin_verifier_missing',
-    }, 409);
+    return json(
+      { error: 'pending_pin_verifier_missing' },
+      409,
+    );
   }
 
-  const groupDigits = application.groupNumber.replace(/^KYA\s*/i, '');
+  const groupDigits = application.groupNumber
+    .replace(/^KYA\s*/i, '');
 
   let memberNumber = '';
 
@@ -943,9 +1414,10 @@ async function reviewMemberRegistration(
   }
 
   if (!memberNumber) {
-    return json({
-      error: 'member_number_allocation_failed',
-    }, 503);
+    return json(
+      { error: 'member_number_allocation_failed' },
+      503,
+    );
   }
 
   const marked = await env.DB.prepare(
@@ -961,19 +1433,26 @@ async function reviewMemberRegistration(
        AND group_id = ?
        AND status = 'pending'`,
   )
-    .bind(memberNumber, claims.sub, applicationId, claims.groupId)
+    .bind(
+      memberNumber,
+      claims.sub,
+      applicationId,
+      claims.groupId,
+    )
     .run();
 
   if (Number(marked.meta?.changes ?? 0) !== 1) {
-    return json({
-      error: 'registration_already_reviewed',
-    }, 409);
+    return json(
+      { error: 'registration_already_reviewed' },
+      409,
+    );
   }
 
   try {
     await env.DB.prepare(
       `INSERT INTO auth_users
-       (user_id, group_id, member_number, role, pin_hash, pin_salt, status)
+       (user_id, group_id, member_number, role,
+        pin_hash, pin_salt, status)
        VALUES (?, ?, ?, 'member', ?, ?, 'active')`,
     )
       .bind(
@@ -985,7 +1464,6 @@ async function reviewMemberRegistration(
       )
       .run();
   } catch {
-    // Restore pending state if account creation fails.
     await env.DB.prepare(
       `UPDATE member_registration_applications
        SET status = 'pending',
@@ -1007,15 +1485,17 @@ async function reviewMemberRegistration(
       )
       .run();
 
-    return json({
-      error: 'member_account_creation_failed',
-    }, 409);
+    return json(
+      { error: 'member_account_creation_failed' },
+      409,
+    );
   }
 
   await env.DB.prepare(
     `INSERT INTO auth_events
      (user_id, group_id, event_type, result, created_at)
-     VALUES (?, ?, 'member_registration_review', 'approved', datetime('now'))`,
+     VALUES (?, ?, 'member_registration_review',
+             'approved', datetime('now'))`,
   )
     .bind(applicationId, claims.groupId)
     .run();
@@ -1025,277 +1505,673 @@ async function reviewMemberRegistration(
     status: 'approved',
     memberNumber,
   });
-    }
+}
 
-async function createAuthUser(request: Request, env: Env, claims: JwtClaims): Promise<Response> {
-  if (claims.role !== 'admin') return json({ error: 'admin_required' }, 403);
+async function createAuthUser(
+  request: Request,
+  env: Env,
+  claims: JwtClaims,
+): Promise<Response> {
+  if (claims.role !== 'admin') {
+    return json({ error: 'admin_required' }, 403);
+  }
+
   const body = await readJson(request);
-  if (!body || typeof body.memberNumber !== 'string' || typeof body.pin !== 'string' ||
-      typeof body.role !== 'string' || !['admin', 'executive', 'member'].includes(body.role)) {
-    return json({ error: 'member_number_pin_and_valid_role_required' }, 400);
+
+  if (
+    !body ||
+    typeof body.memberNumber !== 'string' ||
+    typeof body.pin !== 'string' ||
+    typeof body.role !== 'string'
+    || !['admin', 'executive', 'member'].includes(body.role)
+  ) {
+    return json(
+      { error: 'member_number_pin_and_valid_role_required' },
+      400,
+    );
   }
+
   const memberNumber = normalizeMemberNumber(body.memberNumber);
-  if (!validMemberNumber(memberNumber) || !/^\d{6,12}$/.test(body.pin)) {
-    return json({ error: 'invalid_member_number_or_pin' }, 400);
+
+  if (
+    !validMemberNumber(memberNumber)
+    || !/^\d{6,12}$/.test(body.pin)
+  ) {
+    return json(
+      { error: 'invalid_member_number_or_pin' },
+      400,
+    );
   }
+
   const existing = await env.DB.prepare(
-    `SELECT user_id FROM auth_users WHERE UPPER(REPLACE(member_number, ' ', '')) = ? LIMIT 1`,
-  ).bind(memberNumber.replace(/\s/g, '')).first<{ user_id: string }>();
-  if (existing) return json({ error: 'member_number_already_registered' }, 409);
-  const verifier = await createPinVerifier(body.pin, env.PIN_PEPPER);
+    `SELECT user_id
+     FROM auth_users
+     WHERE UPPER(REPLACE(member_number, ' ', '')) = ?
+     LIMIT 1`,
+  )
+    .bind(memberNumber.replace(/\s/g, ''))
+    .first<{ user_id: string }>();
+
+  if (existing) {
+    return json(
+      { error: 'member_number_already_registered' },
+      409,
+    );
+  }
+
+  const verifier = await createPinVerifier(
+    body.pin,
+    env.PIN_PEPPER,
+  );
+
   const userId = crypto.randomUUID();
+
   await env.DB.prepare(
-    `INSERT INTO auth_users (user_id, group_id, member_number, role, pin_hash, pin_salt, status)
+    `INSERT INTO auth_users
+     (user_id, group_id, member_number, role,
+      pin_hash, pin_salt, status)
      VALUES (?, ?, ?, ?, ?, ?, 'active')`,
-  ).bind(userId, claims.groupId, memberNumber, body.role, verifier.pinHash, verifier.pinSalt).run();
+  )
+    .bind(
+      userId,
+      claims.groupId,
+      memberNumber,
+      body.role,
+      verifier.pinHash,
+      verifier.pinSalt,
+    )
+    .run();
+
   await env.DB.prepare(
-    `INSERT INTO auth_events (user_id, group_id, event_type, result, created_at)
+    `INSERT INTO auth_events
+     (user_id, group_id, event_type, result, created_at)
      VALUES (?, ?, 'user_created', 'success', datetime('now'))`,
-  ).bind(userId, claims.groupId).run();
-  return json({ ok: true, userId, memberNumber, role: body.role }, 201);
+  )
+    .bind(userId, claims.groupId)
+    .run();
+
+  return json({
+    ok: true,
+    userId,
+    memberNumber,
+    role: body.role,
+  }, 201);
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const requestId = crypto.randomUUID();
+
     try {
-    const url = new URL(request.url);
-    if (request.method === 'OPTIONS') return cors(new Response(null, { status: 204 }), request);
+      const url = new URL(request.url);
 
-    let response: Response;
-    if (url.pathname === '/health' && request.method === 'GET') {
-      let databaseConnected = false;
-      try {
-        // A real D1 round-trip: the previous health endpoint never touched D1,
-        // so ok:true did not prove that the database binding was working.
-        const probe = await env.DB.prepare('SELECT 1 AS connected').first<{ connected: number }>();
-        databaseConnected = probe?.connected === 1;
-      } catch {
-        databaseConnected = false;
+      if (request.method === 'OPTIONS') {
+        return cors(
+          new Response(null, { status: 204 }),
+          request,
+        );
       }
 
-      response = json({
-        ok: true,
-        service: 'ebadsave-vsla-cloudflare',
-        stage: 'authentication-and-passbooks',
-        databaseConnected,
-        bootstrapSecretConfigured: Boolean(
-          env.ADMIN_BOOTSTRAP_SECRET &&
-          env.ADMIN_BOOTSTRAP_SECRET.length >= 32
-        ),
-        pinPepperConfigured: Boolean(
-          env.PIN_PEPPER &&
-          env.PIN_PEPPER.length >= 32
-        ),
-        jwtSecretConfigured: Boolean(
-          env.JWT_HS256_SECRET &&
-          env.JWT_HS256_SECRET.length >= 32
-        ),
-      }, databaseConnected ? 200 : 503);
-      return cors(response, request);
-    }
+      let response: Response;
 
-    if (url.pathname === '/v1/groups/register' && request.method === 'POST') {
-      const body = await readJson(request);
-      if (!body || typeof body.groupName !== 'string' || typeof body.district !== 'string' || typeof body.country !== 'string') {
-        return cors(json({ error: 'group_name_district_and_country_required' }, 400), request);
-      }
-      const groupName = body.groupName.trim();
-      const district = body.district.trim();
-      const country = body.country.trim();
-      if (!groupName || !district || !country || groupName.length > 120 || district.length > 120 || country.length > 80) {
-        return cors(json({ error: 'invalid_group_details' }, 400), request);
-      }
+      if (url.pathname === '/health' && request.method === 'GET') {
+        let databaseConnected = false;
 
-      // The unique D1 primary key is the final concurrency guard. If two
-      // devices race for the same next number, the loser retries allocation.
-      for (let attempt = 0; attempt < 8; attempt += 1) {
-        const candidate = await env.DB.prepare(
-          `WITH RECURSIVE numbers(n) AS (
-             SELECT 2010 UNION ALL SELECT n + 1 FROM numbers WHERE n < 9090
-           )
-           SELECT n AS groupNumber FROM numbers
-           WHERE NOT EXISTS (SELECT 1 FROM production_group_registry r WHERE r.group_number = n)
-           ORDER BY n LIMIT 1`,
-        ).first<{ groupNumber: number }>();
-        if (!candidate) return cors(json({ error: 'production_group_numbers_exhausted' }, 409), request);
-        const groupId = `kya-${candidate.groupNumber}`;
         try {
-          await env.DB.prepare(
-            `INSERT INTO production_group_registry
-             (group_number, group_id, group_name, district, country, status, registered_at, last_activity_at)
-             VALUES (?, ?, ?, ?, ?, 'active', datetime('now'), datetime('now'))`,
-          ).bind(candidate.groupNumber, groupId, groupName, district, country).run();
-          return cors(json({ ok: true, groupNumber: candidate.groupNumber, groupId }, 201), request);
-        } catch (error) {
-          if (attempt === 7) throw error;
+          const probe = await env.DB.prepare(
+            'SELECT 1 AS connected',
+          ).first<{ connected: number }>();
+
+          databaseConnected = probe?.connected === 1;
+        } catch {
+          databaseConnected = false;
         }
+
+        response = json({
+          ok: true,
+          service: 'ebadsave-vsla-cloudflare',
+          stage: 'authentication-and-passbooks',
+          databaseConnected,
+          bootstrapSecretConfigured: Boolean(
+            env.ADMIN_BOOTSTRAP_SECRET
+            && env.ADMIN_BOOTSTRAP_SECRET.length >= 32
+          ),
+          pinPepperConfigured: Boolean(
+            env.PIN_PEPPER
+            && env.PIN_PEPPER.length >= 32
+          ),
+          jwtSecretConfigured: Boolean(
+            env.JWT_HS256_SECRET
+            && env.JWT_HS256_SECRET.length >= 32
+          ),
+        }, databaseConnected ? 200 : 503);
+
+        return cors(response, request);
       }
-      return cors(json({ error: 'group_number_reservation_failed' }, 503), request);
-    }
 
-    if (
-  url.pathname === '/v1/registrations' &&
-  request.method === 'POST'
-) {
-  response = await createMemberRegistration(request, env);
-  return cors(response, request);
-    }
-    
-    if (url.pathname === '/v1/auth/admin/setup' && request.method === 'POST') {
-      response = await bootstrapAdmin(request, env);
-      return cors(response, request);
-    }
+      if (
+        url.pathname === '/v1/groups/register'
+        && request.method === 'POST'
+      ) {
+        const body = await readJson(request);
 
-    // Compatibility alias for older app builds; new builds use /admin/setup.
-    if (url.pathname === '/v1/auth/bootstrap-admin' && request.method === 'POST') {
-      response = await bootstrapAdmin(request, env);
-      return cors(response, request);
-    }
+        if (
+          !body ||
+          typeof body.groupName !== 'string'
+          || typeof body.district !== 'string'
+          || typeof body.country !== 'string'
+        ) {
+          return cors(
+            json(
+              { error: 'group_name_district_and_country_required' },
+              400,
+            ),
+            request,
+          );
+        }
 
-    if (url.pathname === '/v1/auth/login' && request.method === 'POST') {
-      response = await login(request, env);
-      return cors(response, request);
-    }
+        const groupName = body.groupName.trim();
+        const district = body.district.trim();
+        const country = body.country.trim();
 
-    const claims = await verifyAccessToken(request, env) as JwtClaims | null;
-    if (!claims) return cors(json({ error: 'unauthorized' }, 401), request);
-    const currentIdentity = await env.DB.prepare(
-      `SELECT role, status FROM auth_users WHERE user_id = ? AND group_id = ? LIMIT 1`,
-    ).bind(claims.sub, claims.groupId).first<{ role: JwtRole; status: string }>();
-    if (!currentIdentity || currentIdentity.status !== 'active') return cors(json({ error: 'unauthorized' }, 401), request);
-    // Never trust a stale role embedded in a still-valid JWT after a role change.
-    claims.role = currentIdentity.role;
+        if (
+          !groupName
+          || !district
+          || !country
+          || groupName.length > 120
+          || district.length > 120
+          || country.length > 80
+        ) {
+          return cors(
+            json({ error: 'invalid_group_details' }, 400),
+            request,
+          );
+        }
 
-    if (url.pathname === '/v1/auth/logout' && request.method === 'POST') {
-      await env.DB.prepare(
-        `INSERT OR IGNORE INTO revoked_tokens (token_id, user_id, expires_at, revoked_at)
-         VALUES (?, ?, ?, datetime('now'))`,
-      ).bind(claims.jti, claims.sub, claims.exp).run();
-      return cors(json({ ok: true, loggedOut: true }), request);
-    }
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const candidate = await env.DB.prepare(
+            `WITH RECURSIVE numbers(n) AS (
+               SELECT 2010
+               UNION ALL
+               SELECT n + 1
+               FROM numbers
+               WHERE n < 9090
+             )
+             SELECT n AS groupNumber
+             FROM numbers
+             WHERE NOT EXISTS (
+               SELECT 1
+               FROM production_group_registry r
+               WHERE r.group_number = n
+             )
+             ORDER BY n
+             LIMIT 1`,
+          ).first<{ groupNumber: number }>();
 
-    if (
-      url.pathname === '/v1/registrations/pending' &&
-      request.method === 'GET'
-    ) {
-      response = await listPendingRegistrations(env, claims);
-      return cors(response, request);
-    }
+          if (!candidate) {
+            return cors(
+              json(
+                { error: 'production_group_numbers_exhausted' },
+                409,
+              ),
+              request,
+            );
+          }
 
-    const registrationReview = url.pathname.match(
-      /^\/v1\/registrations\/([A-Za-z0-9-]{36})\/(approve|reject)$/,
-    );
+          const groupId = `kya-${candidate.groupNumber}`;
 
-    if (registrationReview && request.method === 'POST') {
-      response = await reviewMemberRegistration(
-        request,
-        env,
-        claims,
-        registrationReview[1],
-        registrationReview[2] as 'approve' | 'reject',
+          try {
+            await env.DB.prepare(
+              `INSERT INTO production_group_registry
+               (group_number, group_id, group_name, district,
+                country, status, registered_at, last_activity_at)
+               VALUES (?, ?, ?, ?, ?, 'active',
+                       datetime('now'), datetime('now'))`,
+            )
+              .bind(
+                candidate.groupNumber,
+                groupId,
+                groupName,
+                district,
+                country,
+              )
+              .run();
+
+            return cors(json({
+              ok: true,
+              groupNumber: candidate.groupNumber,
+              groupId,
+            }, 201), request);
+          } catch (error) {
+            if (attempt === 7) throw error;
+          }
+        }
+
+        return cors(
+          json(
+            { error: 'group_number_reservation_failed' },
+            503,
+          ),
+          request,
+        );
+      }
+
+      if (
+        url.pathname === '/v1/registrations'
+        && request.method === 'POST'
+      ) {
+        response = await createMemberRegistration(request, env);
+        return cors(response, request);
+      }
+
+      if (
+        url.pathname === '/v1/auth/admin/setup'
+        && request.method === 'POST'
+      ) {
+        response = await bootstrapAdmin(request, env);
+        return cors(response, request);
+      }
+
+      if (
+        url.pathname === '/v1/auth/bootstrap-admin'
+        && request.method === 'POST'
+      ) {
+        response = await bootstrapAdmin(request, env);
+        return cors(response, request);
+      }
+
+      if (
+        url.pathname === '/v1/auth/login'
+        && request.method === 'POST'
+      ) {
+        response = await login(request, env);
+        return cors(response, request);
+      }
+
+      const claims =
+        await verifyAccessToken(request, env) as JwtClaims | null;
+
+      if (!claims) {
+        return cors(json({ error: 'unauthorized' }, 401), request);
+      }
+
+      const currentIdentity = await env.DB.prepare(
+        `SELECT role, status
+         FROM auth_users
+         WHERE user_id = ? AND group_id = ?
+         LIMIT 1`,
+      )
+        .bind(claims.sub, claims.groupId)
+        .first<{ role: JwtRole; status: string }>();
+
+      if (!currentIdentity || currentIdentity.status !== 'active') {
+        return cors(json({ error: 'unauthorized' }, 401), request);
+      }
+
+      claims.role = currentIdentity.role;
+
+      if (
+        url.pathname === '/v1/auth/users/reset-pin'
+        && request.method === 'POST'
+      ) {
+        response = await resetMemberPin(request, env, claims);
+        return cors(response, request);
+      }
+
+      if (
+        url.pathname === '/v1/auth/logout'
+        && request.method === 'POST'
+      ) {
+        await env.DB.prepare(
+          `INSERT OR IGNORE INTO revoked_tokens
+           (token_id, user_id, expires_at, revoked_at)
+           VALUES (?, ?, ?, datetime('now'))`,
+        )
+          .bind(claims.jti, claims.sub, claims.exp)
+          .run();
+
+        return cors(
+          json({ ok: true, loggedOut: true }),
+          request,
+        );
+      }
+
+      if (
+        url.pathname === '/v1/registrations/pending'
+        && request.method === 'GET'
+      ) {
+        response = await listPendingRegistrations(env, claims);
+        return cors(response, request);
+      }
+
+      const registrationReview = url.pathname.match(
+        /^\/v1\/registrations\/([A-Za-z0-9-]{36})\/(approve|reject)$/,
       );
-      return cors(response, request);
-    }
 
-    if (url.pathname === '/v1/auth/users' && request.method === 'POST') {
-      response = await createAuthUser(request, env, claims);
-      return cors(response, request);
-    }
-    if (url.pathname === '/v1/passbook/me' && request.method === 'GET') {
-      response = await getMyPassbook(env, claims);
-      return cors(response, request);
-    }
-    if (url.pathname === '/v1/passbook/sync' && request.method === 'POST') {
-      response = await syncPassbook(request, env, claims);
-      return cors(response, request);
-    }
+      if (registrationReview && request.method === 'POST') {
+        response = await reviewMemberRegistration(
+          request,
+          env,
+          claims,
+          registrationReview[1],
+          registrationReview[2] as 'approve' | 'reject',
+        );
 
-    // Upload encrypted backup.
-    if (url.pathname === '/v1/backups' && request.method === 'POST') {
-      if (claims.role !== 'admin') return cors(json({ error: 'admin_required' }, 403), request);
-      const backupId = request.headers.get('x-backup-id') ?? crypto.randomUUID();
-      const requestedGroupId = request.headers.get('x-group-id');
-      const requestedGroupNumber = request.headers.get('x-group-number') ?? '';
-      if (requestedGroupId !== claims.groupId) return cors(json({ error: 'group_scope_mismatch' }, 403), request);
-      if (!/^\d{4}$/.test(requestedGroupNumber) || !(Number(requestedGroupNumber) >= 2000 && Number(requestedGroupNumber) <= 2009 || Number(requestedGroupNumber) >= 2010 && Number(requestedGroupNumber) <= 9090)) {
-        return cors(json({ error: 'invalid_group_number' }, 400), request);
+        return cors(response, request);
       }
-      if (!validId(backupId)) return cors(json({ error: 'invalid_backup_id' }, 400), request);
-      const contentType = request.headers.get('content-type') ?? '';
-      if (!contentType.toLowerCase().includes('application/octet-stream')) {
-        return cors(json({ error: 'encrypted_backup_binary_required' }, 415), request);
-      }
-      if (request.headers.get('x-backup-encrypted') !== 'true') {
-        return cors(json({ error: 'encrypted_backup_required' }, 400), request);
-      }
-      const body = await request.arrayBuffer();
-      if (body.byteLength < 32 || body.byteLength > 100 * 1024 * 1024) {
-        return cors(json({ error: 'backup_size_out_of_range', minBytes: 32, maxBytes: 104857600 }, 413), request);
-      }
-      const key = backupKey(claims.groupId, backupId);
-      await env.BACKUPS.put(key, body, {
-        httpMetadata: { contentType: 'application/octet-stream', cacheControl: 'private, no-store' },
-        customMetadata: { groupId: claims.groupId, groupNumber: requestedGroupNumber, backupId, uploadedBy: claims.sub, encrypted: 'true' },
-      });
-      await env.DB.prepare(
-        `INSERT INTO backups (backup_id, group_id, object_key, uploaded_by, byte_size, created_at, status)
-         VALUES (?, ?, ?, ?, ?, datetime('now'), 'available')`,
-      ).bind(backupId, claims.groupId, key, claims.sub, body.byteLength).run();
-      await audit(env, claims.sub, claims.groupId, 'backup_upload', 'success', backupId);
-      response = json({ ok: true, backupId, bytes: body.byteLength, encrypted: true }, 201);
-      return cors(response, request);
-    }
 
-    if (url.pathname === '/v1/backups' && request.method === 'GET') {
-      if (claims.role !== 'admin') return cors(json({ error: 'admin_required' }, 403), request);
-      const result = await env.DB.prepare(
-        `SELECT backup_id AS backupId, byte_size AS bytes, created_at AS createdAt, status
-         FROM backups WHERE group_id = ? AND status = 'available' ORDER BY created_at DESC LIMIT 100`,
-      ).bind(claims.groupId).all();
-      response = json({ backups: result.results ?? [] });
-      return cors(response, request);
-    }
+      if (
+        url.pathname === '/v1/auth/users'
+        && request.method === 'POST'
+      ) {
+        response = await createAuthUser(request, env, claims);
+        return cors(response, request);
+      }
 
-    const match = url.pathname.match(/^\/v1\/backups\/([A-Za-z0-9_-]{1,80})$/);
-    if (match && request.method === 'GET') {
-      if (claims.role !== 'admin') return cors(json({ error: 'admin_required' }, 403), request);
-      const backupId = match[1];
-      const record = await env.DB.prepare(
-        `SELECT object_key AS objectKey FROM backups
-         WHERE backup_id = ? AND group_id = ? AND status = 'available' LIMIT 1`,
-      ).bind(backupId, claims.groupId).first<{ objectKey: string }>();
-      if (!record) return cors(json({ error: 'backup_not_found' }, 404), request);
-      const object = await env.BACKUPS.get(record.objectKey);
-      if (!object) return cors(json({ error: 'backup_object_missing' }, 404), request);
-      await audit(env, claims.sub, claims.groupId, 'backup_download', 'success', backupId);
-      const headers = new Headers();
-      object.writeHttpMetadata(headers);
-      headers.set('content-type', 'application/octet-stream');
-      headers.set('content-disposition', `attachment; filename="ebadsave-${backupId}.enc"`);
-      headers.set('cache-control', 'private, no-store');
-      headers.set('x-backup-encrypted', 'true');
-      response = new Response(object.body, { headers });
-      return cors(response, request);
-    }
+      if (
+        url.pathname === '/v1/passbook/me'
+        && request.method === 'GET'
+      ) {
+        response = await getMyPassbook(env, claims);
+        return cors(response, request);
+      }
 
-    return cors(json({ error: 'not_found' }, 404), request);
+      if (
+        url.pathname === '/v1/passbook/sync'
+        && request.method === 'POST'
+      ) {
+        response = await syncPassbook(request, env, claims);
+        return cors(response, request);
+      }
+
+      if (
+        url.pathname === '/v1/backups'
+        && request.method === 'POST'
+      ) {
+        if (claims.role !== 'admin') {
+          return cors(
+            json({ error: 'admin_required' }, 403),
+            request,
+          );
+        }
+
+        const backupId =
+          request.headers.get('x-backup-id')
+          ?? crypto.randomUUID();
+
+        const requestedGroupId =
+          request.headers.get('x-group-id');
+
+        const requestedGroupNumber =
+          request.headers.get('x-group-number') ?? '';
+
+        if (requestedGroupId !== claims.groupId) {
+          return cors(
+            json({ error: 'group_scope_mismatch' }, 403),
+            request,
+          );
+        }
+
+        if (
+          !/^\d{4}$/.test(requestedGroupNumber)
+          || !(
+            (
+              Number(requestedGroupNumber) >= 2000
+              && Number(requestedGroupNumber) <= 2009
+            )
+            || (
+              Number(requestedGroupNumber) >= 2010
+              && Number(requestedGroupNumber) <= 9090
+            )
+          )
+        ) {
+          return cors(
+            json({ error: 'invalid_group_number' }, 400),
+            request,
+          );
+        }
+
+        if (!validId(backupId)) {
+          return cors(
+            json({ error: 'invalid_backup_id' }, 400),
+            request,
+          );
+        }
+
+        const contentType =
+          request.headers.get('content-type') ?? '';
+
+        if (
+          !contentType
+            .toLowerCase()
+            .includes('application/octet-stream')
+        ) {
+          return cors(
+            json({
+              error: 'encrypted_backup_binary_required',
+            }, 415),
+            request,
+          );
+        }
+
+        if (
+          request.headers.get('x-backup-encrypted') !== 'true'
+        ) {
+          return cors(
+            json({ error: 'encrypted_backup_required' }, 400),
+            request,
+          );
+        }
+
+        const body = await request.arrayBuffer();
+
+        if (
+          body.byteLength < 32
+          || body.byteLength > 100 * 1024 * 1024
+        ) {
+          return cors(
+            json({
+              error: 'backup_size_out_of_range',
+              minBytes: 32,
+              maxBytes: 104857600,
+            }, 413),
+            request,
+          );
+        }
+
+        const key = backupKey(claims.groupId, backupId);
+
+        await env.BACKUPS.put(key, body, {
+          httpMetadata: {
+            contentType: 'application/octet-stream',
+            cacheControl: 'private, no-store',
+          },
+          customMetadata: {
+            groupId: claims.groupId,
+            groupNumber: requestedGroupNumber,
+            backupId,
+            uploadedBy: claims.sub,
+            encrypted: 'true',
+          },
+        });
+
+        await env.DB.prepare(
+          `INSERT INTO backups
+           (backup_id, group_id, object_key, uploaded_by,
+            byte_size, created_at, status)
+           VALUES (?, ?, ?, ?, ?, datetime('now'), 'available')`,
+        )
+          .bind(
+            backupId,
+            claims.groupId,
+            key,
+            claims.sub,
+            body.byteLength,
+          )
+          .run();
+
+        await audit(
+          env,
+          claims.sub,
+          claims.groupId,
+          'backup_upload',
+          'success',
+          backupId,
+        );
+
+        response = json({
+          ok: true,
+          backupId,
+          bytes: body.byteLength,
+          encrypted: true,
+        }, 201);
+
+        return cors(response, request);
+      }
+
+      if (
+        url.pathname === '/v1/backups'
+        && request.method === 'GET'
+      ) {
+        if (claims.role !== 'admin') {
+          return cors(
+            json({ error: 'admin_required' }, 403),
+            request,
+          );
+        }
+
+        const result = await env.DB.prepare(
+          `SELECT backup_id AS backupId,
+                  byte_size AS bytes,
+                  created_at AS createdAt,
+                  status
+           FROM backups
+           WHERE group_id = ?
+             AND status = 'available'
+           ORDER BY created_at DESC
+           LIMIT 100`,
+        )
+          .bind(claims.groupId)
+          .all();
+
+        response = json({
+          backups: result.results ?? [],
+        });
+
+        return cors(response, request);
+      }
+
+      const match = url.pathname.match(
+        /^\/v1\/backups\/([A-Za-z0-9_-]{1,80})$/,
+      );
+
+      if (match && request.method === 'GET') {
+        if (claims.role !== 'admin') {
+          return cors(
+            json({ error: 'admin_required' }, 403),
+            request,
+          );
+        }
+
+        const backupId = match[1];
+
+        const record = await env.DB.prepare(
+          `SELECT object_key AS objectKey
+           FROM backups
+           WHERE backup_id = ?
+             AND group_id = ?
+             AND status = 'available'
+           LIMIT 1`,
+        )
+          .bind(backupId, claims.groupId)
+          .first<{ objectKey: string }>();
+
+        if (!record) {
+          return cors(
+            json({ error: 'backup_not_found' }, 404),
+            request,
+          );
+        }
+
+        const object = await env.BACKUPS.get(record.objectKey);
+
+        if (!object) {
+          return cors(
+            json({ error: 'backup_object_missing' }, 404),
+            request,
+          );
+        }
+
+        await audit(
+          env,
+          claims.sub,
+          claims.groupId,
+          'backup_download',
+          'success',
+          backupId,
+        );
+
+        const headers = new Headers();
+        object.writeHttpMetadata(headers);
+        headers.set(
+          'content-type',
+          'application/octet-stream',
+        );
+        headers.set(
+          'content-disposition',
+          `attachment; filename="ebadsave-${backupId}.enc"`,
+        );
+        headers.set(
+          'cache-control',
+          'private, no-store',
+        );
+        headers.set(
+          'x-backup-encrypted',
+          'true',
+        );
+
+        response = new Response(
+          object.body,
+          { headers },
+        );
+
+        return cors(response, request);
+      }
+
+      return cors(
+        json({ error: 'not_found' }, 404),
+        request,
+      );
     } catch (error) {
-      // Log only the request ID and technical error; never log request bodies or PINs.
       console.error('Worker request failed', {
         requestId,
         path: new URL(request.url).pathname,
-        error: error instanceof Error ? error.message : String(error),
+        error:
+          error instanceof Error
+            ? error.message
+            : String(error),
       });
+
       const failure = json({
         error: 'worker_unhandled_error',
         code: 'WORKER_UNHANDLED_ERROR',
         message: ERROR_MESSAGES.worker_unhandled_error,
         requestId,
       }, 500);
+
       const headers = new Headers(failure.headers);
       headers.set('x-request-id', requestId);
-      return cors(new Response(failure.body, { status: failure.status, headers }), request);
+
+      return cors(
+        new Response(
+          failure.body,
+          {
+            status: failure.status,
+            headers,
+          },
+        ),
+        request,
+      );
     }
   },
 };
