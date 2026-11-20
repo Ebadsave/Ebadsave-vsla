@@ -18,10 +18,7 @@ import {
   formatFileSize,
   saveAutomaticCloudBackupPassphrase,
 } from '../database/backup';
-import {
-  getCloudflareSessionGroupId,
-  getCloudflareAccessToken,
-} from '../services/cloudflareApi';
+import { getCloudflareSessionGroupId } from '../services/cloudflareApi';
 import {
   listCloudGroupBackups,
   signInCloudflareBackupAdmin,
@@ -35,7 +32,7 @@ function fourDigitGroupNumber(
   return /^\d{4}$/.test(digits) ? digits : null;
 }
 
-function groupNumberFromCloudId(groupId: string | null): string | null {
+function cloudGroupDigits(groupId: string | null): string | null {
   return groupId?.match(/(\d{4})$/)?.[1] ?? null;
 }
 
@@ -47,6 +44,7 @@ export default function CloudBackupScreen() {
   const [cloudGroupId, setCloudGroupId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isWorking, setIsWorking] = useState(false);
+  const [isBackingUp, setIsBackingUp] = useState(false);
 
   const [lastBackup, setLastBackup] = useState('Not checked');
   const [backupSize, setBackupSize] = useState<number | null>(null);
@@ -68,29 +66,29 @@ export default function CloudBackupScreen() {
   const selectedDigits = selectedGroup
     ? fourDigitGroupNumber(selectedGroup.group_number)
     : null;
-  const signedInDigits = groupNumberFromCloudId(cloudGroupId);
+  const signedInDigits = cloudGroupDigits(cloudGroupId);
   const administratorMatchesGroup = Boolean(
-    selectedDigits && signedInDigits && selectedDigits === signedInDigits,
+    selectedDigits
+      && signedInDigits
+      && selectedDigits === signedInDigits,
   );
 
   const loadScreenData = useCallback(async () => {
     setIsLoading(true);
 
     try {
-      const [allGroups, sessionGroupId, accessToken] = await Promise.all([
+      const [allGroups, sessionGroupId] = await Promise.all([
         getAllGroups(),
         getCloudflareSessionGroupId(),
-        getCloudflareAccessToken(),
       ]);
 
       const activeGroups = allGroups.filter(
         (group) => group.status === 'active',
       );
-      const usableSession = accessToken ? sessionGroupId : null;
-      const sessionDigits = groupNumberFromCloudId(usableSession);
+      const sessionDigits = cloudGroupDigits(sessionGroupId);
 
       setGroups(activeGroups);
-      setCloudGroupId(usableSession);
+      setCloudGroupId(sessionGroupId);
 
       setSelectedGroupId((previous) => {
         if (
@@ -108,19 +106,20 @@ export default function CloudBackupScreen() {
           if (matchingGroup) return matchingGroup.id;
         }
 
-        // Select automatically only when there is exactly one possible group.
         return activeGroups.length === 1 ? activeGroups[0].id : null;
       });
 
       if (activeGroups.length === 0) {
-        setStatusMessage('No active local groups are registered on this device.');
-      } else if (!usableSession || !sessionDigits) {
         setStatusMessage(
-          'Select a group, then sign in using that group’s administrator credentials.',
+          'No active local groups are registered on this device.',
+        );
+      } else if (!sessionGroupId || !sessionDigits) {
+        setStatusMessage(
+          'Select a group, then sign in using that group administrator credentials.',
         );
       } else {
         setStatusMessage(
-          `Cloudflare administrator session: KYA ${sessionDigits}. Select the same local group to back it up.`,
+          `Cloudflare administrator session: KYA ${sessionDigits}. Select the same local group.`,
         );
       }
 
@@ -141,7 +140,13 @@ export default function CloudBackupScreen() {
   }, []);
 
   const loadSelectedGroupBackups = useCallback(async () => {
-    if (!selectedDigits || !administratorMatchesGroup) {
+    if (!selectedDigits) {
+      setLastBackup('Not checked');
+      setBackupSize(null);
+      return;
+    }
+
+    if (!administratorMatchesGroup) {
       setLastBackup('Not checked');
       setBackupSize(null);
       return;
@@ -161,15 +166,12 @@ export default function CloudBackupScreen() {
       if (result.backups.length === 0) {
         setLastBackup('No successful cloud backup yet');
         setBackupSize(null);
-        setStatusMessage(
-          `Administrator and local group match KYA ${selectedDigits}. No cloud backups exist for this group yet.`,
-        );
-        return;
+      } else {
+        const latest = result.backups[0];
+        setLastBackup(new Date(latest.createdAt).toLocaleString());
+        setBackupSize(latest.bytes ?? null);
       }
 
-      const latest = result.backups[0];
-      setLastBackup(new Date(latest.createdAt).toLocaleString());
-      setBackupSize(latest.bytes ?? null);
       setStatusMessage(
         `Administrator and local group match KYA ${selectedDigits}.`,
       );
@@ -177,7 +179,7 @@ export default function CloudBackupScreen() {
       setStatusMessage(
         error instanceof Error
           ? error.message
-          : 'Could not check this group’s cloud backups.',
+          : 'Could not check this group cloud backups.',
       );
     }
   }, [administratorMatchesGroup, selectedDigits]);
@@ -204,20 +206,30 @@ export default function CloudBackupScreen() {
       .replace(/\s+/g, '');
 
     if (adminName.trim().length < 2) {
-      Alert.alert('Administrator name required', 'Enter the group administrator’s full name.');
+      Alert.alert(
+        'Administrator name required',
+        'Enter the group administrator full name.',
+      );
       return;
     }
 
-    if (!new RegExp(`^KYA${selectedDigits}\\d{3}$`).test(normalizedMemberNumber)) {
+    if (
+      !new RegExp(`^KYA${selectedDigits}\\d{3}$`).test(
+        normalizedMemberNumber,
+      )
+    ) {
       Alert.alert(
         'Administrator number does not match',
-        `Enter the administrator member number belonging to KYA ${selectedDigits}, such as KYA${selectedDigits}001.`,
+        `Enter an administrator member number belonging to KYA ${selectedDigits}, for example KYA${selectedDigits}001.`,
       );
       return;
     }
 
     if (!/^\d{6,12}$/.test(adminPin)) {
-      Alert.alert('Invalid PIN', 'The administrator PIN must contain 6–12 digits.');
+      Alert.alert(
+        'Invalid PIN',
+        'The administrator PIN must contain 6–12 digits.',
+      );
       return;
     }
 
@@ -230,28 +242,26 @@ export default function CloudBackupScreen() {
         adminPin,
       );
 
-      const [newSessionGroupId, token] = await Promise.all([
-        getCloudflareSessionGroupId(),
-        getCloudflareAccessToken(),
-      ]);
+      const sessionGroupId = await getCloudflareSessionGroupId();
+      const sessionDigits = cloudGroupDigits(sessionGroupId);
 
-      if (!token || !newSessionGroupId) {
-        throw new Error('Cloudflare sign-in did not save an administrator session.');
-      }
-
-      const sessionDigits = groupNumberFromCloudId(newSessionGroupId);
-      if (sessionDigits !== selectedDigits) {
+      if (!sessionGroupId || sessionDigits !== selectedDigits) {
         throw new Error(
-          `The signed-in administrator is for KYA ${sessionDigits ?? 'unknown'}, not the selected KYA ${selectedDigits}.`,
+          `The signed-in administrator belongs to KYA ${
+            sessionDigits ?? 'unknown'
+          }, not selected KYA ${selectedDigits}.`,
         );
       }
 
-      setCloudGroupId(newSessionGroupId);
+      setCloudGroupId(sessionGroupId);
       setAdminPin('');
-      setStatusMessage(`Signed in as administrator for KYA ${selectedDigits}.`);
+      setStatusMessage(
+        `Signed in as administrator for KYA ${selectedDigits}.`,
+      );
+
       Alert.alert(
         'Administrator connected',
-        `This Cloudflare session is now for KYA ${selectedDigits}.`,
+        `The Cloudflare session now belongs to KYA ${selectedDigits}.`,
       );
     } catch (error) {
       setStatusMessage('Administrator sign-in failed.');
@@ -278,7 +288,9 @@ export default function CloudBackupScreen() {
     if (!administratorMatchesGroup) {
       Alert.alert(
         'Sign in for this group',
-        `The selected local group is KYA ${selectedDigits}, but the current Cloudflare administrator session is for KYA ${signedInDigits ?? 'unknown'}. Sign in below using KYA ${selectedDigits} administrator credentials. No backup has been uploaded.`,
+        `The selected local group is KYA ${selectedDigits}, but the current Cloudflare administrator session is for KYA ${
+          signedInDigits ?? 'unknown'
+        }. Sign in below using KYA ${selectedDigits} administrator credentials. No backup was uploaded.`,
       );
       return;
     }
@@ -292,6 +304,7 @@ export default function CloudBackupScreen() {
     }
 
     setIsWorking(true);
+    setIsBackingUp(true);
     setProgress(5);
     setStatusMessage(`Preparing backup for KYA ${selectedDigits}.`);
 
@@ -310,11 +323,8 @@ export default function CloudBackupScreen() {
 
       setProgress(90);
       setStatusMessage('Cloudflare confirmed the encrypted backup.');
-
       await loadSelectedGroupBackups();
-
       setProgress(100);
-      setStatusMessage(`Encrypted backup uploaded for KYA ${selectedDigits}.`);
 
       Alert.alert(
         'Backup complete',
@@ -330,25 +340,30 @@ export default function CloudBackupScreen() {
       );
     } finally {
       setIsWorking(false);
+      setIsBackingUp(false);
     }
   };
 
   const sections = [
     {
       label: 'Members and accounts',
-      description: 'Members, credentials, PIN accounts, roles and relationships',
+      description:
+        'Members, credentials, PIN accounts, roles and relationships',
     },
     {
       label: 'All financial transactions',
-      description: 'Savings, loans, repayments, interest, fines and insurance',
+      description:
+        'Savings, loans, repayments, interest, fines and insurance',
     },
     {
       label: 'Meetings and attendance',
-      description: 'Meeting records, roll call, minutes and closure summaries',
+      description:
+        'Meeting records, roll call, minutes and closure summaries',
     },
     {
       label: 'Group funds and expenses',
-      description: 'Fund balances, external funds and group expenditure',
+      description:
+        'Fund balances, external funds and group expenditure',
     },
   ];
 
@@ -361,7 +376,9 @@ export default function CloudBackupScreen() {
       <ScrollView
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled"
-        keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+        keyboardDismissMode={
+          Platform.OS === 'ios' ? 'interactive' : 'on-drag'
+        }
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.title}>Full database backup</Text>
@@ -372,29 +389,40 @@ export default function CloudBackupScreen() {
         <View style={styles.statusBox}>
           <Text style={styles.statusLabel}>Cloud backup status</Text>
           <Text style={styles.statusText}>{statusMessage}</Text>
-          <Text style={styles.lastLabel}>Last backup for selected group</Text>
+          <Text style={styles.lastLabel}>
+            Last backup for selected group
+          </Text>
           <Text style={styles.lastValue}>{lastBackup}</Text>
           {backupSize !== null && (
-            <Text style={styles.meta}>Size: {formatFileSize(backupSize)}</Text>
+            <Text style={styles.meta}>
+              Size: {formatFileSize(backupSize)}
+            </Text>
           )}
         </View>
 
-        <Text style={styles.sectionHeading}>Select a local group</Text>
+        <Text style={styles.sectionHeading}>
+          Select a local group
+        </Text>
 
         {isLoading ? (
-          <ActivityIndicator color="#16a34a" style={styles.loader} />
+          <ActivityIndicator
+            color="#16a34a"
+            style={styles.loader}
+          />
         ) : groups.length === 0 ? (
           <Text style={styles.emptyText}>
-            No active groups are registered in this device’s local database.
-            Register the group first; production registration saves the
-            Cloudflare-reserved KYA number into SQLite.
+            No active groups are registered in this device local database.
+            Register the group first. Production registration saves the
+            Cloudflare-reserved KYA number in SQLite.
           </Text>
         ) : (
           groups.map((group) => {
             const selected = group.id === selectedGroupId;
             const digits = fourDigitGroupNumber(group.group_number);
             const matches = Boolean(
-              digits && signedInDigits && digits === signedInDigits,
+              digits
+                && signedInDigits
+                && digits === signedInDigits,
             );
 
             return (
@@ -416,92 +444,121 @@ export default function CloudBackupScreen() {
                   <Text style={styles.groupMeta}>
                     {group.district}, {group.country}
                   </Text>
-                  <Text style={matches ? styles.match : styles.noMatch}>
+                  <Text
+                    style={matches ? styles.match : styles.noMatch}
+                  >
                     {matches
                       ? 'Administrator session matches'
                       : `Administrator session: ${
-                          signedInDigits ? `KYA ${signedInDigits}` : 'not signed in'
+                          signedInDigits
+                            ? `KYA ${signedInDigits}`
+                            : 'not signed in'
                         }`}
                   </Text>
                 </View>
-                <Text style={styles.radio}>{selected ? '●' : '○'}</Text>
+                <Text style={styles.radio}>
+                  {selected ? '●' : '○'}
+                </Text>
               </TouchableOpacity>
             );
           })
         )}
 
-        {selectedGroup && selectedDigits && !administratorMatchesGroup && (
-          <View style={styles.adminCard}>
-            <Text style={styles.sectionHeading}>
-              Sign in for KYA {selectedDigits}
-            </Text>
-            <Text style={styles.help}>
-              Each group has its own Cloudflare administrator account. Signing
-              in for this group replaces the current Cloudflare session on
-              this device; it does not combine groups or move their data.
-            </Text>
+        {selectedGroup
+          && selectedDigits
+          && !administratorMatchesGroup && (
+            <View style={styles.adminCard}>
+              <Text style={styles.sectionHeading}>
+                Sign in for KYA {selectedDigits}
+              </Text>
+              <Text style={styles.help}>
+                Each group has its own Cloudflare administrator account.
+                Signing in for this group replaces the current Cloudflare
+                session on this device. It does not combine groups or move
+                group data.
+              </Text>
 
-            <Text style={styles.label}>Administrator full name</Text>
-            <TextInput
-              style={styles.input}
-              value={adminName}
-              onChangeText={setAdminName}
-              placeholder="Administrator full name"
-              autoCapitalize="words"
-              editable={!isWorking}
-            />
-
-            <Text style={styles.label}>Administrator member number</Text>
-            <TextInput
-              style={styles.input}
-              value={adminMemberNumber}
-              onChangeText={setAdminMemberNumber}
-              placeholder={`Example: KYA${selectedDigits}001`}
-              autoCapitalize="characters"
-              autoCorrect={false}
-              editable={!isWorking}
-            />
-
-            <Text style={styles.label}>Administrator PIN</Text>
-            <View style={styles.inputRow}>
+              <Text style={styles.label}>
+                Administrator full name
+              </Text>
               <TextInput
-                style={styles.flexInput}
-                value={adminPin}
-                onChangeText={(value) =>
-                  setAdminPin(value.replace(/\D/g, '').slice(0, 12))
-                }
-                secureTextEntry={!showAdminPin}
-                keyboardType="number-pad"
-                maxLength={12}
-                placeholder="Enter administrator PIN"
+                style={styles.input}
+                value={adminName}
+                onChangeText={setAdminName}
+                placeholder="Administrator full name"
+                autoCapitalize="words"
                 editable={!isWorking}
               />
+
+              <Text style={styles.label}>
+                Administrator member number
+              </Text>
+              <TextInput
+                style={styles.input}
+                value={adminMemberNumber}
+                onChangeText={setAdminMemberNumber}
+                placeholder={`Example: KYA${selectedDigits}001`}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                editable={!isWorking}
+              />
+
+              <Text style={styles.label}>Administrator PIN</Text>
+              <View style={styles.inputRow}>
+                <TextInput
+                  style={styles.flexInput}
+                  value={adminPin}
+                  onChangeText={(value) =>
+                    setAdminPin(
+                      value.replace(/\D/g, '').slice(0, 12),
+                    )
+                  }
+                  secureTextEntry={!showAdminPin}
+                  keyboardType="number-pad"
+                  maxLength={12}
+                  placeholder="Enter administrator PIN"
+                  editable={!isWorking}
+                />
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    showAdminPin
+                      ? 'Hide administrator PIN'
+                      : 'Show administrator PIN'
+                  }
+                  style={styles.visibilityButton}
+                  onPress={() =>
+                    setShowAdminPin((visible) => !visible)
+                  }
+                  disabled={isWorking}
+                >
+                  <Text style={styles.visibilityText}>
+                    {showAdminPin ? 'Hide' : 'Show'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
               <TouchableOpacity
-                accessibilityRole="button"
-                accessibilityLabel={showAdminPin ? 'Hide administrator PIN' : 'Show administrator PIN'}
-                style={styles.visibilityButton}
-                onPress={() => setShowAdminPin((visible) => !visible)}
+                style={[
+                  styles.signInButton,
+                  isWorking && styles.disabled,
+                ]}
+                onPress={() => void signInForSelectedGroup()}
                 disabled={isWorking}
               >
-                <Text style={styles.visibilityText}>
-                  {showAdminPin ? 'Hide' : 'Show'}
-                </Text>
+                {isWorking
+                  ? <ActivityIndicator color="#fff" />
+                  : (
+                    <Text style={styles.buttonText}>
+                      Sign in for selected group
+                    </Text>
+                  )}
               </TouchableOpacity>
             </View>
-
-            <TouchableOpacity
-              style={[styles.signInButton, isWorking && styles.disabled]}
-              onPress={() => void signInForSelectedGroup()}
-              disabled={isWorking}
-            >
-              {isWorking
-                ? <ActivityIndicator color="#fff" />
-                : <Text style={styles.buttonText}>Sign in for selected group</Text>}
-            </TouchableOpacity>
-          </View>
-        )}
+          )}
 
         <Text style={styles.sectionHeading}>Backup includes</Text>
+
         {sections.map((section) => (
           <View key={section.label} style={styles.card}>
             <View style={styles.check}>
@@ -519,6 +576,7 @@ export default function CloudBackupScreen() {
           Enter the same passphrase on a replacement phone to decrypt this
           backup. Cloudflare cannot recover a forgotten passphrase.
         </Text>
+
         <View style={styles.passphraseRow}>
           <TextInput
             value={passphrase}
@@ -535,9 +593,15 @@ export default function CloudBackupScreen() {
           />
           <TouchableOpacity
             accessibilityRole="button"
-            accessibilityLabel={showPassphrase ? 'Hide passphrase' : 'Show passphrase'}
+            accessibilityLabel={
+              showPassphrase
+                ? 'Hide passphrase'
+                : 'Show passphrase'
+            }
             style={styles.visibilityButton}
-            onPress={() => setShowPassphrase((visible) => !visible)}
+            onPress={() =>
+              setShowPassphrase((visible) => !visible)
+            }
             disabled={isWorking}
           >
             <Text style={styles.visibilityText}>
@@ -550,10 +614,17 @@ export default function CloudBackupScreen() {
           <View style={styles.progressBox}>
             <ActivityIndicator color="#16a34a" size="small" />
             <Text style={styles.progressText}>
-              {isBackingUp ? `Creating encrypted backup... ${progress}%` : 'Working...'}
+              {isBackingUp
+                ? `Creating encrypted backup... ${progress}%`
+                : 'Working...'}
             </Text>
             <View style={styles.barBg}>
-              <View style={[styles.barFill, { width: `${progress}%` }]} />
+              <View
+                style={[
+                  styles.barFill,
+                  { width: `${progress}%` },
+                ]}
+              />
             </View>
           </View>
         )}
@@ -564,16 +635,24 @@ export default function CloudBackupScreen() {
             onPress={() => navigation.goBack()}
             disabled={isWorking}
           >
-            <Text style={[styles.btnText, styles.backText]}>{'<- Back'}</Text>
+            <Text style={[styles.btnText, styles.backText]}>
+              {'<- Back'}
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.btn, styles.next, isWorking && styles.disabled]}
+            style={[
+              styles.btn,
+              styles.next,
+              (isWorking || isLoading) && styles.disabled,
+            ]}
             onPress={() => void startBackup()}
             disabled={isWorking || isLoading}
           >
             <Text style={styles.btnText}>
-              {isBackingUp ? 'Backing up...' : 'Backup selected group'}
+              {isBackingUp
+                ? 'Backing up...'
+                : 'Backup selected group'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -689,9 +768,20 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 3,
   },
-  match: { color: '#15803d', fontSize: 11, marginTop: 5 },
-  noMatch: { color: '#b45309', fontSize: 11, marginTop: 5 },
-  radio: { color: '#16a34a', fontSize: 19 },
+  match: {
+    color: '#15803d',
+    fontSize: 11,
+    marginTop: 5,
+  },
+  noMatch: {
+    color: '#b45309',
+    fontSize: 11,
+    marginTop: 5,
+  },
+  radio: {
+    color: '#16a34a',
+    fontSize: 19,
+  },
   adminCard: {
     backgroundColor: '#fffbeb',
     borderWidth: 1,
@@ -779,9 +869,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 10,
   },
-  checkText: { color: '#fff', fontWeight: '700', fontSize: 12 },
+  checkText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 12,
+  },
   sectionText: { flex: 1 },
-  cardLabel: { fontSize: 13, fontWeight: '600', color: '#0f172a' },
+  cardLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
   cardDesc: {
     fontSize: 12,
     color: '#64748b',
@@ -829,7 +927,10 @@ const styles = StyleSheet.create({
     marginTop: 8,
     overflow: 'hidden',
   },
-  barFill: { height: 7, backgroundColor: '#16a34a' },
+  barFill: {
+    height: 7,
+    backgroundColor: '#16a34a',
+  },
   navRow: { flexDirection: 'row', marginTop: 16 },
   btn: {
     flex: 1,
@@ -843,9 +944,25 @@ const styles = StyleSheet.create({
   back: { backgroundColor: '#e2e8f0' },
   next: { backgroundColor: '#16a34a' },
   disabled: { opacity: 0.6 },
-  buttonText: { fontWeight: '700', color: '#fff', fontSize: 12 },
-  btnText: { fontWeight: '700', color: '#fff', fontSize: 12 },
+  buttonText: {
+    fontWeight: '700',
+    color: '#fff',
+    fontSize: 12,
+  },
+  btnText: {
+    fontWeight: '700',
+    color: '#fff',
+    fontSize: 12,
+  },
   backText: { color: '#0f172a' },
-  doneBtn: { marginTop: 10, padding: 12, alignItems: 'center' },
-  doneText: { color: '#16a34a', fontWeight: '700', fontSize: 13 },
+  doneBtn: {
+    marginTop: 10,
+    padding: 12,
+    alignItems: 'center',
+  },
+  doneText: {
+    color: '#16a34a',
+    fontWeight: '700',
+    fontSize: 13,
+  },
 });
