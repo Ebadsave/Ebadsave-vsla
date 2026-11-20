@@ -11,27 +11,16 @@ import {
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 
- import { getActiveGroup } from '../database/database';
--import { saveAutomaticCloudBackupPassphrase } from '../database/backup';
-+import {
-+  formatFileSize,
-+  saveAutomaticCloudBackupPassphrase,
-+} from '../database/backup';
- import { getCloudflareSessionGroupId } from '../services/cloudflareApi';
- import {
-   listCloudGroupBackups,
-   uploadGroupDatabaseBackupToCloud,
--  formatFileSize,
- } from './backup';
-
- ...
-
--  useFocusEffect(loadLastBackup);
-+  useFocusEffect(
-+    useCallback(() => {
-+      void loadLastBackup();
-+    }, [loadLastBackup]),
-+  );
+import { getActiveGroup } from '../database/database';
+import {
+  formatFileSize,
+  saveAutomaticCloudBackupPassphrase,
+} from '../database/backup';
+import { getCloudflareSessionGroupId } from '../services/cloudflareApi';
+import {
+  listCloudGroupBackups,
+  uploadGroupDatabaseBackupToCloud,
+} from './backup';
 
 export default function CloudBackupScreen() {
   const navigation: any = useNavigation();
@@ -60,7 +49,11 @@ export default function CloudBackupScreen() {
     }
   }, []);
 
-  useFocusEffect(loadLastBackup);
+  useFocusEffect(
+    useCallback(() => {
+      void loadLastBackup();
+    }, [loadLastBackup]),
+  );
 
   const startBackup = async () => {
     if (passphrase.trim().length < 12) {
@@ -206,7 +199,11 @@ export default function CloudBackupScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.btn, styles.next, isBackingUp ? styles.disabled : null]}
+          style={[
+            styles.btn,
+            styles.next,
+            isBackingUp ? styles.disabled : null,
+          ]}
           onPress={startBackup}
           disabled={isBackingUp}
         >
