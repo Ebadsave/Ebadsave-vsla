@@ -11,14 +11,27 @@ import {
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 
-import { getActiveGroup } from '../database/database';
-import { saveAutomaticCloudBackupPassphrase } from '../database/backup';
-import { getCloudflareSessionGroupId } from '../services/cloudflareApi';
-import {
-  listCloudGroupBackups,
-  uploadGroupDatabaseBackupToCloud,
-  formatFileSize,
-} from './backup';
+ import { getActiveGroup } from '../database/database';
+-import { saveAutomaticCloudBackupPassphrase } from '../database/backup';
++import {
++  formatFileSize,
++  saveAutomaticCloudBackupPassphrase,
++} from '../database/backup';
+ import { getCloudflareSessionGroupId } from '../services/cloudflareApi';
+ import {
+   listCloudGroupBackups,
+   uploadGroupDatabaseBackupToCloud,
+-  formatFileSize,
+ } from './backup';
+
+ ...
+
+-  useFocusEffect(loadLastBackup);
++  useFocusEffect(
++    useCallback(() => {
++      void loadLastBackup();
++    }, [loadLastBackup]),
++  );
 
 export default function CloudBackupScreen() {
   const navigation: any = useNavigation();
