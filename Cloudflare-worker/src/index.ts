@@ -132,6 +132,92 @@ async function bootstrapAdmin(request: Request, env: Env): Promise<Response> {
     return json({ error: 'server_pin_pepper_not_configured' }, 500);
   }
 
+  async function resetMemberPin(
+  request: Request,
+  env: Env,
+  claims: JwtClaims,
+): Promise<Response> {
+  if (claims.role !== 'admin') {
+    return json({ error: 'admin_required' }, 403);
+  }
+
+  if (!env.PIN_PEPPER || env.PIN_PEPPER.length < 32) {
+    return json({ error: 'server_pin_pepper_not_configured' }, 500);
+  }
+
+  const body = await readJson(request);
+  if (
+    !body ||
+    typeof body.memberNumber !== 'string' ||
+    typeof body.pin !== 'string' ||
+    typeof body.confirmPin !== 'string'
+  ) {
+    return json({ error: 'member_number_and_pin_confirmation_required' }, 400);
+  }
+
+  const memberNumber = normalizeMemberNumber(body.memberNumber)
+    .replace(/\s+/g, '');
+
+  if (!validMemberNumber(memberNumber)) {
+    return json({ error: 'invalid_member_number' }, 400);
+  }
+  if (!/^\d{6,12}$/.test(body.pin)) {
+    return json({ error: 'invalid_pin' }, 400);
+  }
+  if (body.pin !== body.confirmPin) {
+    return json({ error: 'pin_confirmation_mismatch' }, 400);
+  }
+
+  // The target lookup and update are both scoped to the authenticated admin's
+  // group. Admin accounts themselves are deliberately excluded from this flow.
+  const target = await env.DB.prepare(
+    `SELECT user_id AS userId, role
+     FROM auth_users
+     WHERE group_id = ?
+       AND UPPER(REPLACE(member_number, ' ', '')) = ?
+       AND status = 'active'
+       AND role IN ('member', 'executive')
+     LIMIT 1`,
+  )
+    .bind(claims.groupId, memberNumber)
+    .first<{ userId: string; role: string }>();
+
+  if (!target) {
+    return json({ error: 'active_group_member_not_found' }, 404);
+  }
+
+  const verifier = await createPinVerifier(body.pin, env.PIN_PEPPER);
+
+  const updated = await env.DB.prepare(
+    `UPDATE auth_users
+     SET pin_hash = ?,
+         pin_salt = ?,
+         failed_attempts = 0,
+         locked_until = NULL,
+         updated_at = datetime('now')
+     WHERE user_id = ?
+       AND group_id = ?
+       AND status = 'active'
+       AND role IN ('member', 'executive')`,
+  )
+    .bind(verifier.pinHash, verifier.pinSalt, target.userId, claims.groupId)
+    .run();
+
+  if (Number(updated.meta?.changes ?? 0) !== 1) {
+    return json({ error: 'member_pin_reset_not_applied' }, 409);
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO auth_events
+     (user_id, group_id, event_type, result, created_at)
+     VALUES (?, ?, 'member_pin_reset_by_admin', 'success', datetime('now'))`,
+  )
+    .bind(target.userId, claims.groupId)
+    .run();
+
+  return json({ ok: true, memberNumber, pinReset: true });
+}
+  
   const body = await readJson(request);
   if (!body || typeof body.groupNumber !== 'string' ||
       typeof body.memberNumber !== 'string' || typeof body.memberName !== 'string' ||
@@ -290,6 +376,10 @@ async function login(request: Request, env: Env): Promise<Response> {
   if (user.role === 'admin') {
     if (typeof body.memberName !== 'string' || body.memberName.trim().length < 2) {
       return json({ error: 'admin_name_required' }, 401);
+    }
+    if (url.pathname === '/v1/auth/users/reset-pin' && request.method === 'POST') {
+  response = await resetMemberPin(request, env, claims);
+  return cors(response, request);
     }
     const adminProfile = await env.DB.prepare(
       `SELECT member_name AS memberName FROM group_admin_profiles
