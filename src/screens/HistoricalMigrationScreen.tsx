@@ -12,7 +12,6 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import {
-  canManageHistoricalEntries,
   getMembersByGroupId,
   createHistoricalMigrationImport,
   getHistoricalMigrationImports,
@@ -57,14 +56,14 @@ const categories: {
   label: string;
 }[] = [
   { value: 'savings', label: '💰 Savings' },
-  { value: 'previous_loan_balance', label: '📋 Old loan balance' },
+  { value: 'previous_loan_balance', label: '📋 Previous loan' },
   { value: 'fine', label: '⚠️ Fines' },
   { value: 'insurance', label: '🛡️ Insurance' },
   { value: 'loan_issued', label: '🤝 Loans given' },
   { value: 'loan_repayment', label: '💵 Loan payments' },
   { value: 'group_income', label: 'Other money received' },
   { value: 'group_expense', label: 'Money spent' },
-  { value: 'other', label: 'External loan / other record' },
+  { value: 'other', label: 'External loan / other' },
 ];
 
 const evidenceTypes: {
@@ -87,9 +86,7 @@ const statusLabel: Record<string, string> = {
   rejected: 'Not approved',
 };
 
-const needsMember = (
-  category: HistoricalMigrationCategory,
-) =>
+const needsMember = (category: HistoricalMigrationCategory) =>
   [
     'savings',
     'loan_issued',
@@ -99,9 +96,7 @@ const needsMember = (
     'insurance',
   ].includes(category);
 
-const categoryLabel = (
-  value: HistoricalMigrationCategory,
-) =>
+const categoryLabel = (value: HistoricalMigrationCategory) =>
   categories.find(item => item.value === value)?.label ||
   value.replace(/_/g, ' ');
 
@@ -113,7 +108,7 @@ export default function HistoricalMigrationScreen({
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [canManage, setCanManage] = useState(false);
+  const [canManage, setCanManage] = useState(true);
 
   const [imports, setImports] = useState<HistoricalMigrationImport[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
@@ -170,20 +165,15 @@ export default function HistoricalMigrationScreen({
     setLoading(true);
 
     try {
-      const [
-        loadedImports,
-        loadedMembers,
-        adminAllowed,
-        loadedClosure,
-      ] = await Promise.all([
-        getHistoricalMigrationImports(groupId),
-        getMembersByGroupId(groupId),
-        canManageHistoricalEntries(groupId, executiveMemberId),
-        getHistoricalMigrationClosureStatus(groupId),
-      ]);
+      const [loadedImports, loadedMembers, loadedClosure] =
+        await Promise.all([
+          getHistoricalMigrationImports(groupId),
+          getMembersByGroupId(groupId),
+          getHistoricalMigrationClosureStatus(groupId),
+        ]);
 
       setClosureStatus(loadedClosure);
-      setCanManage(adminAllowed && !loadedClosure.closed);
+      setCanManage(!loadedClosure.closed);
       setImports(loadedImports);
 
       setMembers(
@@ -194,15 +184,11 @@ export default function HistoricalMigrationScreen({
 
       if (selectedImport) {
         const fresh =
-          loadedImports.find(item => item.id === selectedImport.id) ||
-          null;
+          loadedImports.find(item => item.id === selectedImport.id) || null;
 
         setSelectedImport(fresh);
-
         setDrafts(
-          fresh
-            ? await getHistoricalMigrationDrafts(fresh.id, groupId)
-            : [],
+          fresh ? await getHistoricalMigrationDrafts(fresh.id, groupId) : [],
         );
       }
     } catch (e) {
@@ -213,7 +199,7 @@ export default function HistoricalMigrationScreen({
     } finally {
       setLoading(false);
     }
-  }, [groupId, executiveMemberId, selectedImport?.id]);
+  }, [groupId, selectedImport?.id]);
 
   const loadReconciliation = async () => {
     setReconciliationLoading(true);
@@ -246,9 +232,7 @@ export default function HistoricalMigrationScreen({
     setAmountsReviewed(false);
 
     try {
-      setDrafts(
-        await getHistoricalMigrationDrafts(item.id, groupId),
-      );
+      setDrafts(await getHistoricalMigrationDrafts(item.id, groupId));
     } catch (e) {
       Alert.alert(
         'Could not open records',
@@ -258,14 +242,6 @@ export default function HistoricalMigrationScreen({
   };
 
   const enterMigrationRecords = async () => {
-    if (!canManage) {
-      Alert.alert(
-        'Not allowed',
-        'Only an authorised group administrator can enter old records.',
-      );
-      return;
-    }
-
     if (closureStatus?.closed) {
       Alert.alert(
         'Records already closed',
@@ -277,15 +253,12 @@ export default function HistoricalMigrationScreen({
     setSaving(true);
 
     try {
-      const latestImports =
-        await getHistoricalMigrationImports(groupId);
-
+      const latestImports = await getHistoricalMigrationImports(groupId);
       setImports(latestImports);
 
       if (latestImports.length === 0) {
         setSelectedImport(null);
         setDrafts([]);
-
         Alert.alert(
           'Add the old book first',
           'First register the paper book, photo or other record in Step 1.',
@@ -319,11 +292,8 @@ export default function HistoricalMigrationScreen({
   };
 
   const saveImport = async () => {
-    if (!canManage) {
-      Alert.alert(
-        'Not allowed',
-        'Only an authorised group administrator can register old records.',
-      );
+    if (closureStatus?.closed) {
+      Alert.alert('Records closed', 'Old-record entry has already been closed.');
       return;
     }
 
@@ -353,9 +323,7 @@ export default function HistoricalMigrationScreen({
       setReference('');
       setNotes('');
 
-      const latestImports =
-        await getHistoricalMigrationImports(groupId);
-
+      const latestImports = await getHistoricalMigrationImports(groupId);
       setImports(latestImports);
 
       const item = latestImports.find(i => i.id === id);
@@ -381,26 +349,25 @@ export default function HistoricalMigrationScreen({
   };
 
   const saveDraft = async () => {
-    if (!canManage) {
+    if (!selectedImport) {
       Alert.alert(
-        'Not allowed',
-        'Only an authorised group administrator can enter old records.',
+        'Choose an old book',
+        'Open an old book or record before adding entries.',
       );
       return;
     }
 
-    if (!selectedImport) return;
+    if (closureStatus?.closed) {
+      Alert.alert('Records closed', 'Old-record entry has already been closed.');
+      return;
+    }
 
     const iso = date.trim();
 
     if (
       !/^\d{4}-\d{2}-\d{2}$/.test(iso) ||
-      !Number.isFinite(
-        new Date(`${iso}T12:00:00.000Z`).getTime(),
-      ) ||
-      new Date(`${iso}T12:00:00.000Z`)
-        .toISOString()
-        .slice(0, 10) !== iso
+      !Number.isFinite(new Date(`${iso}T12:00:00.000Z`).getTime()) ||
+      new Date(`${iso}T12:00:00.000Z`).toISOString().slice(0, 10) !== iso
     ) {
       Alert.alert(
         'Check the date',
@@ -412,10 +379,7 @@ export default function HistoricalMigrationScreen({
     const value = Number(amount.replace(/,/g, ''));
 
     if (!Number.isFinite(value) || value < 0) {
-      Alert.alert(
-        'Check the amount',
-        'Enter a correct amount in UGX.',
-      );
+      Alert.alert('Check the amount', 'Enter a correct amount in UGX.');
       return;
     }
 
@@ -452,10 +416,7 @@ export default function HistoricalMigrationScreen({
       }
 
       setDrafts(
-        await getHistoricalMigrationDrafts(
-          selectedImport.id,
-          groupId,
-        ),
+        await getHistoricalMigrationDrafts(selectedImport.id, groupId),
       );
 
       resetDraft();
@@ -475,7 +436,7 @@ export default function HistoricalMigrationScreen({
   };
 
   const submitForVerification = async () => {
-    if (!canManage || !selectedImport) return;
+    if (!selectedImport) return;
 
     Alert.alert(
       'Send entries for checking?',
@@ -485,29 +446,27 @@ export default function HistoricalMigrationScreen({
         {
           text: 'Send',
           onPress: async () => {
+            setSaving(true);
             try {
               await setHistoricalMigrationDraftsAwaitingVerification(
                 selectedImport.id,
                 groupId,
               );
 
-              await load();
+              const refreshed = await getHistoricalMigrationImports(groupId);
+              setImports(refreshed);
 
-              const fresh = (
-                await getHistoricalMigrationImports(groupId)
-              ).find(i => i.id === selectedImport.id);
-
+              const fresh = refreshed.find(i => i.id === selectedImport.id);
               if (fresh) await openImport(fresh);
 
-              Alert.alert(
-                'Sent',
-                'The entries are now waiting to be checked.',
-              );
+              Alert.alert('Sent', 'The entries are now waiting to be checked.');
             } catch (e) {
               Alert.alert(
                 'Could not send entries',
                 e instanceof Error ? e.message : 'Please try again.',
               );
+            } finally {
+              setSaving(false);
             }
           },
         },
@@ -516,7 +475,7 @@ export default function HistoricalMigrationScreen({
   };
 
   const returnSelectedImportForCorrection = () => {
-    if (!canManage || !selectedImport) return;
+    if (!selectedImport) return;
 
     Alert.alert(
       'Return these entries?',
@@ -526,6 +485,7 @@ export default function HistoricalMigrationScreen({
         {
           text: 'Return',
           onPress: async () => {
+            setSaving(true);
             try {
               await returnHistoricalMigrationImportForCorrection(
                 groupId,
@@ -533,23 +493,20 @@ export default function HistoricalMigrationScreen({
                 executiveMemberId,
               );
 
-              await load();
+              const refreshed = await getHistoricalMigrationImports(groupId);
+              setImports(refreshed);
 
-              const fresh = (
-                await getHistoricalMigrationImports(groupId)
-              ).find(i => i.id === selectedImport.id);
-
+              const fresh = refreshed.find(i => i.id === selectedImport.id);
               if (fresh) await openImport(fresh);
 
-              Alert.alert(
-                'Returned',
-                'You can now correct the entries.',
-              );
+              Alert.alert('Returned', 'You can now correct the entries.');
             } catch (e) {
               Alert.alert(
                 'Could not return entries',
                 e instanceof Error ? e.message : 'Please try again.',
               );
+            } finally {
+              setSaving(false);
             }
           },
         },
@@ -558,13 +515,10 @@ export default function HistoricalMigrationScreen({
   };
 
   const approveSelectedImport = async () => {
-    if (!canManage || !selectedImport) return;
+    if (!selectedImport) return;
 
     if (selectedImport.status !== 'awaiting_verification') {
-      Alert.alert(
-        'Not ready',
-        'Send the entries for checking first.',
-      );
+      Alert.alert('Not ready', 'Send the entries for checking first.');
       return;
     }
 
@@ -586,7 +540,6 @@ export default function HistoricalMigrationScreen({
           style: 'destructive',
           onPress: async () => {
             setSaving(true);
-
             try {
               const result = await approveHistoricalMigrationImport({
                 group_id: groupId,
@@ -601,12 +554,10 @@ export default function HistoricalMigrationScreen({
               setAmountsReviewed(false);
               setMemberConfirmations({});
 
-              await load();
+              const refreshed = await getHistoricalMigrationImports(groupId);
+              setImports(refreshed);
 
-              const fresh = (
-                await getHistoricalMigrationImports(groupId)
-              ).find(i => i.id === selectedImport.id);
-
+              const fresh = refreshed.find(i => i.id === selectedImport.id);
               if (fresh) await openImport(fresh);
 
               Alert.alert(
@@ -649,6 +600,7 @@ export default function HistoricalMigrationScreen({
           text: 'Remove',
           style: 'destructive',
           onPress: async () => {
+            setSaving(true);
             try {
               await deleteHistoricalMigrationDraft(
                 draft.id,
@@ -657,10 +609,7 @@ export default function HistoricalMigrationScreen({
               );
 
               setDrafts(
-                await getHistoricalMigrationDrafts(
-                  draft.import_id,
-                  groupId,
-                ),
+                await getHistoricalMigrationDrafts(draft.import_id, groupId),
               );
 
               if (editing?.id === draft.id) resetDraft();
@@ -669,6 +618,8 @@ export default function HistoricalMigrationScreen({
                 'Could not remove entry',
                 e instanceof Error ? e.message : 'Please try again.',
               );
+            } finally {
+              setSaving(false);
             }
           },
         },
@@ -677,7 +628,7 @@ export default function HistoricalMigrationScreen({
   };
 
   const finalizeHistoricalMigration = () => {
-    if (!canManage || !closureStatus || closureStatus.closed) return;
+    if (!closureStatus || closureStatus.closed) return;
 
     const amounts = [
       closureCash,
@@ -686,9 +637,7 @@ export default function HistoricalMigrationScreen({
       closureLoans,
     ].map(v => Number(v.replace(/,/g, '')));
 
-    if (
-      amounts.some(v => !Number.isFinite(v) || v < 0)
-    ) {
+    if (amounts.some(v => !Number.isFinite(v) || v < 0)) {
       Alert.alert(
         'Check the amounts',
         'Enter correct amounts for all four group balances.',
@@ -705,10 +654,7 @@ export default function HistoricalMigrationScreen({
     }
 
     if (!Object.values(closureChecks).every(Boolean)) {
-      Alert.alert(
-        'Finish the checklist',
-        'Tick all six boxes after completing each check.',
-      );
+      Alert.alert('Finish the checklist', 'Tick all six boxes after each check.');
       return;
     }
 
@@ -722,7 +668,6 @@ export default function HistoricalMigrationScreen({
           style: 'destructive',
           onPress: async () => {
             setSaving(true);
-
             try {
               await closeHistoricalMigration({
                 group_id: groupId,
@@ -779,10 +724,7 @@ export default function HistoricalMigrationScreen({
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
       >
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.back}
-        >
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.back}>
           <Text style={styles.backText}>‹ Back</Text>
         </TouchableOpacity>
 
@@ -794,20 +736,19 @@ export default function HistoricalMigrationScreen({
           </Text>
         </View>
 
-        {!canManage && (
+        {closureStatus?.closed && (
           <View style={styles.notice}>
             <Text style={styles.noticeText}>
-              View only. Ask an authorised group administrator to enter or approve records.
+              Old-record entry has been closed for this group.
             </Text>
           </View>
         )}
 
-        {/* STEP 1 */}
         <View style={styles.stepCard}>
           <Text style={styles.stepNumber}>STEP 1</Text>
           <Text style={styles.stepTitle}>Register old group books</Text>
           <Text style={styles.help}>
-            First save the book, page, photo or recording where the old information is written.
+            Save the book, page, photo or recording where the old information is written.
           </Text>
 
           <Text style={styles.label}>What are you using?</Text>
@@ -815,6 +756,7 @@ export default function HistoricalMigrationScreen({
             {evidenceTypes.map(item => (
               <TouchableOpacity
                 key={item.value}
+                disabled={saving || !!closureStatus?.closed}
                 onPress={() => setEvidenceType(item.value)}
                 style={[
                   styles.chip,
@@ -839,6 +781,7 @@ export default function HistoricalMigrationScreen({
             onChangeText={setEvidenceName}
             style={styles.input}
             placeholder="Example: Savings book 2021"
+            editable={!saving && !closureStatus?.closed}
           />
 
           <Text style={styles.label}>Saved file location (optional)</Text>
@@ -848,6 +791,7 @@ export default function HistoricalMigrationScreen({
             style={styles.input}
             placeholder="File location, if available"
             autoCapitalize="none"
+            editable={!saving && !closureStatus?.closed}
           />
 
           <Text style={styles.label}>Book page number (optional)</Text>
@@ -856,6 +800,7 @@ export default function HistoricalMigrationScreen({
             onChangeText={setReference}
             style={styles.input}
             placeholder="Example: Page 14"
+            editable={!saving && !closureStatus?.closed}
           />
 
           <Text style={styles.label}>Extra information (optional)</Text>
@@ -865,31 +810,25 @@ export default function HistoricalMigrationScreen({
             style={[styles.input, styles.multiline]}
             multiline
             placeholder="Write any helpful information"
+            editable={!saving && !closureStatus?.closed}
           />
 
           <TouchableOpacity
-            disabled={saving || !canManage}
+            disabled={saving || !!closureStatus?.closed}
             onPress={() => void saveImport()}
-            style={[
-              styles.primary,
-              (saving || !canManage) && styles.disabled,
-            ]}
+            style={[styles.primary, (saving || closureStatus?.closed) && styles.disabled]}
           >
             <Text style={styles.primaryText}>
-              {saving ? 'Saving…' : 'Save this book or record'}
+              {saving ? 'Saving…' : 'SAVE BOOK / RECORD'}
             </Text>
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.heading}>
-          Saved books and records ({imports.length})
-        </Text>
+        <Text style={styles.heading}>Saved books and records ({imports.length})</Text>
 
         {imports.length === 0 ? (
           <View style={styles.card}>
-            <Text style={styles.empty}>
-              No old books or records have been saved yet.
-            </Text>
+            <Text style={styles.empty}>No old books or records have been saved yet.</Text>
           </View>
         ) : (
           imports.map(item => (
@@ -905,51 +844,43 @@ export default function HistoricalMigrationScreen({
                 {item.evidence_name || `Record #${item.id}`}
               </Text>
               <Text style={styles.meta}>
-                {item.evidence_type.toUpperCase()}
-                {' • '}
-                {item.draft_count || 0} entries
-                {' • '}
+                {item.evidence_type.toUpperCase()} • {item.draft_count || 0} entries •{' '}
                 {new Date(item.created_at).toLocaleDateString()}
               </Text>
               <Text style={styles.status}>
                 {statusLabel[item.status] || item.status}
               </Text>
               {!!item.source_reference && (
-                <Text style={styles.meta}>
-                  Page: {item.source_reference}
-                </Text>
+                <Text style={styles.meta}>Page: {item.source_reference}</Text>
               )}
             </TouchableOpacity>
           ))
         )}
 
-        {/* STEP 2 */}
         <View style={styles.stepCard}>
           <Text style={styles.stepNumber}>STEP 2</Text>
           <Text style={styles.stepTitle}>Enter old money records</Text>
           <Text style={styles.help}>
-            Choose what you are entering, choose the member, then enter the date and amount exactly as shown in the old book.
+            Open a saved book, choose the record type and member, then enter the date and amount.
           </Text>
 
           <TouchableOpacity
-            disabled={!canManage || saving}
+            disabled={saving || !!closureStatus?.closed}
             onPress={() => void enterMigrationRecords()}
             style={[
               styles.enterRecordsButton,
-              (!canManage || saving) && styles.disabled,
+              (saving || closureStatus?.closed) && styles.disabled,
             ]}
           >
             <Text style={styles.enterRecordsButtonText}>
-              {saving ? 'Opening…' : 'OPEN OLD RECORDS'}
+              {saving ? 'OPENING…' : 'ENTER OLD RECORDS'}
             </Text>
           </TouchableOpacity>
 
           {selectedImport && (
             <>
               <View style={styles.selectedBook}>
-                <Text style={styles.selectedBookTitle}>
-                  Book being used
-                </Text>
+                <Text style={styles.selectedBookTitle}>Book being used</Text>
                 <Text style={styles.selectedBookName}>
                   {selectedImport.evidence_name}
                 </Text>
@@ -960,6 +891,13 @@ export default function HistoricalMigrationScreen({
                 {categories.map(item => (
                   <TouchableOpacity
                     key={item.value}
+                    disabled={
+                      saving ||
+                      !!closureStatus?.closed ||
+                      ['approved', 'awaiting_verification'].includes(
+                        selectedImport.status,
+                      )
+                    }
                     onPress={() => {
                       setCategory(item.value);
                       if (!needsMember(item.value)) setMemberId(null);
@@ -985,14 +923,19 @@ export default function HistoricalMigrationScreen({
                 <>
                   <Text style={styles.label}>Choose the member</Text>
                   {members.length === 0 ? (
-                    <Text style={styles.empty}>
-                      No members found in this group.
-                    </Text>
+                    <Text style={styles.empty}>No members found in this group.</Text>
                   ) : (
                     <View style={styles.memberList}>
                       {members.map(member => (
                         <TouchableOpacity
                           key={member.id}
+                          disabled={
+                            saving ||
+                            !!closureStatus?.closed ||
+                            ['approved', 'awaiting_verification'].includes(
+                              selectedImport.status,
+                            )
+                          }
                           onPress={() => setMemberId(member.id)}
                           style={[
                             styles.memberButton,
@@ -1030,6 +973,11 @@ export default function HistoricalMigrationScreen({
                 style={styles.input}
                 placeholder="YYYY-MM-DD  Example: 2021-04-17"
                 keyboardType="numbers-and-punctuation"
+                editable={
+                  !saving &&
+                  !closureStatus?.closed &&
+                  !['approved', 'awaiting_verification'].includes(selectedImport.status)
+                }
               />
 
               <Text style={styles.label}>Amount in UGX</Text>
@@ -1039,15 +987,23 @@ export default function HistoricalMigrationScreen({
                 style={styles.input}
                 placeholder="Enter amount"
                 keyboardType="decimal-pad"
+                editable={
+                  !saving &&
+                  !closureStatus?.closed &&
+                  !['approved', 'awaiting_verification'].includes(selectedImport.status)
+                }
               />
 
               <TouchableOpacity
+                disabled={
+                  saving ||
+                  !!closureStatus?.closed ||
+                  ['approved', 'awaiting_verification'].includes(selectedImport.status)
+                }
                 onPress={() => setOpening(value => !value)}
                 style={styles.checkRow}
               >
-                <Text style={styles.checkbox}>
-                  {opening ? '☑' : '☐'}
-                </Text>
+                <Text style={styles.checkbox}>{opening ? '☑' : '☐'}</Text>
                 <Text style={styles.chipText}>
                   This is the amount the member already had
                 </Text>
@@ -1060,103 +1016,88 @@ export default function HistoricalMigrationScreen({
                 style={[styles.input, styles.multiline]}
                 multiline
                 placeholder="Enter any other details from the old book"
+                editable={
+                  !saving &&
+                  !closureStatus?.closed &&
+                  !['approved', 'awaiting_verification'].includes(selectedImport.status)
+                }
               />
 
               <TouchableOpacity
-                disabled={saving || !canManage}
+                disabled={
+                  saving ||
+                  !!closureStatus?.closed ||
+                  ['approved', 'awaiting_verification'].includes(selectedImport.status)
+                }
                 onPress={() => void saveDraft()}
                 style={[
                   styles.primary,
-                  (saving || !canManage) && styles.disabled,
+                  (
+                    saving ||
+                    closureStatus?.closed ||
+                    ['approved', 'awaiting_verification'].includes(selectedImport.status)
+                  ) && styles.disabled,
                 ]}
               >
                 <Text style={styles.primaryText}>
-                  {editing ? 'Save changes' : 'Add this old record'}
+                  {saving ? 'SAVING…' : editing ? 'SAVE CHANGES' : 'SAVE OLD RECORD'}
                 </Text>
               </TouchableOpacity>
 
               {!!editing && (
-                <TouchableOpacity
-                  onPress={resetDraft}
-                  style={styles.secondary}
-                >
+                <TouchableOpacity onPress={resetDraft} style={styles.secondary}>
                   <Text style={styles.secondaryText}>Cancel changes</Text>
                 </TouchableOpacity>
               )}
 
-              <Text style={styles.heading}>
-                Entries added ({drafts.length})
-              </Text>
+              <Text style={styles.heading}>Entries added ({drafts.length})</Text>
 
               {drafts.length === 0 ? (
-                <Text style={styles.empty}>
-                  No entries added to this book yet.
-                </Text>
+                <Text style={styles.empty}>No entries added to this book yet.</Text>
               ) : (
                 drafts.map(draft => (
                   <View key={draft.id} style={styles.draftCard}>
                     <Text style={styles.importTitle}>
-                      {categoryLabel(draft.category)}
-                      {' • UGX '}
+                      {categoryLabel(draft.category)} • UGX{' '}
                       {Number(draft.amount).toLocaleString()}
                     </Text>
-
                     <Text style={styles.meta}>
-                      {draft.transaction_date}
-                      {' • '}
-                      {draft.member_name || 'Group record'}
-                      {draft.member_number
-                        ? ` (${draft.member_number})`
-                        : ''}
+                      {draft.transaction_date} • {draft.member_name || 'Group record'}
+                      {draft.member_number ? ` (${draft.member_number})` : ''}
                     </Text>
-
                     {draft.is_opening_balance === 1 && (
-                      <Text style={styles.opening}>
-                        Old balance already held
-                      </Text>
+                      <Text style={styles.opening}>Old balance already held</Text>
                     )}
-
                     {!!draft.description && (
-                      <Text style={styles.meta}>
-                        {draft.description}
-                      </Text>
+                      <Text style={styles.meta}>{draft.description}</Text>
                     )}
-
-                    <View style={styles.row}>
-                      <TouchableOpacity
-                        disabled={!canManage}
-                        onPress={() => editDraft(draft)}
-                        style={[
-                          styles.smallButton,
-                          !canManage && styles.disabled,
-                        ]}
-                      >
-                        <Text style={styles.smallText}>Change</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        disabled={!canManage}
-                        onPress={() => removeDraft(draft)}
-                        style={[
-                          styles.smallButton,
-                          styles.delete,
-                          !canManage && styles.disabled,
-                        ]}
-                      >
-                        <Text style={[styles.smallText, styles.deleteText]}>
-                          Remove
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
+                    {!['approved', 'awaiting_verification'].includes(selectedImport.status) && (
+                      <View style={styles.row}>
+                        <TouchableOpacity
+                          disabled={saving || !!closureStatus?.closed}
+                          onPress={() => editDraft(draft)}
+                          style={styles.smallButton}
+                        >
+                          <Text style={styles.smallText}>Change</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          disabled={saving || !!closureStatus?.closed}
+                          onPress={() => removeDraft(draft)}
+                          style={[styles.smallButton, styles.delete]}
+                        >
+                          <Text style={[styles.smallText, styles.deleteText]}>
+                            Remove
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
                   </View>
                 ))
               )}
 
               {selectedImport.status === 'awaiting_verification' && (
                 <View style={styles.approvalCard}>
-                  <Text style={styles.approvalTitle}>
-                    Check the entries
-                  </Text>
+                  <Text style={styles.approvalTitle}>Check the entries</Text>
                   <Text style={styles.help}>
                     Compare every member name and number with the group member list. Check the old book, dates and amounts.
                   </Text>
@@ -1166,23 +1107,16 @@ export default function HistoricalMigrationScreen({
                     .map(draft => (
                       <View key={`verify-${draft.id}`} style={styles.verifyRow}>
                         <Text style={styles.verifyTitle}>
-                          {draft.member_name || 'Member not selected'}
-                          {' • '}
+                          {draft.member_name || 'Member not selected'} •{' '}
                           {categoryLabel(draft.category)}
                         </Text>
-
                         <Text style={styles.meta}>
-                          Entry #{draft.id}
-                          {' • UGX '}
-                          {Number(draft.amount).toLocaleString()}
-                          {' • '}
+                          Entry #{draft.id} • UGX {Number(draft.amount).toLocaleString()} •{' '}
                           {draft.transaction_date}
                         </Text>
-
                         <Text style={styles.label}>
                           Enter this member's number to confirm
                         </Text>
-
                         <TextInput
                           value={memberConfirmations[draft.id] || ''}
                           onChangeText={value =>
@@ -1199,28 +1133,18 @@ export default function HistoricalMigrationScreen({
                     ))}
 
                   <TouchableOpacity
-                    onPress={() =>
-                      setEvidenceReviewed(value => !value)
-                    }
+                    onPress={() => setEvidenceReviewed(value => !value)}
                     style={styles.checkRow}
                   >
-                    <Text style={styles.checkbox}>
-                      {evidenceReviewed ? '☑' : '☐'}
-                    </Text>
-                    <Text style={styles.chipText}>
-                      I checked the old book or record.
-                    </Text>
+                    <Text style={styles.checkbox}>{evidenceReviewed ? '☑' : '☐'}</Text>
+                    <Text style={styles.chipText}>I checked the old book or record.</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
-                    onPress={() =>
-                      setAmountsReviewed(value => !value)
-                    }
+                    onPress={() => setAmountsReviewed(value => !value)}
                     style={styles.checkRow}
                   >
-                    <Text style={styles.checkbox}>
-                      {amountsReviewed ? '☑' : '☐'}
-                    </Text>
+                    <Text style={styles.checkbox}>{amountsReviewed ? '☑' : '☐'}</Text>
                     <Text style={styles.chipText}>
                       I checked all names, dates and amounts.
                     </Text>
@@ -1233,35 +1157,23 @@ export default function HistoricalMigrationScreen({
                   </View>
 
                   <TouchableOpacity
-                    disabled={!canManage}
+                    disabled={saving}
                     onPress={returnSelectedImportForCorrection}
                     style={styles.secondary}
                   >
-                    <Text style={styles.secondaryText}>
-                      Return entries for correction
-                    </Text>
+                    <Text style={styles.secondaryText}>Return entries for correction</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
-                    disabled={
-                      !canManage ||
-                      saving ||
-                      !evidenceReviewed ||
-                      !amountsReviewed
-                    }
+                    disabled={saving || !evidenceReviewed || !amountsReviewed}
                     onPress={() => void approveSelectedImport()}
                     style={[
                       styles.primary,
-                      (
-                        !canManage ||
-                        saving ||
-                        !evidenceReviewed ||
-                        !amountsReviewed
-                      ) && styles.disabled,
+                      (saving || !evidenceReviewed || !amountsReviewed) && styles.disabled,
                     ]}
                   >
                     <Text style={styles.primaryText}>
-                      {saving ? 'Saving…' : 'Approve and save entries'}
+                      {saving ? 'SAVING…' : 'APPROVE AND SAVE ENTRIES'}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -1269,9 +1181,7 @@ export default function HistoricalMigrationScreen({
 
               {selectedImport.status === 'approved' && (
                 <View style={styles.approvalCard}>
-                  <Text style={styles.approvalTitle}>
-                    ✓ Entries approved and saved
-                  </Text>
+                  <Text style={styles.approvalTitle}>✓ Entries approved and saved</Text>
                   <Text style={styles.help}>
                     These entries are saved and cannot be changed here.
                   </Text>
@@ -1280,31 +1190,25 @@ export default function HistoricalMigrationScreen({
 
               <TouchableOpacity
                 disabled={
-                  !canManage ||
+                  saving ||
                   drafts.length === 0 ||
-                  [
-                    'approved',
-                    'rejected',
-                    'awaiting_verification',
-                  ].includes(selectedImport.status)
+                  ['approved', 'rejected', 'awaiting_verification'].includes(
+                    selectedImport.status,
+                  )
                 }
                 onPress={() => void submitForVerification()}
                 style={[
                   styles.primary,
                   (
-                    !canManage ||
+                    saving ||
                     drafts.length === 0 ||
-                    [
-                      'approved',
-                      'rejected',
-                      'awaiting_verification',
-                    ].includes(selectedImport.status)
+                    ['approved', 'rejected', 'awaiting_verification'].includes(
+                      selectedImport.status,
+                    )
                   ) && styles.disabled,
                 ]}
               >
-                <Text style={styles.primaryText}>
-                  Send entries for checking
-                </Text>
+                <Text style={styles.primaryText}>SEND ENTRIES FOR CHECKING</Text>
               </TouchableOpacity>
 
               <Text style={styles.help}>
@@ -1314,12 +1218,11 @@ export default function HistoricalMigrationScreen({
           )}
         </View>
 
-        {/* STEP 3 */}
         <View style={styles.stepCard}>
           <Text style={styles.stepNumber}>STEP 3</Text>
           <Text style={styles.stepTitle}>Check all the records</Text>
           <Text style={styles.help}>
-            Check how many old books and entries have been saved and approved. Compare the figures with the original books.
+            Compare the saved and approved entries with the original books.
           </Text>
 
           <TouchableOpacity
@@ -1327,7 +1230,6 @@ export default function HistoricalMigrationScreen({
             disabled={reconciliationLoading}
             onPress={() => {
               setShowReconciliation(value => !value);
-
               if (!showReconciliation || !reconciliation) {
                 void loadReconciliation();
               }
@@ -1335,10 +1237,10 @@ export default function HistoricalMigrationScreen({
           >
             <Text style={styles.primaryText}>
               {reconciliationLoading
-                ? 'Preparing report…'
+                ? 'PREPARING REPORT…'
                 : showReconciliation
-                  ? 'Hide report'
-                  : 'Open checking report'}
+                  ? 'HIDE REPORT'
+                  : 'OPEN CHECKING REPORT'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -1359,10 +1261,7 @@ export default function HistoricalMigrationScreen({
               <ActivityIndicator size="small" color="#16a34a" />
             ) : reconciliation ? (
               <>
-                <Text style={styles.reportSection}>
-                  Old books and records
-                </Text>
-
+                <Text style={styles.reportSection}>Old books and records</Text>
                 <View style={styles.reportGrid}>
                   <Metric label="All books" value={reconciliation.imports.total} />
                   <Metric label="Approved" value={reconciliation.imports.approved} />
@@ -1378,7 +1277,6 @@ export default function HistoricalMigrationScreen({
                 </View>
 
                 <Text style={styles.reportSection}>Entries</Text>
-
                 <View style={styles.reportGrid}>
                   <Metric label="All entries" value={reconciliation.drafts.total} />
                   <Metric label="Approved" value={reconciliation.drafts.approved} />
@@ -1391,86 +1289,51 @@ export default function HistoricalMigrationScreen({
                 </Text>
 
                 <Text style={styles.reportSection}>Entries by type</Text>
-
                 {reconciliation.categories.length === 0 ? (
                   <Text style={styles.empty}>No entries have been added.</Text>
                 ) : (
                   reconciliation.categories.map(row => (
-                    <View
-                      key={row.category}
-                      style={styles.reportCategoryRow}
-                    >
+                    <View key={row.category} style={styles.reportCategoryRow}>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.importTitle}>
-                          {categoryLabel(
-                            row.category as HistoricalMigrationCategory,
-                          )}
+                          {categoryLabel(row.category as HistoricalMigrationCategory)}
                         </Text>
-
                         <Text style={styles.meta}>
-                          {row.approved_count} approved out of{' '}
-                          {row.total_count}
+                          {row.approved_count} approved out of {row.total_count}
                         </Text>
-
                         {row.opening_savings_amount > 0 && (
                           <Text style={styles.reportNote}>
-                            Old savings: UGX{' '}
-                            {row.opening_savings_amount.toLocaleString()}
+                            Old savings: UGX {row.opening_savings_amount.toLocaleString()}
                           </Text>
                         )}
                       </View>
-
                       <Text style={styles.reportAmount}>
-                        {row.category === 'previous_loan_balance'
-                          ? 'Old balance: '
-                          : 'UGX '}
+                        {row.category === 'previous_loan_balance' ? 'Old balance: ' : 'UGX '}
                         {row.approved_amount.toLocaleString()}
                       </Text>
                     </View>
                   ))
                 )}
 
-                <Text style={styles.reportSection}>
-                  Recently approved entries
-                </Text>
-
+                <Text style={styles.reportSection}>Recently approved entries</Text>
                 {reconciliation.recent_approvals.length === 0 ? (
-                  <Text style={styles.empty}>
-                    No entries have been approved yet.
-                  </Text>
+                  <Text style={styles.empty}>No entries have been approved yet.</Text>
                 ) : (
                   reconciliation.recent_approvals.map(row => (
-                    <View
-                      key={row.draft_id}
-                      style={styles.reportAuditRow}
-                    >
+                    <View key={row.draft_id} style={styles.reportAuditRow}>
                       <Text style={styles.importTitle}>
-                        Entry #{row.draft_id}
-                        {' • '}
-                        {categoryLabel(
-                          row.category as HistoricalMigrationCategory,
-                        )}
+                        Entry #{row.draft_id} •{' '}
+                        {categoryLabel(row.category as HistoricalMigrationCategory)}
                       </Text>
-
                       <Text style={styles.meta}>
-                        {row.transaction_date}
-                        {' • '}
-                        {row.member_name}
-                        {row.member_number
-                          ? ` (${row.member_number})`
-                          : ''}
+                        {row.transaction_date} • {row.member_name}
+                        {row.member_number ? ` (${row.member_number})` : ''}
                       </Text>
-
                       <Text style={styles.meta}>
-                        UGX {row.amount.toLocaleString()}
-                        {' • '}
-                        Checked by {row.approver_name}
+                        UGX {row.amount.toLocaleString()} • Checked by {row.approver_name}
                       </Text>
-
                       <Text style={styles.meta}>
-                        Book: {row.source_reference || 'Not given'}
-                        {' • '}
-                        {row.approved_at}
+                        Book: {row.source_reference || 'Not given'} • {row.approved_at}
                       </Text>
                     </View>
                   ))
@@ -1486,7 +1349,6 @@ export default function HistoricalMigrationScreen({
           </View>
         )}
 
-        {/* STEP 4 */}
         <View style={styles.finalCard}>
           <Text style={styles.finalKicker}>STEP 4</Text>
           <Text style={styles.finalTitle}>Finish and open the digital records</Text>
@@ -1496,19 +1358,14 @@ export default function HistoricalMigrationScreen({
 
           {closureStatus?.closed && closureStatus.closure ? (
             <View style={styles.closedPanel}>
-              <Text style={styles.closedTitle}>
-                ✓ OLD RECORDS CLOSED
-              </Text>
-
+              <Text style={styles.closedTitle}>✓ OLD RECORDS CLOSED</Text>
               <Text style={styles.meta}>
-                Finished by {closureStatus.closure.signed_off_by_name}
-                {' '}({closureStatus.closure.signed_off_by_number})
+                Finished by {closureStatus.closure.signed_off_by_name} (
+                {closureStatus.closure.signed_off_by_number})
               </Text>
-
               <Text style={styles.meta}>
                 Date: {closureStatus.closure.closure_date}
               </Text>
-
               <Text style={styles.closedFoot}>
                 The old records are saved. The group can continue using Ebadsave for normal meetings and new transactions.
               </Text>
@@ -1517,35 +1374,16 @@ export default function HistoricalMigrationScreen({
             <>
               {closureStatus && (
                 <View style={styles.reportGrid}>
-                  <Metric
-                    label="Group members"
-                    value={closureStatus.active_member_count}
-                  />
-                  <Metric
-                    label="Approved books"
-                    value={closureStatus.approved_imports}
-                  />
-                  <Metric
-                    label="Approved entries"
-                    value={closureStatus.approved_drafts}
-                  />
-                  <Metric
-                    label="Books still waiting"
-                    value={closureStatus.unresolved_imports}
-                  />
-                  <Metric
-                    label="Entries not approved"
-                    value={closureStatus.unapproved_drafts}
-                  />
-                  <Metric
-                    label="Not approved"
-                    value={closureStatus.rejected_imports}
-                  />
+                  <Metric label="Group members" value={closureStatus.active_member_count} />
+                  <Metric label="Approved books" value={closureStatus.approved_imports} />
+                  <Metric label="Approved entries" value={closureStatus.approved_drafts} />
+                  <Metric label="Books still waiting" value={closureStatus.unresolved_imports} />
+                  <Metric label="Entries not approved" value={closureStatus.unapproved_drafts} />
+                  <Metric label="Not approved" value={closureStatus.rejected_imports} />
                 </View>
               )}
 
               <Text style={styles.label}>Check the group's money (UGX)</Text>
-
               <Text style={styles.label}>Cash held by the group</Text>
               <TextInput
                 value={closureCash}
@@ -1554,7 +1392,6 @@ export default function HistoricalMigrationScreen({
                 style={styles.input}
                 placeholder="0"
               />
-
               <Text style={styles.label}>Insurance money</Text>
               <TextInput
                 value={closureInsurance}
@@ -1563,7 +1400,6 @@ export default function HistoricalMigrationScreen({
                 style={styles.input}
                 placeholder="0"
               />
-
               <Text style={styles.label}>Fines money</Text>
               <TextInput
                 value={closureFines}
@@ -1572,7 +1408,6 @@ export default function HistoricalMigrationScreen({
                 style={styles.input}
                 placeholder="0"
               />
-
               <Text style={styles.label}>Money members still owe</Text>
               <TextInput
                 value={closureLoans}
@@ -1583,7 +1418,6 @@ export default function HistoricalMigrationScreen({
               />
 
               <Text style={styles.label}>Final checks</Text>
-
               {([
                 ['paper', 'I checked the old books against the entries.'],
                 ['members', 'I checked every member’s savings and loan balance.'],
@@ -1595,10 +1429,7 @@ export default function HistoricalMigrationScreen({
                 <TouchableOpacity
                   key={key}
                   onPress={() =>
-                    setClosureChecks(old => ({
-                      ...old,
-                      [key]: !old[key],
-                    }))
+                    setClosureChecks(old => ({ ...old, [key]: !old[key] }))
                   }
                   style={styles.checkRow}
                 >
@@ -1618,7 +1449,7 @@ export default function HistoricalMigrationScreen({
                 placeholder="Write what was checked and agreed by the group."
               />
 
-              {closureStatus && (
+              {closureStatus &&
                 (
                   closureStatus.unresolved_imports > 0 ||
                   closureStatus.unapproved_drafts > 0 ||
@@ -1629,12 +1460,10 @@ export default function HistoricalMigrationScreen({
                       Not ready yet. Finish checking all books and entries, and approve at least one entry before closing.
                     </Text>
                   </View>
-                )
-              )}
+                )}
 
               <TouchableOpacity
                 disabled={
-                  !canManage ||
                   saving ||
                   !closureStatus ||
                   closureStatus.closed ||
@@ -1647,7 +1476,6 @@ export default function HistoricalMigrationScreen({
                 style={[
                   styles.primary,
                   (
-                    !canManage ||
                     saving ||
                     !closureStatus ||
                     closureStatus.closed ||
@@ -1659,7 +1487,7 @@ export default function HistoricalMigrationScreen({
                 ]}
               >
                 <Text style={styles.primaryText}>
-                  {saving ? 'Finishing…' : 'FINISH AND CLOSE OLD RECORDS'}
+                  {saving ? 'FINISHING…' : 'FINISH AND CLOSE OLD RECORDS'}
                 </Text>
               </TouchableOpacity>
             </>
@@ -1686,50 +1514,20 @@ function Metric({
 }
 
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: '#f3f6f4',
-  },
-  center: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  content: {
-    padding: 13,
-    paddingBottom: 38,
-  },
-  back: {
-    paddingVertical: 10,
-  },
-  backText: {
-    color: '#166534',
-    fontWeight: '300',
-    fontSize: 14,
-  },
+  safe: { flex: 1, backgroundColor: '#f3f6f4' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  content: { padding: 13, paddingBottom: 38 },
+  back: { paddingVertical: 10 },
+  backText: { color: '#166534', fontWeight: '200', fontSize: 14 },
   header: {
     backgroundColor: '#14532d',
     borderRadius: 16,
     padding: 17,
     marginBottom: 16,
   },
-  kicker: {
-    color: '#bbf7d0',
-    fontSize: 11,
-    fontWeight: '400',
-  },
-  title: {
-    color: '#fff',
-    fontSize: 21,
-    fontWeight: '400',
-    marginTop: 7,
-  },
-  sub: {
-    color: '#f0fdf4',
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 8,
-  },
+  kicker: { color: '#bbf7d0', fontSize: 11, fontWeight: '400' },
+  title: { color: '#fff', fontSize: 21, fontWeight: '400', marginTop: 7 },
+  sub: { color: '#f0fdf4', fontSize: 13, lineHeight: 19, marginTop: 8 },
   stepCard: {
     backgroundColor: '#fff',
     borderRadius: 14,
@@ -1738,17 +1536,8 @@ const styles = StyleSheet.create({
     borderColor: '#dbe4dc',
     marginBottom: 13,
   },
-  stepNumber: {
-    color: '#16a34a',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  stepTitle: {
-    color: '#14532d',
-    fontSize: 18,
-    fontWeight: '400',
-    marginTop: 4,
-  },
+  stepNumber: { color: '#16a34a', fontSize: 12, fontWeight: '400' },
+  stepTitle: { color: '#14532d', fontSize: 18, fontWeight: '400', marginTop: 4 },
   heading: {
     fontSize: 16,
     fontWeight: '400',
@@ -1772,21 +1561,16 @@ const styles = StyleSheet.create({
     padding: 11,
     marginBottom: 10,
   },
-  noticeText: {
-    color: '#92400e',
-    fontSize: 12,
-    fontWeight: '300',
-    lineHeight: 17,
-  },
+  noticeText: { color: '#92400e', fontSize: 12, fontWeight: '200', lineHeight: 17 },
   label: {
     fontSize: 13,
-    fontWeight: '300',
+    fontWeight: '600',
     color: '#334155',
     marginTop: 12,
     marginBottom: 7,
   },
   input: {
-    minHeight: 46,
+    minHeight: 30,
     borderWidth: 1,
     borderColor: '#cbd5e1',
     borderRadius: 10,
@@ -1795,16 +1579,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
     backgroundColor: '#fff',
   },
-  multiline: {
-    minHeight: 75,
-    textAlignVertical: 'top',
-    paddingTop: 10,
-  },
-  chips: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 7,
-  },
+  multiline: { minHeight: 75, textAlignVertical: 'top', paddingTop: 10 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   chip: {
     borderWidth: 1,
     borderColor: '#cbd5e1',
@@ -1813,28 +1589,13 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     backgroundColor: '#f8fafc',
   },
-  chipOn: {
-    backgroundColor: '#166534',
-    borderColor: '#166534',
-  },
-  chipText: {
-    fontSize: 13,
-    color: '#334155',
-    fontWeight: '300',
-    flexShrink: 1,
-  },
-  chipTextOn: {
-    color: '#fff',
-  },
-  categoryGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 4,
-  },
+  chipOn: { backgroundColor: '#166534', borderColor: '#166534' },
+  chipText: { fontSize: 13, color: '#334155', fontWeight: '200', flexShrink: 1 },
+  chipTextOn: { color: '#fff' },
+  categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
   categoryButton: {
-    width: '48%',
-    minHeight: 52,
+    width: '30%',
+    minHeight: 40,
     borderWidth: 1,
     borderColor: '#bbf7d0',
     borderRadius: 10,
@@ -1845,12 +1606,10 @@ const styles = StyleSheet.create({
   categoryButtonText: {
     color: '#14532d',
     fontSize: 13,
-    fontWeight: '400',
+    fontWeight: '700',
     textAlign: 'center',
   },
-  memberList: {
-    gap: 7,
-  },
+  memberList: { gap: 7 },
   memberButton: {
     borderWidth: 1,
     borderColor: '#cbd5e1',
@@ -1858,23 +1617,10 @@ const styles = StyleSheet.create({
     padding: 11,
     backgroundColor: '#f8fafc',
   },
-  memberButtonOn: {
-    backgroundColor: '#166534',
-    borderColor: '#166534',
-  },
-  memberButtonText: {
-    fontSize: 14,
-    color: '#334155',
-    fontWeight: '400',
-  },
-  memberNumber: {
-    fontSize: 11,
-    color: '#64748b',
-    marginTop: 3,
-  },
-  memberNumberOn: {
-    color: '#dcfce7',
-  },
+  memberButtonOn: { backgroundColor: '#166534', borderColor: '#166534' },
+  memberButtonText: { fontSize: 14, color: '#334155', fontWeight: '300' },
+  memberNumber: { fontSize: 11, color: '#64748b', marginTop: 3 },
+  memberNumberOn: { color: '#dcfce7' },
   selectedBook: {
     backgroundColor: '#f0fdf4',
     borderColor: '#86efac',
@@ -1883,17 +1629,8 @@ const styles = StyleSheet.create({
     padding: 10,
     marginTop: 10,
   },
-  selectedBookTitle: {
-    color: '#166534',
-    fontSize: 11,
-    fontWeight: '400',
-  },
-  selectedBookName: {
-    color: '#14532d',
-    fontSize: 14,
-    fontWeight: '400',
-    marginTop: 3,
-  },
+  selectedBookTitle: { color: '#166534', fontSize: 11, fontWeight: '300' },
+  selectedBookName: { color: '#14532d', fontSize: 14, fontWeight: '300', marginTop: 3 },
   primary: {
     minHeight: 49,
     backgroundColor: '#16a34a',
@@ -1903,24 +1640,10 @@ const styles = StyleSheet.create({
     marginTop: 14,
     paddingHorizontal: 12,
   },
-  primaryText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '400',
-    textAlign: 'center',
-  },
-  secondary: {
-    padding: 12,
-    alignItems: 'center',
-  },
-  secondaryText: {
-    color: '#475569',
-    fontWeight: '300',
-    fontSize: 13,
-  },
-  disabled: {
-    opacity: 0.35,
-  },
+  primaryText: { color: '#fff', fontSize: 14, fontWeight: '400', textAlign: 'center' },
+  secondary: { padding: 12, alignItems: 'center' },
+  secondaryText: { color: '#475569', fontWeight: '300', fontSize: 13 },
+  disabled: { opacity: 0.35 },
   importCard: {
     backgroundColor: '#fff',
     borderRadius: 12,
@@ -1929,40 +1652,24 @@ const styles = StyleSheet.create({
     padding: 12,
     marginBottom: 8,
   },
-  selected: {
-    borderColor: '#16a34a',
-    borderWidth: 2,
-  },
-  importTitle: {
-    fontSize: 13,
-    fontWeight: '300',
-    color: '#111827',
-  },
-  meta: {
-    fontSize: 12,
-    color: '#64748b',
-    marginTop: 4,
-    lineHeight: 17,
-  },
+  selected: { borderColor: '#16a34a', borderWidth: 2 },
+  importTitle: { fontSize: 13, fontWeight: '400', color: '#111827' },
+  meta: { fontSize: 12, color: '#64748b', marginTop: 4, lineHeight: 17 },
   status: {
     alignSelf: 'flex-start',
     marginTop: 7,
     backgroundColor: '#fef3c7',
     color: '#92400e',
     fontSize: 11,
-    fontWeight: '300',
+    fontWeight: '400',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 7,
     overflow: 'hidden',
   },
-  empty: {
-    color: '#64748b',
-    fontSize: 13,
-    lineHeight: 18,
-  },
+  empty: { color: '#64748b', fontSize: 13, lineHeight: 18 },
   enterRecordsButton: {
-    minHeight: 52,
+    minHeight: 40,
     backgroundColor: '#14532d',
     borderRadius: 10,
     alignItems: 'center',
@@ -1974,20 +1681,12 @@ const styles = StyleSheet.create({
   },
   enterRecordsButtonText: {
     color: '#fff',
-    fontSize: 13,
-    fontWeight: '400',
+    fontSize: 10,
+    fontWeight: '300',
     textAlign: 'center',
   },
-  checkRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
-    marginTop: 12,
-  },
-  checkbox: {
-    fontSize: 21,
-    color: '#166534',
-  },
+  checkRow: { flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 12 },
+  checkbox: { fontSize: 21, color: '#166534' },
   draftCard: {
     backgroundColor: '#fff',
     borderWidth: 1,
@@ -1996,17 +1695,8 @@ const styles = StyleSheet.create({
     padding: 11,
     marginTop: 8,
   },
-  opening: {
-    color: '#92400e',
-    fontWeight: '400',
-    fontSize: 11,
-    marginTop: 5,
-  },
-  row: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 10,
-  },
+  opening: { color: '#92400e', fontWeight: '300', fontSize: 11, marginTop: 5 },
+  row: { flexDirection: 'row', gap: 8, marginTop: 10 },
   smallButton: {
     flex: 1,
     backgroundColor: '#dbeafe',
@@ -2014,22 +1704,10 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
   },
-  delete: {
-    backgroundColor: '#fee2e2',
-  },
-  smallText: {
-    color: '#1d4ed8',
-    fontWeight: '400',
-  },
-  deleteText: {
-    color: '#b91c1c',
-  },
-  help: {
-    fontSize: 12,
-    color: '#64748b',
-    lineHeight: 18,
-    marginTop: 7,
-  },
+  delete: { backgroundColor: '#fee2e2' },
+  smallText: { color: '#1d4ed8', fontWeight: '200' },
+  deleteText: { color: '#b91c1c' },
+  help: { fontSize: 12, color: '#64748b', lineHeight: 18, marginTop: 7 },
   approvalCard: {
     backgroundColor: '#f0fdf4',
     borderWidth: 1,
@@ -2039,12 +1717,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginBottom: 10,
   },
-  approvalTitle: {
-    fontSize: 15,
-    fontWeight: '400',
-    color: '#14532d',
-    marginBottom: 6,
-  },
+  approvalTitle: { fontSize: 15, fontWeight: '200', color: '#14532d', marginBottom: 6 },
   verifyRow: {
     backgroundColor: '#fff',
     borderWidth: 1,
@@ -2053,47 +1726,25 @@ const styles = StyleSheet.create({
     padding: 10,
     marginTop: 9,
   },
-  verifyTitle: {
-    fontSize: 13,
-    fontWeight: '300',
-    color: '#14532d',
-  },
-  validationNotice: {
-    backgroundColor: '#ecfdf5',
-    borderRadius: 8,
-    padding: 10,
-    marginTop: 10,
-  },
-  validationText: {
-    fontSize: 12,
-    color: '#166534',
-    lineHeight: 17,
-  },
+  verifyTitle: { fontSize: 13, fontWeight: '300', color: '#14532d' },
+  validationNotice: { backgroundColor: '#ecfdf5', borderRadius: 8, padding: 10, marginTop: 10 },
+  validationText: { fontSize: 12, color: '#166534', lineHeight: 17 },
   reportHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  reportRefresh: {
-    color: '#166534',
-    fontWeight: '300',
-    padding: 8,
-  },
+  reportRefresh: { color: '#166534', fontWeight: '300', padding: 8 },
   reportSection: {
     fontSize: 14,
-    fontWeight: '400',
+    fontWeight: '300',
     color: '#14532d',
     marginTop: 17,
     marginBottom: 8,
   },
-  reportGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 10,
-  },
+  reportGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
   reportMetric: {
-    minWidth: '25%',
+    minWidth: '20%',
     flexGrow: 1,
     backgroundColor: '#f0fdf4',
     borderRadius: 8,
@@ -2101,23 +1752,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#bbf7d0',
   },
-  reportValue: {
-    fontSize: 18,
-    fontWeight: '400',
-    color: '#14532d',
-  },
-  reportLabel: {
-    fontSize: 11,
-    color: '#475569',
-    fontWeight: '300',
-    marginTop: 3,
-  },
-  reportNote: {
-    fontSize: 12,
-    color: '#64748b',
-    lineHeight: 17,
-    marginTop: 7,
-  },
+  reportValue: { fontSize: 18, fontWeight: '300', color: '#14532d' },
+  reportLabel: { fontSize: 11, color: '#475569', fontWeight: '300', marginTop: 3 },
+  reportNote: { fontSize: 12, color: '#64748b', lineHeight: 17, marginTop: 7 },
   reportCategoryRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2126,11 +1763,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#e2e8f0',
     paddingVertical: 9,
   },
-  reportAmount: {
-    fontSize: 12,
-    fontWeight: '400',
-    color: '#14532d',
-  },
+  reportAmount: { fontSize: 12, fontWeight: '300', color: '#14532d' },
   reportAuditRow: {
     borderLeftWidth: 3,
     borderLeftColor: '#16a34a',
@@ -2147,11 +1780,7 @@ const styles = StyleSheet.create({
     padding: 10,
     marginTop: 13,
   },
-  reportWarningText: {
-    fontSize: 12,
-    color: '#9a3412',
-    lineHeight: 17,
-  },
+  reportWarningText: { fontSize: 12, color: '#9a3412', lineHeight: 17 },
   finalCard: {
     backgroundColor: '#eff6ff',
     borderRadius: 12,
@@ -2160,17 +1789,8 @@ const styles = StyleSheet.create({
     borderColor: '#93c5fd',
     marginBottom: 12,
   },
-  finalKicker: {
-    color: '#1d4ed8',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  finalTitle: {
-    color: '#1e3a8a',
-    fontSize: 17,
-    fontWeight: '400',
-    marginTop: 4,
-  },
+  finalKicker: { color: '#1d4ed8', fontSize: 12, fontWeight: '300' },
+  finalTitle: { color: '#1e3a8a', fontSize: 17, fontWeight: '300', marginTop: 4 },
   closedPanel: {
     backgroundColor: '#f0fdf4',
     borderColor: '#86efac',
@@ -2179,16 +1799,6 @@ const styles = StyleSheet.create({
     padding: 11,
     marginTop: 10,
   },
-  closedTitle: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#166534',
-    marginBottom: 7,
-  },
-  closedFoot: {
-    fontSize: 12,
-    color: '#166534',
-    lineHeight: 17,
-    marginTop: 9,
-  },
+  closedTitle: { fontSize: 13, fontWeight: '300', color: '#166534', marginBottom: 7 },
+  closedFoot: { fontSize: 10, color: '#166534', lineHeight: 17, marginTop: 9 },
 });
