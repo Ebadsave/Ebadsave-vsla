@@ -56,10 +56,10 @@ const categories: {
   label: string;
 }[] = [
   { value: 'savings', label: '💰 Savings' },
-  { value: 'previous_loan_balance', label: '📋 Previous loan' },
+  { value: 'previous_loan_balance', label: '📋 Previous Loan' },
   { value: 'fine', label: '⚠️ Fines' },
   { value: 'insurance', label: '🛡️ Insurance' },
-  { value: 'loan_issued', label: '🤝 Loans given' },
+  { value: 'loan_issued', label: '🤝 Current Loan' },
   { value: 'loan_repayment', label: '💵 Loan payments' },
   { value: 'group_income', label: 'Other money received' },
   { value: 'group_expense', label: 'Money spent' },
@@ -84,6 +84,30 @@ const statusLabel: Record<string, string> = {
   awaiting_verification: 'Waiting for checking',
   approved: 'Approved and saved',
   rejected: 'Not approved',
+};
+
+// --- DD-MM-YYYY helpers ---
+const formatDDMMYYYY = (iso: string) => {
+  if (!iso || iso.length < 10) return iso;
+  const [y, m, d] = iso.slice(0, 10).split('-');
+  return `${d}-${m}-${y}`;
+};
+const toISO = (ddmmyyyy: string) => {
+  const [d, m, y] = ddmmyyyy.trim().split('-');
+  return `${y}-${m}-${d}`;
+};
+const isValidDDMMYYYY = (v: string) => {
+  if (!/^\d{2}-\d{2}-\d{4}$/.test(v)) return false;
+  const iso = toISO(v);
+  const dt = new Date(`${iso}T12:00:00.000Z`);
+  return Number.isFinite(dt.getTime()) && dt.toISOString().slice(0, 10) === iso;
+};
+const isOverdue = (isoDate: string, balance: number) => {
+  if (!isoDate || balance <= 0) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const due = new Date(`${isoDate.slice(0, 10)}T00:00:00`);
+  return due < today;
 };
 
 const needsMember = (category: HistoricalMigrationCategory) =>
@@ -126,7 +150,7 @@ export default function HistoricalMigrationScreen({
   const [category, setCategory] =
     useState<HistoricalMigrationCategory>('savings');
   const [memberId, setMemberId] = useState<number | null>(null);
-  const [date, setDate] = useState('');
+  const [date, setDate] = useState(''); // DD-MM-YYYY
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [opening, setOpening] = useState(false);
@@ -161,9 +185,11 @@ export default function HistoricalMigrationScreen({
     backup: false,
   });
 
+  // Member detail like Loan Repayment
+  const [selectedMemberView, setSelectedMemberView] = useState<Member | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
-
     try {
       const [loadedImports, loadedMembers, loadedClosure] =
         await Promise.all([
@@ -171,21 +197,17 @@ export default function HistoricalMigrationScreen({
           getMembersByGroupId(groupId),
           getHistoricalMigrationClosureStatus(groupId),
         ]);
-
       setClosureStatus(loadedClosure);
       setCanManage(!loadedClosure.closed);
       setImports(loadedImports);
-
       setMembers(
         (loadedMembers as Member[])
           .slice()
           .sort((a, b) => a.full_name.localeCompare(b.full_name)),
       );
-
       if (selectedImport) {
         const fresh =
           loadedImports.find(item => item.id === selectedImport.id) || null;
-
         setSelectedImport(fresh);
         setDrafts(
           fresh ? await getHistoricalMigrationDrafts(fresh.id, groupId) : [],
@@ -203,7 +225,6 @@ export default function HistoricalMigrationScreen({
 
   const loadReconciliation = async () => {
     setReconciliationLoading(true);
-
     try {
       setReconciliation(
         await getHistoricalMigrationReconciliation(groupId),
@@ -230,7 +251,7 @@ export default function HistoricalMigrationScreen({
     setMemberConfirmations({});
     setEvidenceReviewed(false);
     setAmountsReviewed(false);
-
+    setSelectedMemberView(null);
     try {
       setDrafts(await getHistoricalMigrationDrafts(item.id, groupId));
     } catch (e) {
@@ -249,13 +270,10 @@ export default function HistoricalMigrationScreen({
       );
       return;
     }
-
     setSaving(true);
-
     try {
       const latestImports = await getHistoricalMigrationImports(groupId);
       setImports(latestImports);
-
       if (latestImports.length === 0) {
         setSelectedImport(null);
         setDrafts([]);
@@ -265,11 +283,9 @@ export default function HistoricalMigrationScreen({
         );
         return;
       }
-
       const target =
         latestImports.find(item => item.id === selectedImport?.id) ||
         latestImports[0];
-
       await openImport(target);
     } catch (e) {
       Alert.alert(
@@ -296,7 +312,6 @@ export default function HistoricalMigrationScreen({
       Alert.alert('Records closed', 'Old-record entry has already been closed.');
       return;
     }
-
     if (!evidenceName.trim()) {
       Alert.alert(
         'Enter the book name',
@@ -304,9 +319,7 @@ export default function HistoricalMigrationScreen({
       );
       return;
     }
-
     setSaving(true);
-
     try {
       const id = await createHistoricalMigrationImport({
         group_id: groupId,
@@ -317,23 +330,17 @@ export default function HistoricalMigrationScreen({
         notes: notes.trim(),
         created_by_member_id: executiveMemberId,
       });
-
       setEvidenceName('');
       setEvidenceUri('');
       setReference('');
       setNotes('');
-
       const latestImports = await getHistoricalMigrationImports(groupId);
       setImports(latestImports);
-
       const item = latestImports.find(i => i.id === id);
-
       if (item) {
         await openImport(item);
       }
-
       await load();
-
       Alert.alert(
         'Saved',
         'The old book or record has been saved. No group money has changed.',
@@ -356,48 +363,37 @@ export default function HistoricalMigrationScreen({
       );
       return;
     }
-
     if (closureStatus?.closed) {
       Alert.alert('Records closed', 'Old-record entry has already been closed.');
       return;
     }
-
-    const iso = date.trim();
-
-    if (
-      !/^\d{4}-\d{2}-\d{2}$/.test(iso) ||
-      !Number.isFinite(new Date(`${iso}T12:00:00.000Z`).getTime()) ||
-      new Date(`${iso}T12:00:00.000Z`).toISOString().slice(0, 10) !== iso
-    ) {
+    if (!isValidDDMMYYYY(date)) {
       Alert.alert(
         'Check the date',
-        'Enter the date as YYYY-MM-DD. Example: 2021-04-17.',
+        'Enter the date as DD-MM-YYYY. Example: 17-04-2021.',
       );
       return;
     }
-
+    const iso = toISO(date);
     const value = Number(amount.replace(/,/g, ''));
-
     if (!Number.isFinite(value) || value < 0) {
       Alert.alert('Check the amount', 'Enter a correct amount in UGX.');
       return;
     }
-
-    if (needsMember(category) && !memberId) {
+    const effectiveMemberId = selectedMemberView?.id ?? memberId;
+    if (needsMember(category) && !effectiveMemberId) {
       Alert.alert(
         'Choose a member',
         'Choose the member whose name is in the old book.',
       );
       return;
     }
-
     setSaving(true);
-
     try {
       const payload = {
         import_id: selectedImport.id,
         group_id: groupId,
-        member_id: needsMember(category) ? memberId : null,
+        member_id: needsMember(category) ? effectiveMemberId : null,
         category,
         transaction_date: iso,
         amount: value,
@@ -405,7 +401,6 @@ export default function HistoricalMigrationScreen({
         description: description.trim(),
         source_reference: selectedImport.source_reference || '',
       };
-
       if (editing) {
         await updateHistoricalMigrationDraft({
           ...payload,
@@ -414,13 +409,10 @@ export default function HistoricalMigrationScreen({
       } else {
         await createHistoricalMigrationDraft(payload);
       }
-
       setDrafts(
         await getHistoricalMigrationDrafts(selectedImport.id, groupId),
       );
-
       resetDraft();
-
       Alert.alert(
         'Entry saved',
         'This entry is waiting to be checked. It has not changed group money.',
@@ -437,7 +429,6 @@ export default function HistoricalMigrationScreen({
 
   const submitForVerification = async () => {
     if (!selectedImport) return;
-
     Alert.alert(
       'Send entries for checking?',
       'The entries will be sent for checking. They will not be added to group records until approved.',
@@ -452,13 +443,10 @@ export default function HistoricalMigrationScreen({
                 selectedImport.id,
                 groupId,
               );
-
               const refreshed = await getHistoricalMigrationImports(groupId);
               setImports(refreshed);
-
               const fresh = refreshed.find(i => i.id === selectedImport.id);
               if (fresh) await openImport(fresh);
-
               Alert.alert('Sent', 'The entries are now waiting to be checked.');
             } catch (e) {
               Alert.alert(
@@ -476,7 +464,6 @@ export default function HistoricalMigrationScreen({
 
   const returnSelectedImportForCorrection = () => {
     if (!selectedImport) return;
-
     Alert.alert(
       'Return these entries?',
       'The entries will go back for correction. No money will be added or removed.',
@@ -492,13 +479,10 @@ export default function HistoricalMigrationScreen({
                 selectedImport.id,
                 executiveMemberId,
               );
-
               const refreshed = await getHistoricalMigrationImports(groupId);
               setImports(refreshed);
-
               const fresh = refreshed.find(i => i.id === selectedImport.id);
               if (fresh) await openImport(fresh);
-
               Alert.alert('Returned', 'You can now correct the entries.');
             } catch (e) {
               Alert.alert(
@@ -516,12 +500,10 @@ export default function HistoricalMigrationScreen({
 
   const approveSelectedImport = async () => {
     if (!selectedImport) return;
-
     if (selectedImport.status !== 'awaiting_verification') {
       Alert.alert('Not ready', 'Send the entries for checking first.');
       return;
     }
-
     if (!evidenceReviewed || !amountsReviewed) {
       Alert.alert(
         'Check the two boxes',
@@ -529,7 +511,6 @@ export default function HistoricalMigrationScreen({
       );
       return;
     }
-
     Alert.alert(
       'Approve and save these entries?',
       'Only approve after checking the old book and member numbers carefully. Once approved, these entries will be added to the group records.',
@@ -549,17 +530,13 @@ export default function HistoricalMigrationScreen({
                 evidence_reviewed: evidenceReviewed,
                 amounts_reviewed: amountsReviewed,
               });
-
               setEvidenceReviewed(false);
               setAmountsReviewed(false);
               setMemberConfirmations({});
-
               const refreshed = await getHistoricalMigrationImports(groupId);
               setImports(refreshed);
-
               const fresh = refreshed.find(i => i.id === selectedImport.id);
               if (fresh) await openImport(fresh);
-
               Alert.alert(
                 'Entries approved',
                 `${result.approved_drafts} entries approved. ${result.posted_transactions} transactions saved, ${result.saved_opening_balances} opening savings balances saved, and ${result.saved_loan_snapshots} old loan balances saved.`,
@@ -584,7 +561,7 @@ export default function HistoricalMigrationScreen({
     setEditing(draft);
     setCategory(draft.category);
     setMemberId(draft.member_id);
-    setDate(draft.transaction_date);
+    setDate(formatDDMMYYYY(draft.transaction_date));
     setAmount(String(draft.amount));
     setDescription(draft.description);
     setOpening(!!draft.is_opening_balance);
@@ -607,11 +584,9 @@ export default function HistoricalMigrationScreen({
                 draft.import_id,
                 groupId,
               );
-
               setDrafts(
                 await getHistoricalMigrationDrafts(draft.import_id, groupId),
               );
-
               if (editing?.id === draft.id) resetDraft();
             } catch (e) {
               Alert.alert(
@@ -629,14 +604,12 @@ export default function HistoricalMigrationScreen({
 
   const finalizeHistoricalMigration = () => {
     if (!closureStatus || closureStatus.closed) return;
-
     const amounts = [
       closureCash,
       closureInsurance,
       closureFines,
       closureLoans,
     ].map(v => Number(v.replace(/,/g, '')));
-
     if (amounts.some(v => !Number.isFinite(v) || v < 0)) {
       Alert.alert(
         'Check the amounts',
@@ -644,7 +617,6 @@ export default function HistoricalMigrationScreen({
       );
       return;
     }
-
     if (closureNotes.trim().length < 12) {
       Alert.alert(
         'Add a note',
@@ -652,12 +624,10 @@ export default function HistoricalMigrationScreen({
       );
       return;
     }
-
     if (!Object.values(closureChecks).every(Boolean)) {
       Alert.alert('Finish the checklist', 'Tick all six boxes after each check.');
       return;
     }
-
     Alert.alert(
       'Finish entering old records?',
       'This will close the old-record entry process. Approved records will remain saved. Normal group meetings and new transactions can continue.',
@@ -684,13 +654,10 @@ export default function HistoricalMigrationScreen({
                 final_backup_completed: closureChecks.backup,
                 closure_notes: closureNotes.trim(),
               });
-
               const refreshed =
                 await getHistoricalMigrationClosureStatus(groupId);
-
               setClosureStatus(refreshed);
               setCanManage(false);
-
               Alert.alert(
                 'Finished',
                 'Old records have been closed and saved. The group can continue using Ebadsave for normal meetings and new transactions.',
@@ -717,6 +684,13 @@ export default function HistoricalMigrationScreen({
       </SafeAreaView>
     );
   }
+
+  const visibleDrafts = selectedMemberView
+    ? drafts.filter(d => d.member_id === selectedMemberView.id)
+    : drafts;
+  const previousLoans = visibleDrafts.filter(d => d.category === 'previous_loan_balance');
+  const currentLoans = visibleDrafts.filter(d => d.category === 'loan_issued');
+  const otherDrafts = visibleDrafts.filter(d => d.category !== 'previous_loan_balance' && d.category !== 'loan_issued');
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -845,7 +819,7 @@ export default function HistoricalMigrationScreen({
               </Text>
               <Text style={styles.meta}>
                 {item.evidence_type.toUpperCase()} • {item.draft_count || 0} entries •{' '}
-                {new Date(item.created_at).toLocaleDateString()}
+                {formatDDMMYYYY(item.created_at)}
               </Text>
               <Text style={styles.status}>
                 {statusLabel[item.status] || item.status}
@@ -861,7 +835,7 @@ export default function HistoricalMigrationScreen({
           <Text style={styles.stepNumber}>STEP 2</Text>
           <Text style={styles.stepTitle}>Enter old money records</Text>
           <Text style={styles.help}>
-            Open a saved book, choose the record type and member, then enter the date and amount.
+            Open a saved book, tap a member, then enter that member's records only.
           </Text>
 
           <TouchableOpacity
@@ -886,79 +860,23 @@ export default function HistoricalMigrationScreen({
                 </Text>
               </View>
 
-              <Text style={styles.label}>Choose the kind of record</Text>
-              <View style={styles.categoryGrid}>
-                {categories.map(item => (
-                  <TouchableOpacity
-                    key={item.value}
-                    disabled={
-                      saving ||
-                      !!closureStatus?.closed ||
-                      ['approved', 'awaiting_verification'].includes(
-                        selectedImport.status,
-                      )
-                    }
-                    onPress={() => {
-                      setCategory(item.value);
-                      if (!needsMember(item.value)) setMemberId(null);
-                    }}
-                    style={[
-                      styles.categoryButton,
-                      category === item.value && styles.chipOn,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.categoryButtonText,
-                        category === item.value && styles.chipTextOn,
-                      ]}
-                    >
-                      {item.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              {needsMember(category) && (
+              {!selectedMemberView && (
                 <>
                   <Text style={styles.label}>Choose the member</Text>
                   {members.length === 0 ? (
                     <Text style={styles.empty}>No members found in this group.</Text>
                   ) : (
-                    <View style={styles.memberList}>
+                    <View>
                       {members.map(member => (
                         <TouchableOpacity
                           key={member.id}
-                          disabled={
-                            saving ||
-                            !!closureStatus?.closed ||
-                            ['approved', 'awaiting_verification'].includes(
-                              selectedImport.status,
-                            )
-                          }
-                          onPress={() => setMemberId(member.id)}
-                          style={[
-                            styles.memberButton,
-                            memberId === member.id && styles.memberButtonOn,
-                          ]}
+                          disabled={saving || !!closureStatus?.closed}
+                          onPress={() => { setSelectedMemberView(member); setMemberId(member.id); }}
+                          style={styles.memberRow}
                         >
-                          <Text
-                            style={[
-                              styles.memberButtonText,
-                              memberId === member.id && styles.chipTextOn,
-                            ]}
-                          >
-                            {memberId === member.id ? '✓ ' : ''}
-                            {member.full_name}
-                          </Text>
-                          <Text
-                            style={[
-                              styles.memberNumber,
-                              memberId === member.id && styles.memberNumberOn,
-                            ]}
-                          >
-                            {member.member_number}
-                          </Text>
+                          <View style={styles.avatar}><Text>👤</Text></View>
+                          <Text style={styles.memberName}>{member.full_name}</Text>
+                          <Text style={styles.arrow}>›</Text>
                         </TouchableOpacity>
                       ))}
                     </View>
@@ -966,133 +884,193 @@ export default function HistoricalMigrationScreen({
                 </>
               )}
 
-              <Text style={styles.label}>Date written in the old book</Text>
-              <TextInput
-                value={date}
-                onChangeText={setDate}
-                style={styles.input}
-                placeholder="YYYY-MM-DD  Example: 2021-04-17"
-                keyboardType="numbers-and-punctuation"
-                editable={
-                  !saving &&
-                  !closureStatus?.closed &&
-                  !['approved', 'awaiting_verification'].includes(selectedImport.status)
-                }
-              />
-
-              <Text style={styles.label}>Amount in UGX</Text>
-              <TextInput
-                value={amount}
-                onChangeText={setAmount}
-                style={styles.input}
-                placeholder="Enter amount"
-                keyboardType="decimal-pad"
-                editable={
-                  !saving &&
-                  !closureStatus?.closed &&
-                  !['approved', 'awaiting_verification'].includes(selectedImport.status)
-                }
-              />
-
-              <TouchableOpacity
-                disabled={
-                  saving ||
-                  !!closureStatus?.closed ||
-                  ['approved', 'awaiting_verification'].includes(selectedImport.status)
-                }
-                onPress={() => setOpening(value => !value)}
-                style={styles.checkRow}
-              >
-                <Text style={styles.checkbox}>{opening ? '☑' : '☐'}</Text>
-                <Text style={styles.chipText}>
-                  This is the amount the member already had
-                </Text>
-              </TouchableOpacity>
-
-              <Text style={styles.label}>Extra details (optional)</Text>
-              <TextInput
-                value={description}
-                onChangeText={setDescription}
-                style={[styles.input, styles.multiline]}
-                multiline
-                placeholder="Enter any other details from the old book"
-                editable={
-                  !saving &&
-                  !closureStatus?.closed &&
-                  !['approved', 'awaiting_verification'].includes(selectedImport.status)
-                }
-              />
-
-              <TouchableOpacity
-                disabled={
-                  saving ||
-                  !!closureStatus?.closed ||
-                  ['approved', 'awaiting_verification'].includes(selectedImport.status)
-                }
-                onPress={() => void saveDraft()}
-                style={[
-                  styles.primary,
-                  (
-                    saving ||
-                    closureStatus?.closed ||
-                    ['approved', 'awaiting_verification'].includes(selectedImport.status)
-                  ) && styles.disabled,
-                ]}
-              >
-                <Text style={styles.primaryText}>
-                  {saving ? 'SAVING…' : editing ? 'SAVE CHANGES' : 'SAVE OLD RECORD'}
-                </Text>
-              </TouchableOpacity>
-
-              {!!editing && (
-                <TouchableOpacity onPress={resetDraft} style={styles.secondary}>
-                  <Text style={styles.secondaryText}>Cancel changes</Text>
-                </TouchableOpacity>
-              )}
-
-              <Text style={styles.heading}>Entries added ({drafts.length})</Text>
-
-              {drafts.length === 0 ? (
-                <Text style={styles.empty}>No entries added to this book yet.</Text>
-              ) : (
-                drafts.map(draft => (
-                  <View key={draft.id} style={styles.draftCard}>
-                    <Text style={styles.importTitle}>
-                      {categoryLabel(draft.category)} • UGX{' '}
-                      {Number(draft.amount).toLocaleString()}
-                    </Text>
-                    <Text style={styles.meta}>
-                      {draft.transaction_date} • {draft.member_name || 'Group record'}
-                      {draft.member_number ? ` (${draft.member_number})` : ''}
-                    </Text>
-                    {draft.is_opening_balance === 1 && (
-                      <Text style={styles.opening}>Old balance already held</Text>
-                    )}
-                    {!!draft.description && (
-                      <Text style={styles.meta}>{draft.description}</Text>
-                    )}
-                    {!['approved', 'awaiting_verification'].includes(selectedImport.status) && (
-                      <View style={styles.row}>
-                        <TouchableOpacity
-                          disabled={saving || !!closureStatus?.closed}
-                          onPress={() => editDraft(draft)}
-                          style={styles.smallButton}
-                        >
-                          <Text style={styles.smallText}>Change</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          disabled={saving || !!closureStatus?.closed}
-                          onPress={() => removeDraft(draft)}
-                          style={[styles.smallButton, styles.delete]}
-                        >
-                          <Text style={[styles.smallText, styles.deleteText]}>
-                            Remove
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
+              {selectedMemberView && (
+                <>
+                  <TouchableOpacity onPress={() => { setSelectedMemberView(null); setMemberId(null); }} style={styles.backRow}>
+                    <Text style={styles.backText}>‹ Back to members</Text>
+                  </TouchableOpacity>
+                  <View style={styles.memberDetailHeader}>
+                    <View style={styles.avatarLarge}><Text>👤</Text></View>
+                    <Text style={styles.groupTitle}>{selectedMemberView.full_name}</Text>
+                    <Text style={styles.groupCode}>{selectedMemberView.member_number}</Text>
                   </View>
-                ))
+
+                  <Text style={styles.label}>Choose the kind of record</Text>
+                  <View style={styles.categoryGrid}>
+                    {categories.map(item => (
+                      <TouchableOpacity
+                        key={item.value}
+                        disabled={
+                          saving ||
+                          !!closureStatus?.closed ||
+                          ['approved', 'awaiting_verification'].includes(
+                            selectedImport.status,
+                          )
+                        }
+                        onPress={() => {
+                          setCategory(item.value);
+                          if (!needsMember(item.value)) setMemberId(null);
+                        }}
+                        style={[
+                          styles.categoryButton,
+                          category === item.value && styles.chipOn,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.categoryButtonText,
+                            category === item.value && styles.chipTextOn,
+                          ]}
+                        >
+                          {item.label}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <Text style={styles.label}>Date written in the old book (DD-MM-YYYY)</Text>
+                  <TextInput
+                    value={date}
+                    onChangeText={setDate}
+                    style={styles.input}
+                    placeholder="DD-MM-YYYY  Example: 17-04-2021"
+                    keyboardType="numbers-and-punctuation"
+                    editable={
+                      !saving &&
+                      !closureStatus?.closed &&
+                      !['approved', 'awaiting_verification'].includes(selectedImport.status)
+                    }
+                  />
+
+                  <Text style={styles.label}>Amount in UGX</Text>
+                  <TextInput
+                    value={amount}
+                    onChangeText={setAmount}
+                    style={styles.input}
+                    placeholder="Enter amount"
+                    keyboardType="decimal-pad"
+                    editable={
+                      !saving &&
+                      !closureStatus?.closed &&
+                      !['approved', 'awaiting_verification'].includes(selectedImport.status)
+                    }
+                  />
+
+                  <TouchableOpacity
+                    disabled={
+                      saving ||
+                      !!closureStatus?.closed ||
+                      ['approved', 'awaiting_verification'].includes(selectedImport.status)
+                    }
+                    onPress={() => setOpening(value => !value)}
+                    style={styles.checkRow}
+                  >
+                    <Text style={styles.checkbox}>{opening ? '☑' : '☐'}</Text>
+                    <Text style={styles.chipText}>
+                      This is the amount the member already had
+                    </Text>
+                  </TouchableOpacity>
+
+                  <Text style={styles.label}>Extra details (optional)</Text>
+                  <TextInput
+                    value={description}
+                    onChangeText={setDescription}
+                    style={[styles.input, styles.multiline]}
+                    multiline
+                    placeholder="Enter any other details from the old book"
+                    editable={
+                      !saving &&
+                      !closureStatus?.closed &&
+                      !['approved', 'awaiting_verification'].includes(selectedImport.status)
+                    }
+                  />
+
+                  <TouchableOpacity
+                    disabled={
+                      saving ||
+                      !!closureStatus?.closed ||
+                      ['approved', 'awaiting_verification'].includes(selectedImport.status)
+                    }
+                    onPress={() => void saveDraft()}
+                    style={[
+                      styles.primary,
+                      (
+                        saving ||
+                        closureStatus?.closed ||
+                        ['approved', 'awaiting_verification'].includes(selectedImport.status)
+                      ) && styles.disabled,
+                    ]}
+                  >
+                    <Text style={styles.primaryText}>
+                      {saving ? 'SAVING…' : editing ? 'SAVE CHANGES' : 'SAVE OLD RECORD'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {!!editing && (
+                    <TouchableOpacity onPress={resetDraft} style={styles.secondary}>
+                      <Text style={styles.secondaryText}>Cancel changes</Text>
+                    </TouchableOpacity>
+                  )}
+
+                  <Text style={styles.heading}>Previous Loan ({previousLoans.length})</Text>
+                  {previousLoans.length === 0 ? (
+                    <Text style={styles.empty}>No previous loan for this member.</Text>
+                  ) : previousLoans.map(draft => {
+                    const overdue = isOverdue(draft.transaction_date, draft.amount);
+                    return (
+                      <View key={draft.id} style={[styles.draftCard, overdue && styles.overdueCard]}>
+                        <View style={styles.detailRow}><Text style={styles.rowLabel}>Previous Loan</Text><Text style={overdue ? styles.overdueText : styles.rowValue}>UGX {Number(draft.amount).toLocaleString()}</Text></View>
+                        <View style={styles.detailRow}><Text style={styles.rowLabel}>Date</Text><Text style={styles.rowValue}>{formatDDMMYYYY(draft.transaction_date)}</Text></View>
+                        <View style={styles.detailRow}><Text style={styles.rowLabel}>Status</Text><Text style={overdue ? styles.overdueText : styles.normalText}>{overdue ? 'OVERDUE' : 'OK'}</Text></View>
+                        {!!draft.description && (<Text style={styles.meta}>{draft.description}</Text>)}
+                        {!['approved', 'awaiting_verification'].includes(selectedImport.status) && (
+                          <View style={styles.row}>
+                            <TouchableOpacity disabled={saving || !!closureStatus?.closed} onPress={() => editDraft(draft)} style={styles.smallButton}><Text style={styles.smallText}>Change</Text></TouchableOpacity>
+                            <TouchableOpacity disabled={saving || !!closureStatus?.closed} onPress={() => removeDraft(draft)} style={[styles.smallButton, styles.delete]}><Text style={[styles.smallText, styles.deleteText]}>Remove</Text></TouchableOpacity>
+                          </View>
+                        )}
+                      </View>
+                    );
+                  })}
+
+                  <Text style={styles.heading}>Current Loan ({currentLoans.length})</Text>
+                  {currentLoans.length === 0 ? (
+                    <Text style={styles.empty}>No current loan for this member.</Text>
+                  ) : currentLoans.map(draft => {
+                    const overdue = isOverdue(draft.transaction_date, draft.amount);
+                    return (
+                      <View key={draft.id} style={[styles.draftCard, overdue && styles.overdueCard]}>
+                        <View style={styles.detailRow}><Text style={styles.rowLabel}>Current Loan</Text><Text style={overdue ? styles.overdueText : styles.rowValue}>UGX {Number(draft.amount).toLocaleString()}</Text></View>
+                        <View style={styles.detailRow}><Text style={styles.rowLabel}>Date</Text><Text style={styles.rowValue}>{formatDDMMYYYY(draft.transaction_date)}</Text></View>
+                        <View style={styles.detailRow}><Text style={styles.rowLabel}>Status</Text><Text style={overdue ? styles.overdueText : styles.normalText}>{overdue ? 'OVERDUE' : 'OK'}</Text></View>
+                        {!!draft.description && (<Text style={styles.meta}>{draft.description}</Text>)}
+                        {!['approved', 'awaiting_verification'].includes(selectedImport.status) && (
+                          <View style={styles.row}>
+                            <TouchableOpacity disabled={saving || !!closureStatus?.closed} onPress={() => editDraft(draft)} style={styles.smallButton}><Text style={styles.smallText}>Change</Text></TouchableOpacity>
+                            <TouchableOpacity disabled={saving || !!closureStatus?.closed} onPress={() => removeDraft(draft)} style={[styles.smallButton, styles.delete]}><Text style={[styles.smallText, styles.deleteText]}>Remove</Text></TouchableOpacity>
+                          </View>
+                        )}
+                      </View>
+                    );
+                  })}
+
+                  <Text style={styles.heading}>Other Records ({otherDrafts.length})</Text>
+                  {otherDrafts.length === 0 ? (
+                    <Text style={styles.empty}>No other records for this member.</Text>
+                  ) : otherDrafts.map(draft => (
+                    <View key={draft.id} style={styles.draftCard}>
+                      <Text style={styles.importTitle}>{categoryLabel(draft.category)} • UGX {Number(draft.amount).toLocaleString()}</Text>
+                      <Text style={styles.meta}>{formatDDMMYYYY(draft.transaction_date)} • {draft.member_name || 'Group record'}</Text>
+                      {!!draft.description && (<Text style={styles.meta}>{draft.description}</Text>)}
+                      {!['approved', 'awaiting_verification'].includes(selectedImport.status) && (
+                        <View style={styles.row}>
+                          <TouchableOpacity disabled={saving || !!closureStatus?.closed} onPress={() => editDraft(draft)} style={styles.smallButton}><Text style={styles.smallText}>Change</Text></TouchableOpacity>
+                          <TouchableOpacity disabled={saving || !!closureStatus?.closed} onPress={() => removeDraft(draft)} style={[styles.smallButton, styles.delete]}><Text style={[styles.smallText, styles.deleteText]}>Remove</Text></TouchableOpacity>
+                        </View>
+                      )}
+                    </View>
+                  ))}
+                </>
               )}
 
               {selectedImport.status === 'awaiting_verification' && (
@@ -1101,7 +1079,6 @@ export default function HistoricalMigrationScreen({
                   <Text style={styles.help}>
                     Compare every member name and number with the group member list. Check the old book, dates and amounts.
                   </Text>
-
                   {drafts
                     .filter(draft => needsMember(draft.category))
                     .map(draft => (
@@ -1112,7 +1089,7 @@ export default function HistoricalMigrationScreen({
                         </Text>
                         <Text style={styles.meta}>
                           Entry #{draft.id} • UGX {Number(draft.amount).toLocaleString()} •{' '}
-                          {draft.transaction_date}
+                          {formatDDMMYYYY(draft.transaction_date)}
                         </Text>
                         <Text style={styles.label}>
                           Enter this member's number to confirm
@@ -1131,7 +1108,6 @@ export default function HistoricalMigrationScreen({
                         />
                       </View>
                     ))}
-
                   <TouchableOpacity
                     onPress={() => setEvidenceReviewed(value => !value)}
                     style={styles.checkRow}
@@ -1139,7 +1115,6 @@ export default function HistoricalMigrationScreen({
                     <Text style={styles.checkbox}>{evidenceReviewed ? '☑' : '☐'}</Text>
                     <Text style={styles.chipText}>I checked the old book or record.</Text>
                   </TouchableOpacity>
-
                   <TouchableOpacity
                     onPress={() => setAmountsReviewed(value => !value)}
                     style={styles.checkRow}
@@ -1149,13 +1124,11 @@ export default function HistoricalMigrationScreen({
                       I checked all names, dates and amounts.
                     </Text>
                   </TouchableOpacity>
-
                   <View style={styles.validationNotice}>
                     <Text style={styles.validationText}>
                       Entries with wrong dates, wrong member numbers or missing information will not be approved.
                     </Text>
                   </View>
-
                   <TouchableOpacity
                     disabled={saving}
                     onPress={returnSelectedImportForCorrection}
@@ -1163,7 +1136,6 @@ export default function HistoricalMigrationScreen({
                   >
                     <Text style={styles.secondaryText}>Return entries for correction</Text>
                   </TouchableOpacity>
-
                   <TouchableOpacity
                     disabled={saving || !evidenceReviewed || !amountsReviewed}
                     onPress={() => void approveSelectedImport()}
@@ -1224,7 +1196,6 @@ export default function HistoricalMigrationScreen({
           <Text style={styles.help}>
             Compare the saved and approved entries with the original books.
           </Text>
-
           <TouchableOpacity
             style={styles.primary}
             disabled={reconciliationLoading}
@@ -1256,7 +1227,6 @@ export default function HistoricalMigrationScreen({
                 <Text style={styles.reportRefresh}>Refresh</Text>
               </TouchableOpacity>
             </View>
-
             {reconciliationLoading && !reconciliation ? (
               <ActivityIndicator size="small" color="#16a34a" />
             ) : reconciliation ? (
@@ -1275,19 +1245,16 @@ export default function HistoricalMigrationScreen({
                   />
                   <Metric label="Not approved" value={reconciliation.imports.rejected} />
                 </View>
-
                 <Text style={styles.reportSection}>Entries</Text>
                 <View style={styles.reportGrid}>
                   <Metric label="All entries" value={reconciliation.drafts.total} />
                   <Metric label="Approved" value={reconciliation.drafts.approved} />
                   <Metric label="Not approved yet" value={reconciliation.drafts.unapproved} />
                 </View>
-
                 <Text style={styles.reportNote}>
                   Total approved amount: UGX{' '}
                   {reconciliation.drafts.approved_value.toLocaleString()}
                 </Text>
-
                 <Text style={styles.reportSection}>Entries by type</Text>
                 {reconciliation.categories.length === 0 ? (
                   <Text style={styles.empty}>No entries have been added.</Text>
@@ -1314,7 +1281,6 @@ export default function HistoricalMigrationScreen({
                     </View>
                   ))
                 )}
-
                 <Text style={styles.reportSection}>Recently approved entries</Text>
                 {reconciliation.recent_approvals.length === 0 ? (
                   <Text style={styles.empty}>No entries have been approved yet.</Text>
@@ -1326,19 +1292,18 @@ export default function HistoricalMigrationScreen({
                         {categoryLabel(row.category as HistoricalMigrationCategory)}
                       </Text>
                       <Text style={styles.meta}>
-                        {row.transaction_date} • {row.member_name}
+                        {formatDDMMYYYY(row.transaction_date)} • {row.member_name}
                         {row.member_number ? ` (${row.member_number})` : ''}
                       </Text>
                       <Text style={styles.meta}>
                         UGX {row.amount.toLocaleString()} • Checked by {row.approver_name}
                       </Text>
                       <Text style={styles.meta}>
-                        Book: {row.source_reference || 'Not given'} • {row.approved_at}
+                        Book: {row.source_reference || 'Not given'} • {formatDDMMYYYY(row.approved_at)}
                       </Text>
                     </View>
                   ))
                 )}
-
                 <View style={styles.reportWarning}>
                   <Text style={styles.reportWarningText}>
                     Compare these figures with the old books and the actual money held by the group. This report does not prove that the cash or loans are correct.
@@ -1355,7 +1320,6 @@ export default function HistoricalMigrationScreen({
           <Text style={styles.help}>
             Complete the final checks before the group starts using its digital records.
           </Text>
-
           {closureStatus?.closed && closureStatus.closure ? (
             <View style={styles.closedPanel}>
               <Text style={styles.closedTitle}>✓ OLD RECORDS CLOSED</Text>
@@ -1364,7 +1328,7 @@ export default function HistoricalMigrationScreen({
                 {closureStatus.closure.signed_off_by_number})
               </Text>
               <Text style={styles.meta}>
-                Date: {closureStatus.closure.closure_date}
+                Date: {formatDDMMYYYY(closureStatus.closure.closure_date)}
               </Text>
               <Text style={styles.closedFoot}>
                 The old records are saved. The group can continue using Ebadsave for normal meetings and new transactions.
@@ -1382,7 +1346,6 @@ export default function HistoricalMigrationScreen({
                   <Metric label="Not approved" value={closureStatus.rejected_imports} />
                 </View>
               )}
-
               <Text style={styles.label}>Check the group's money (UGX)</Text>
               <Text style={styles.label}>Cash held by the group</Text>
               <TextInput
@@ -1416,7 +1379,6 @@ export default function HistoricalMigrationScreen({
                 style={styles.input}
                 placeholder="0"
               />
-
               <Text style={styles.label}>Final checks</Text>
               {([
                 ['paper', 'I checked the old books against the entries.'],
@@ -1439,7 +1401,6 @@ export default function HistoricalMigrationScreen({
                   <Text style={styles.chipText}>{label}</Text>
                 </TouchableOpacity>
               ))}
-
               <Text style={styles.label}>Final note *</Text>
               <TextInput
                 value={closureNotes}
@@ -1448,7 +1409,6 @@ export default function HistoricalMigrationScreen({
                 multiline
                 placeholder="Write what was checked and agreed by the group."
               />
-
               {closureStatus &&
                 (
                   closureStatus.unresolved_imports > 0 ||
@@ -1461,7 +1421,6 @@ export default function HistoricalMigrationScreen({
                     </Text>
                   </View>
                 )}
-
               <TouchableOpacity
                 disabled={
                   saving ||
@@ -1519,6 +1478,7 @@ const styles = StyleSheet.create({
   content: { padding: 13, paddingBottom: 38 },
   back: { paddingVertical: 10 },
   backText: { color: '#166534', fontWeight: '500', fontSize: 12 },
+  backRow: { marginTop: 12, paddingVertical: 6 },
   header: {
     backgroundColor: '#14532d',
     borderRadius: 16,
@@ -1621,6 +1581,20 @@ const styles = StyleSheet.create({
   memberButtonText: { fontSize: 12, color: '#334155', fontWeight: '500' },
   memberNumber: { fontSize: 11, color: '#64748b', marginTop: 3 },
   memberNumberOn: { color: '#dcfce7' },
+  memberRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  avatar: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#fef3c7', alignItems: 'center', justifyContent: 'center' },
+  avatarLarge: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#fef3c7', alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+  memberName: { flex: 1, fontSize: 12, fontWeight: '500', color: '#111827', marginLeft: 10 },
+  memberDetailHeader: { marginTop: 10, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  arrow: { fontSize: 18, color: '#111827' },
+  groupTitle: { fontSize: 18, fontWeight: '500', lineHeight: 22, color: '#111827' },
+  groupCode: { fontSize: 12, fontWeight: '400', color: '#64748b', marginTop: 4 },
+  detailRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
+  rowLabel: { fontSize: 12, fontWeight: '500', color: '#334155' },
+  rowValue: { fontSize: 12, fontWeight: '500', color: '#111827' },
+  overdueText: { fontSize: 12, fontWeight: '700', color: '#dc2626' },
+  normalText: { fontSize: 12, fontWeight: '500', color: '#166534' },
+  overdueCard: { borderColor: '#dc2626', borderWidth: 1, backgroundColor: '#fef2f2' },
   selectedBook: {
     backgroundColor: '#f0fdf4',
     borderColor: '#86efac',
