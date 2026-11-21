@@ -56,35 +56,35 @@ const categories: {
   value: HistoricalMigrationCategory;
   label: string;
 }[] = [
-  { value: 'savings', label: 'Savings' },
-  { value: 'loan_issued', label: 'Loan issued' },
-  { value: 'loan_repayment', label: 'Loan repayment' },
-  { value: 'previous_loan_balance', label: 'Previous loan balance' },
-  { value: 'insurance', label: 'Insurance' },
-  { value: 'fine', label: 'Fine' },
-  { value: 'group_income', label: 'Group income' },
-  { value: 'group_expense', label: 'Group expenditure' },
-  { value: 'other', label: 'Other' },
+  { value: 'savings', label: '💰 Savings' },
+  { value: 'previous_loan_balance', label: '📋 Old loan balance' },
+  { value: 'fine', label: '⚠️ Fines' },
+  { value: 'insurance', label: '🛡️ Insurance' },
+  { value: 'loan_issued', label: '🤝 Loans given' },
+  { value: 'loan_repayment', label: '💵 Loan payments' },
+  { value: 'group_income', label: 'Other money received' },
+  { value: 'group_expense', label: 'Money spent' },
+  { value: 'other', label: 'External loan / other record' },
 ];
 
 const evidenceTypes: {
   value: HistoricalMigrationEvidenceType;
   label: string;
 }[] = [
-  { value: 'manual', label: 'Manual ledger entry' },
-  { value: 'pdf', label: 'PDF' },
-  { value: 'image', label: 'Scanned image' },
+  { value: 'manual', label: 'Paper book' },
+  { value: 'pdf', label: 'PDF file' },
+  { value: 'image', label: 'Photo' },
   { value: 'audio', label: 'Voice recording' },
-  { value: 'video', label: 'Ledger video' },
+  { value: 'video', label: 'Video' },
 ];
 
 const statusLabel: Record<string, string> = {
-  pending_review: 'Pending review',
-  processing: 'Processing',
+  pending_review: 'Waiting to be checked',
+  processing: 'Being entered',
   needs_correction: 'Needs correction',
-  awaiting_verification: 'Awaiting verification',
-  approved: 'Approved',
-  rejected: 'Rejected',
+  awaiting_verification: 'Waiting for checking',
+  approved: 'Approved and saved',
+  rejected: 'Not approved',
 };
 
 const needsMember = (
@@ -99,6 +99,12 @@ const needsMember = (
     'insurance',
   ].includes(category);
 
+const categoryLabel = (
+  value: HistoricalMigrationCategory,
+) =>
+  categories.find(item => item.value === value)?.label ||
+  value.replace(/_/g, ' ');
+
 export default function HistoricalMigrationScreen({
   route,
   navigation,
@@ -109,15 +115,11 @@ export default function HistoricalMigrationScreen({
   const [saving, setSaving] = useState(false);
   const [canManage, setCanManage] = useState(false);
 
-  const [imports, setImports] = useState<
-    HistoricalMigrationImport[]
-  >([]);
+  const [imports, setImports] = useState<HistoricalMigrationImport[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [selectedImport, setSelectedImport] =
     useState<HistoricalMigrationImport | null>(null);
-  const [drafts, setDrafts] = useState<
-    HistoricalMigrationDraft[]
-  >([]);
+  const [drafts, setDrafts] = useState<HistoricalMigrationDraft[]>([]);
 
   const [evidenceType, setEvidenceType] =
     useState<HistoricalMigrationEvidenceType>('manual');
@@ -141,8 +143,7 @@ export default function HistoricalMigrationScreen({
   const [evidenceReviewed, setEvidenceReviewed] = useState(false);
   const [amountsReviewed, setAmountsReviewed] = useState(false);
 
-  const [showReconciliation, setShowReconciliation] =
-    useState(false);
+  const [showReconciliation, setShowReconciliation] = useState(false);
   const [reconciliation, setReconciliation] =
     useState<HistoricalMigrationReconciliation | null>(null);
   const [reconciliationLoading, setReconciliationLoading] =
@@ -155,6 +156,7 @@ export default function HistoricalMigrationScreen({
   const [closureFines, setClosureFines] = useState('0');
   const [closureLoans, setClosureLoans] = useState('0');
   const [closureNotes, setClosureNotes] = useState('');
+
   const [closureChecks, setClosureChecks] = useState({
     paper: false,
     members: false,
@@ -187,60 +189,43 @@ export default function HistoricalMigrationScreen({
       setMembers(
         (loadedMembers as Member[])
           .slice()
-          .sort((a, b) =>
-            a.full_name.localeCompare(b.full_name),
-          ),
+          .sort((a, b) => a.full_name.localeCompare(b.full_name)),
       );
 
       if (selectedImport) {
         const fresh =
-          loadedImports.find(
-            (item: HistoricalMigrationImport) =>
-              item.id === selectedImport.id,
-          ) || null;
+          loadedImports.find(item => item.id === selectedImport.id) ||
+          null;
 
         setSelectedImport(fresh);
 
         setDrafts(
           fresh
-            ? await getHistoricalMigrationDrafts(
-                fresh.id,
-                groupId,
-              )
+            ? await getHistoricalMigrationDrafts(fresh.id, groupId)
             : [],
         );
       }
     } catch (e) {
       Alert.alert(
-        'Could not load migration register',
-        e instanceof Error
-          ? e.message
-          : 'Please try again.',
+        'Could not load old records',
+        e instanceof Error ? e.message : 'Please try again.',
       );
     } finally {
       setLoading(false);
     }
-  }, [
-    groupId,
-    executiveMemberId,
-    selectedImport?.id,
-  ]);
+  }, [groupId, executiveMemberId, selectedImport?.id]);
 
   const loadReconciliation = async () => {
     setReconciliationLoading(true);
 
     try {
       setReconciliation(
-        await getHistoricalMigrationReconciliation(
-          groupId,
-        ),
+        await getHistoricalMigrationReconciliation(groupId),
       );
     } catch (e) {
       Alert.alert(
-        'Could not prepare reconciliation',
-        e instanceof Error
-          ? e.message
-          : 'Please try again.',
+        'Could not prepare report',
+        e instanceof Error ? e.message : 'Please try again.',
       );
     } finally {
       setReconciliationLoading(false);
@@ -253,9 +238,7 @@ export default function HistoricalMigrationScreen({
     }, [load]),
   );
 
-  const openImport = async (
-    item: HistoricalMigrationImport,
-  ) => {
+  const openImport = async (item: HistoricalMigrationImport) => {
     setSelectedImport(item);
     setEditing(null);
     setMemberConfirmations({});
@@ -264,17 +247,12 @@ export default function HistoricalMigrationScreen({
 
     try {
       setDrafts(
-        await getHistoricalMigrationDrafts(
-          item.id,
-          groupId,
-        ),
+        await getHistoricalMigrationDrafts(item.id, groupId),
       );
     } catch (e) {
       Alert.alert(
-        'Could not load drafts',
-        e instanceof Error
-          ? e.message
-          : 'Please try again.',
+        'Could not open records',
+        e instanceof Error ? e.message : 'Please try again.',
       );
     }
   };
@@ -282,16 +260,16 @@ export default function HistoricalMigrationScreen({
   const enterMigrationRecords = async () => {
     if (!canManage) {
       Alert.alert(
-        'Administrator access required',
-        'Only an authorised group administrator can enter historical migration records.',
+        'Not allowed',
+        'Only an authorised group administrator can enter old records.',
       );
       return;
     }
 
     if (closureStatus?.closed) {
       Alert.alert(
-        'Historical migration closed',
-        'This group has completed historical migration sign-off.',
+        'Records already closed',
+        'This group has finished entering its old records.',
       );
       return;
     }
@@ -309,24 +287,21 @@ export default function HistoricalMigrationScreen({
         setDrafts([]);
 
         Alert.alert(
-          'No evidence registered',
-          'Register historical ledger evidence in Step 1 before entering migration records.',
+          'Add the old book first',
+          'First register the paper book, photo or other record in Step 1.',
         );
         return;
       }
 
       const target =
-        latestImports.find(
-          item => item.id === selectedImport?.id,
-        ) || latestImports[0];
+        latestImports.find(item => item.id === selectedImport?.id) ||
+        latestImports[0];
 
       await openImport(target);
     } catch (e) {
       Alert.alert(
-        'Could not open migration records',
-        e instanceof Error
-          ? e.message
-          : 'Please try again.',
+        'Could not open records',
+        e instanceof Error ? e.message : 'Please try again.',
       );
     } finally {
       setSaving(false);
@@ -346,16 +321,16 @@ export default function HistoricalMigrationScreen({
   const saveImport = async () => {
     if (!canManage) {
       Alert.alert(
-        'Administrator access required',
-        'Only an authorised group administrator can register historical evidence.',
+        'Not allowed',
+        'Only an authorised group administrator can register old records.',
       );
       return;
     }
 
     if (!evidenceName.trim()) {
       Alert.alert(
-        'Evidence name required',
-        'Enter a short name for the ledger book, page, recording or document.',
+        'Enter the book name',
+        'For example: Savings book 2021 or Loan book, page 4.',
       );
       return;
     }
@@ -383,9 +358,7 @@ export default function HistoricalMigrationScreen({
 
       setImports(latestImports);
 
-      const item = latestImports.find(
-        i => i.id === id,
-      );
+      const item = latestImports.find(i => i.id === id);
 
       if (item) {
         await openImport(item);
@@ -394,15 +367,13 @@ export default function HistoricalMigrationScreen({
       await load();
 
       Alert.alert(
-        'Evidence registered',
-        'The evidence is saved as pending. No financial balance has changed.',
+        'Saved',
+        'The old book or record has been saved. No group money has changed.',
       );
     } catch (e) {
       Alert.alert(
-        'Could not register evidence',
-        e instanceof Error
-          ? e.message
-          : 'Please try again.',
+        'Could not save',
+        e instanceof Error ? e.message : 'Please try again.',
       );
     } finally {
       setSaving(false);
@@ -412,8 +383,8 @@ export default function HistoricalMigrationScreen({
   const saveDraft = async () => {
     if (!canManage) {
       Alert.alert(
-        'Administrator access required',
-        'Only an authorised group administrator can prepare historical drafts.',
+        'Not allowed',
+        'Only an authorised group administrator can enter old records.',
       );
       return;
     }
@@ -423,19 +394,17 @@ export default function HistoricalMigrationScreen({
     const iso = date.trim();
 
     if (
-      !/^\d{4}-\d{2}-\d{2}$/.test(iso)
-      || !Number.isFinite(
-        new Date(
-          `${iso}T12:00:00.000Z`,
-        ).getTime(),
-      )
-      || new Date(
-        `${iso}T12:00:00.000Z`,
-      ).toISOString().slice(0, 10) !== iso
+      !/^\d{4}-\d{2}-\d{2}$/.test(iso) ||
+      !Number.isFinite(
+        new Date(`${iso}T12:00:00.000Z`).getTime(),
+      ) ||
+      new Date(`${iso}T12:00:00.000Z`)
+        .toISOString()
+        .slice(0, 10) !== iso
     ) {
       Alert.alert(
-        'Check original date',
-        'Use YYYY-MM-DD, for example 2021-04-17.',
+        'Check the date',
+        'Enter the date as YYYY-MM-DD. Example: 2021-04-17.',
       );
       return;
     }
@@ -444,16 +413,16 @@ export default function HistoricalMigrationScreen({
 
     if (!Number.isFinite(value) || value < 0) {
       Alert.alert(
-        'Check amount',
-        'Enter a valid amount in UGX.',
+        'Check the amount',
+        'Enter a correct amount in UGX.',
       );
       return;
     }
 
     if (needsMember(category) && !memberId) {
       Alert.alert(
-        'Select member',
-        'This transaction category requires a member.',
+        'Choose a member',
+        'Choose the member whose name is in the old book.',
       );
       return;
     }
@@ -464,16 +433,13 @@ export default function HistoricalMigrationScreen({
       const payload = {
         import_id: selectedImport.id,
         group_id: groupId,
-        member_id: needsMember(category)
-          ? memberId
-          : null,
+        member_id: needsMember(category) ? memberId : null,
         category,
         transaction_date: iso,
         amount: value,
         is_opening_balance: opening,
         description: description.trim(),
-        source_reference:
-          selectedImport.source_reference || '',
+        source_reference: selectedImport.source_reference || '',
       };
 
       if (editing) {
@@ -495,15 +461,13 @@ export default function HistoricalMigrationScreen({
       resetDraft();
 
       Alert.alert(
-        'Draft saved',
-        'This entry remains a draft and has not changed financial balances.',
+        'Entry saved',
+        'This entry is waiting to be checked. It has not changed group money.',
       );
     } catch (e) {
       Alert.alert(
-        'Could not save draft',
-        e instanceof Error
-          ? e.message
-          : 'Please try again.',
+        'Could not save entry',
+        e instanceof Error ? e.message : 'Please try again.',
       );
     } finally {
       setSaving(false);
@@ -511,23 +475,15 @@ export default function HistoricalMigrationScreen({
   };
 
   const submitForVerification = async () => {
-    if (!canManage) {
-      Alert.alert(
-        'Administrator access required',
-        'Only an authorised group administrator can submit drafts.',
-      );
-      return;
-    }
-
-    if (!selectedImport) return;
+    if (!canManage || !selectedImport) return;
 
     Alert.alert(
-      'Submit for verification?',
-      'The drafts will be marked as awaiting verification. They will not be posted to savings, loans or group funds.',
+      'Send entries for checking?',
+      'The entries will be sent for checking. They will not be added to group records until approved.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Submit',
+          text: 'Send',
           onPress: async () => {
             try {
               await setHistoricalMigrationDraftsAwaitingVerification(
@@ -537,29 +493,20 @@ export default function HistoricalMigrationScreen({
 
               await load();
 
-              const fresh =
-                (
-                  await getHistoricalMigrationImports(
-                    groupId,
-                  )
-                ).find(
-                  i => i.id === selectedImport.id,
-                );
+              const fresh = (
+                await getHistoricalMigrationImports(groupId)
+              ).find(i => i.id === selectedImport.id);
 
-              if (fresh) {
-                await openImport(fresh);
-              }
+              if (fresh) await openImport(fresh);
 
               Alert.alert(
-                'Submitted',
-                'The import is awaiting the verification and approval stage.',
+                'Sent',
+                'The entries are now waiting to be checked.',
               );
             } catch (e) {
               Alert.alert(
-                'Could not submit',
-                e instanceof Error
-                  ? e.message
-                  : 'Please try again.',
+                'Could not send entries',
+                e instanceof Error ? e.message : 'Please try again.',
               );
             }
           },
@@ -572,12 +519,12 @@ export default function HistoricalMigrationScreen({
     if (!canManage || !selectedImport) return;
 
     Alert.alert(
-      'Return for correction?',
-      'This will not post money. The drafts will return to Step 2 so an authorised user can correct the member, category, date or amount.',
+      'Return these entries?',
+      'The entries will go back for correction. No money will be added or removed.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Return to Step 2',
+          text: 'Return',
           onPress: async () => {
             try {
               await returnHistoricalMigrationImportForCorrection(
@@ -588,29 +535,20 @@ export default function HistoricalMigrationScreen({
 
               await load();
 
-              const fresh =
-                (
-                  await getHistoricalMigrationImports(
-                    groupId,
-                  )
-                ).find(
-                  i => i.id === selectedImport.id,
-                );
+              const fresh = (
+                await getHistoricalMigrationImports(groupId)
+              ).find(i => i.id === selectedImport.id);
 
-              if (fresh) {
-                await openImport(fresh);
-              }
+              if (fresh) await openImport(fresh);
 
               Alert.alert(
-                'Returned for correction',
-                'The import is editable again. No financial records were posted.',
+                'Returned',
+                'You can now correct the entries.',
               );
             } catch (e) {
               Alert.alert(
-                'Could not return import',
-                e instanceof Error
-                  ? e.message
-                  : 'Please try again.',
+                'Could not return entries',
+                e instanceof Error ? e.message : 'Please try again.',
               );
             }
           },
@@ -622,28 +560,25 @@ export default function HistoricalMigrationScreen({
   const approveSelectedImport = async () => {
     if (!canManage || !selectedImport) return;
 
-    if (
-      selectedImport.status !==
-      'awaiting_verification'
-    ) {
+    if (selectedImport.status !== 'awaiting_verification') {
       Alert.alert(
-        'Not ready for approval',
-        'Submit this import for verification first.',
+        'Not ready',
+        'Send the entries for checking first.',
       );
       return;
     }
 
     if (!evidenceReviewed || !amountsReviewed) {
       Alert.alert(
-        'Review confirmations required',
-        'Confirm that you checked the original evidence and all transaction dates and amounts.',
+        'Check the two boxes',
+        'Confirm that you checked the old book and all names, dates and amounts.',
       );
       return;
     }
 
     Alert.alert(
-      'Approve and post historical records?',
-      'This will post the verified entries into group financial records. The action is permanent and protected against duplicate approval. Check ledger evidence and member numbers carefully.',
+      'Approve and save these entries?',
+      'Only approve after checking the old book and member numbers carefully. Once approved, these entries will be added to the group records.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -653,18 +588,14 @@ export default function HistoricalMigrationScreen({
             setSaving(true);
 
             try {
-              const result =
-                await approveHistoricalMigrationImport({
-                  group_id: groupId,
-                  import_id: selectedImport.id,
-                  approver_member_id: executiveMemberId,
-                  confirmed_member_numbers:
-                    memberConfirmations,
-                  evidence_reviewed:
-                    evidenceReviewed,
-                  amounts_reviewed:
-                    amountsReviewed,
-                });
+              const result = await approveHistoricalMigrationImport({
+                group_id: groupId,
+                import_id: selectedImport.id,
+                approver_member_id: executiveMemberId,
+                confirmed_member_numbers: memberConfirmations,
+                evidence_reviewed: evidenceReviewed,
+                amounts_reviewed: amountsReviewed,
+              });
 
               setEvidenceReviewed(false);
               setAmountsReviewed(false);
@@ -672,29 +603,22 @@ export default function HistoricalMigrationScreen({
 
               await load();
 
-              const fresh =
-                (
-                  await getHistoricalMigrationImports(
-                    groupId,
-                  )
-                ).find(
-                  i => i.id === selectedImport.id,
-                );
+              const fresh = (
+                await getHistoricalMigrationImports(groupId)
+              ).find(i => i.id === selectedImport.id);
 
-              if (fresh) {
-                await openImport(fresh);
-              }
+              if (fresh) await openImport(fresh);
 
               Alert.alert(
-                'Historical import approved',
-                `${result.approved_drafts} entries approved. ${result.posted_transactions} financial transactions posted, ${result.saved_opening_balances} opening savings balances saved, and ${result.saved_loan_snapshots} loan balance snapshots saved.`,
+                'Entries approved',
+                `${result.approved_drafts} entries approved. ${result.posted_transactions} transactions saved, ${result.saved_opening_balances} opening savings balances saved, and ${result.saved_loan_snapshots} old loan balances saved.`,
               );
             } catch (e) {
               Alert.alert(
                 'Approval stopped',
                 e instanceof Error
                   ? e.message
-                  : 'No changes were saved. Review the entries and try again.',
+                  : 'No changes were saved. Check the entries and try again.',
               );
             } finally {
               setSaving(false);
@@ -705,132 +629,20 @@ export default function HistoricalMigrationScreen({
     );
   };
 
-  const finalizeHistoricalMigration = () => {
-    if (
-      !canManage
-      || !closureStatus
-      || closureStatus.closed
-    ) return;
-
-    const amounts = [
-      closureCash,
-      closureInsurance,
-      closureFines,
-      closureLoans,
-    ].map(v => Number(v.replace(/,/g, '')));
-
-    if (
-      amounts.some(
-        v => !Number.isFinite(v) || v < 0,
-      )
-    ) {
-      Alert.alert(
-        'Check group balances',
-        'Enter valid non-negative UGX amounts for all four group balances.',
-      );
-      return;
-    }
-
-    if (closureNotes.trim().length < 12) {
-      Alert.alert(
-        'Sign-off note required',
-        'Describe the final ledger comparison in at least 12 characters.',
-      );
-      return;
-    }
-
-    if (!Object.values(closureChecks).every(Boolean)) {
-      Alert.alert(
-        'Complete the sign-off checklist',
-        'Confirm all six checks before closing the historical migration.',
-      );
-      return;
-    }
-
-    Alert.alert(
-      'Finalise historical migration?',
-      'This permanently closes historical imports and edits for this group. Existing approved records remain unchanged. Normal future digital VSLA transactions continue.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm final sign-off',
-          style: 'destructive',
-          onPress: async () => {
-            setSaving(true);
-
-            try {
-              await closeHistoricalMigration({
-                group_id: groupId,
-                signed_off_by_member_id:
-                  executiveMemberId,
-                verified_group_cash: amounts[0],
-                verified_insurance_fund: amounts[1],
-                verified_fines_fund: amounts[2],
-                verified_outstanding_loans: amounts[3],
-                paper_ledgers_reviewed:
-                  closureChecks.paper,
-                member_balances_reviewed:
-                  closureChecks.members,
-                group_funds_reconciled:
-                  closureChecks.funds,
-                unresolved_items_resolved:
-                  closureChecks.unresolved,
-                rejected_items_reviewed:
-                  closureChecks.rejected,
-                final_backup_completed:
-                  closureChecks.backup,
-                closure_notes:
-                  closureNotes.trim(),
-              });
-
-              const refreshed =
-                await getHistoricalMigrationClosureStatus(
-                  groupId,
-                );
-
-              setClosureStatus(refreshed);
-              setCanManage(false);
-
-              Alert.alert(
-                'Historical migration closed',
-                'The group has completed historical migration sign-off. Existing historical records are preserved. Normal digital VSLA operations can continue.',
-              );
-            } catch (e) {
-              Alert.alert(
-                'Could not close migration',
-                e instanceof Error
-                  ? e.message
-                  : 'Please review the checklist and try again.',
-              );
-            } finally {
-              setSaving(false);
-            }
-          },
-        },
-      ],
-    );
-  };
-
-  const editDraft = (
-    draft: HistoricalMigrationDraft,
-  ) => {
+  const editDraft = (draft: HistoricalMigrationDraft) => {
     setEditing(draft);
     setCategory(draft.category);
     setMemberId(draft.member_id);
     setDate(draft.transaction_date);
     setAmount(String(draft.amount));
     setDescription(draft.description);
-    setOpening(
-      !!draft.is_opening_balance,
-    );
+    setOpening(!!draft.is_opening_balance);
   };
 
-  const removeDraft = (
-    draft: HistoricalMigrationDraft,
-  ) =>
+  const removeDraft = (draft: HistoricalMigrationDraft) => {
     Alert.alert(
-      'Remove draft?',
-      'This only removes the unposted draft, not the original evidence.',
+      'Remove this entry?',
+      'Only the entry being prepared will be removed. The old book will remain saved.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -851,32 +663,112 @@ export default function HistoricalMigrationScreen({
                 ),
               );
 
-              if (editing?.id === draft.id) {
-                resetDraft();
-              }
+              if (editing?.id === draft.id) resetDraft();
             } catch (e) {
               Alert.alert(
-                'Could not remove',
-                e instanceof Error
-                  ? e.message
-                  : 'Please try again.',
+                'Could not remove entry',
+                e instanceof Error ? e.message : 'Please try again.',
               );
             }
           },
         },
       ],
     );
+  };
+
+  const finalizeHistoricalMigration = () => {
+    if (!canManage || !closureStatus || closureStatus.closed) return;
+
+    const amounts = [
+      closureCash,
+      closureInsurance,
+      closureFines,
+      closureLoans,
+    ].map(v => Number(v.replace(/,/g, '')));
+
+    if (
+      amounts.some(v => !Number.isFinite(v) || v < 0)
+    ) {
+      Alert.alert(
+        'Check the amounts',
+        'Enter correct amounts for all four group balances.',
+      );
+      return;
+    }
+
+    if (closureNotes.trim().length < 12) {
+      Alert.alert(
+        'Add a note',
+        'Write a short note about the final checking. Use at least 12 characters.',
+      );
+      return;
+    }
+
+    if (!Object.values(closureChecks).every(Boolean)) {
+      Alert.alert(
+        'Finish the checklist',
+        'Tick all six boxes after completing each check.',
+      );
+      return;
+    }
+
+    Alert.alert(
+      'Finish entering old records?',
+      'This will close the old-record entry process. Approved records will remain saved. Normal group meetings and new transactions can continue.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Finish',
+          style: 'destructive',
+          onPress: async () => {
+            setSaving(true);
+
+            try {
+              await closeHistoricalMigration({
+                group_id: groupId,
+                signed_off_by_member_id: executiveMemberId,
+                verified_group_cash: amounts[0],
+                verified_insurance_fund: amounts[1],
+                verified_fines_fund: amounts[2],
+                verified_outstanding_loans: amounts[3],
+                paper_ledgers_reviewed: closureChecks.paper,
+                member_balances_reviewed: closureChecks.members,
+                group_funds_reconciled: closureChecks.funds,
+                unresolved_items_resolved: closureChecks.unresolved,
+                rejected_items_reviewed: closureChecks.rejected,
+                final_backup_completed: closureChecks.backup,
+                closure_notes: closureNotes.trim(),
+              });
+
+              const refreshed =
+                await getHistoricalMigrationClosureStatus(groupId);
+
+              setClosureStatus(refreshed);
+              setCanManage(false);
+
+              Alert.alert(
+                'Finished',
+                'Old records have been closed and saved. The group can continue using Ebadsave for normal meetings and new transactions.',
+              );
+            } catch (e) {
+              Alert.alert(
+                'Could not finish',
+                e instanceof Error ? e.message : 'Please check and try again.',
+              );
+            } finally {
+              setSaving(false);
+            }
+          },
+        },
+      ],
+    );
+  };
 
   if (loading && imports.length === 0) {
     return (
       <SafeAreaView style={styles.center}>
-        <ActivityIndicator
-          size="large"
-          color="#16a34a"
-        />
-        <Text style={styles.help}>
-          Loading historical imports…
-        </Text>
+        <ActivityIndicator size="large" color="#16a34a" />
+        <Text style={styles.help}>Loading old records…</Text>
       </SafeAreaView>
     );
   }
@@ -891,107 +783,88 @@ export default function HistoricalMigrationScreen({
           onPress={() => navigation.goBack()}
           style={styles.back}
         >
-          <Text style={styles.backText}>
-            ‹ Back to Historical Records
-          </Text>
+          <Text style={styles.backText}>‹ Back</Text>
         </TouchableOpacity>
 
         <View style={styles.header}>
-          <Text style={styles.kicker}>
-            EBADSAVE VSLA • STEP 2
-          </Text>
-          <Text style={styles.title}>
-            Historical Ledger Import Register
-          </Text>
+          <Text style={styles.kicker}>EBADSAVE VSLA</Text>
+          <Text style={styles.title}>Enter Old Group Records</Text>
           <Text style={styles.sub}>
-            Register ledger evidence and prepare draft
-            transactions. Nothing here changes financial
-            balances.
+            Follow the four steps below to enter records from your old books.
           </Text>
         </View>
 
         {!canManage && (
           <View style={styles.notice}>
             <Text style={styles.noticeText}>
-              View only: an authorised group administrator
-              must register evidence and prepare drafts.
+              View only. Ask an authorised group administrator to enter or approve records.
             </Text>
           </View>
         )}
 
-        {/* STEP 1: REGISTER EVIDENCE */}
-        <Text style={styles.stepHeading}>
-          STEP 1 — Register historical evidence
-        </Text>
+        {/* STEP 1 */}
+        <View style={styles.stepCard}>
+          <Text style={styles.stepNumber}>STEP 1</Text>
+          <Text style={styles.stepTitle}>Register old group books</Text>
+          <Text style={styles.help}>
+            First save the book, page, photo or recording where the old information is written.
+          </Text>
 
-        <View style={styles.card}>
-          <Text style={styles.label}>Evidence source</Text>
-
+          <Text style={styles.label}>What are you using?</Text>
           <View style={styles.chips}>
-            {evidenceTypes.map(x => (
+            {evidenceTypes.map(item => (
               <TouchableOpacity
-                key={x.value}
-                onPress={() => setEvidenceType(x.value)}
+                key={item.value}
+                onPress={() => setEvidenceType(item.value)}
                 style={[
                   styles.chip,
-                  evidenceType === x.value &&
-                    styles.chipOn,
+                  evidenceType === item.value && styles.chipOn,
                 ]}
               >
                 <Text
                   style={[
                     styles.chipText,
-                    evidenceType === x.value &&
-                      styles.chipTextOn,
+                    evidenceType === item.value && styles.chipTextOn,
                   ]}
                 >
-                  {x.label}
+                  {item.label}
                 </Text>
               </TouchableOpacity>
             ))}
           </View>
 
-          <Text style={styles.label}>
-            Evidence name *
-          </Text>
+          <Text style={styles.label}>Name of the book or record *</Text>
           <TextInput
             value={evidenceName}
             onChangeText={setEvidenceName}
             style={styles.input}
-            placeholder="e.g. Savings ledger 2021, page 14"
+            placeholder="Example: Savings book 2021"
           />
 
-          <Text style={styles.label}>
-            Evidence file location / URI (optional)
-          </Text>
+          <Text style={styles.label}>Saved file location (optional)</Text>
           <TextInput
             value={evidenceUri}
             onChangeText={setEvidenceUri}
             style={styles.input}
-            placeholder="Paste saved file path or URI"
+            placeholder="File location, if available"
             autoCapitalize="none"
           />
 
-          <Text style={styles.label}>
-            Ledger page / reference
-          </Text>
+          <Text style={styles.label}>Book page number (optional)</Text>
           <TextInput
             value={reference}
             onChangeText={setReference}
             style={styles.input}
-            placeholder="Book name, page number or recording reference"
+            placeholder="Example: Page 14"
           />
 
-          <Text style={styles.label}>Notes</Text>
+          <Text style={styles.label}>Extra information (optional)</Text>
           <TextInput
             value={notes}
             onChangeText={setNotes}
-            style={[
-              styles.input,
-              styles.multiline,
-            ]}
+            style={[styles.input, styles.multiline]}
             multiline
-            placeholder="Context about this evidence"
+            placeholder="Write any helpful information"
           />
 
           <TouchableOpacity
@@ -999,27 +872,23 @@ export default function HistoricalMigrationScreen({
             onPress={() => void saveImport()}
             style={[
               styles.primary,
-              (saving || !canManage) &&
-                styles.disabled,
+              (saving || !canManage) && styles.disabled,
             ]}
           >
             <Text style={styles.primaryText}>
-              {saving
-                ? 'Saving…'
-                : 'Register evidence'}
+              {saving ? 'Saving…' : 'Save this book or record'}
             </Text>
           </TouchableOpacity>
         </View>
 
-        {/* STEP 1 REGISTERED EVIDENCE LIST */}
         <Text style={styles.heading}>
-          Evidence register ({imports.length})
+          Saved books and records ({imports.length})
         </Text>
 
         {imports.length === 0 ? (
           <View style={styles.card}>
             <Text style={styles.empty}>
-              No historical evidence registered yet.
+              No old books or records have been saved yet.
             </Text>
           </View>
         ) : (
@@ -1029,102 +898,84 @@ export default function HistoricalMigrationScreen({
               onPress={() => void openImport(item)}
               style={[
                 styles.importCard,
-                selectedImport?.id === item.id &&
-                  styles.selected,
+                selectedImport?.id === item.id && styles.selected,
               ]}
             >
               <Text style={styles.importTitle}>
-                {item.evidence_name ||
-                  `Import #${item.id}`}
+                {item.evidence_name || `Record #${item.id}`}
               </Text>
-
               <Text style={styles.meta}>
                 {item.evidence_type.toUpperCase()}
                 {' • '}
-                {item.draft_count || 0} draft(s)
+                {item.draft_count || 0} entries
                 {' • '}
-                {new Date(
-                  item.created_at,
-                ).toLocaleDateString()}
+                {new Date(item.created_at).toLocaleDateString()}
               </Text>
-
               <Text style={styles.status}>
-                {statusLabel[item.status] ||
-                  item.status}
+                {statusLabel[item.status] || item.status}
               </Text>
-
               {!!item.source_reference && (
                 <Text style={styles.meta}>
-                  Reference:
-                  {' '}
-                  {item.source_reference}
+                  Page: {item.source_reference}
                 </Text>
               )}
             </TouchableOpacity>
           ))
         )}
 
-        {/* STEP 2 BUTTON */}
-        <TouchableOpacity
-          disabled={!canManage || saving}
-          onPress={() =>
-            void enterMigrationRecords()
-          }
-          style={[
-            styles.enterRecordsButton,
-            (!canManage || saving) &&
-              styles.disabled,
-          ]}
-        >
-          <Text
-            style={
-              styles.enterRecordsButtonText
-            }
-          >
-            {saving
-              ? 'OPENING RECORDS…'
-              : '+ ENTER HISTORICAL MIGRATION RECORDS'}
+        {/* STEP 2 */}
+        <View style={styles.stepCard}>
+          <Text style={styles.stepNumber}>STEP 2</Text>
+          <Text style={styles.stepTitle}>Enter old money records</Text>
+          <Text style={styles.help}>
+            Choose what you are entering, choose the member, then enter the date and amount exactly as shown in the old book.
           </Text>
-        </TouchableOpacity>
 
-        {/* STEP 2 AND STEP 3 */}
-        {selectedImport && (
-          <>
-            <Text style={styles.heading}>
-              STEP 2 — Draft transactions
-              {' • '}
-              {selectedImport.evidence_name}
+          <TouchableOpacity
+            disabled={!canManage || saving}
+            onPress={() => void enterMigrationRecords()}
+            style={[
+              styles.enterRecordsButton,
+              (!canManage || saving) && styles.disabled,
+            ]}
+          >
+            <Text style={styles.enterRecordsButtonText}>
+              {saving ? 'Opening…' : 'OPEN OLD RECORDS'}
             </Text>
+          </TouchableOpacity>
 
-            <View style={styles.card}>
-              <Text style={styles.label}>
-                Transaction category
-              </Text>
+          {selectedImport && (
+            <>
+              <View style={styles.selectedBook}>
+                <Text style={styles.selectedBookTitle}>
+                  Book being used
+                </Text>
+                <Text style={styles.selectedBookName}>
+                  {selectedImport.evidence_name}
+                </Text>
+              </View>
 
-              <View style={styles.chips}>
-                {categories.map(x => (
+              <Text style={styles.label}>Choose the kind of record</Text>
+              <View style={styles.categoryGrid}>
+                {categories.map(item => (
                   <TouchableOpacity
-                    key={x.value}
+                    key={item.value}
                     onPress={() => {
-                      setCategory(x.value);
-                      if (!needsMember(x.value)) {
-                        setMemberId(null);
-                      }
+                      setCategory(item.value);
+                      if (!needsMember(item.value)) setMemberId(null);
                     }}
                     style={[
-                      styles.chip,
-                      category === x.value &&
-                        styles.chipOn,
+                      styles.categoryButton,
+                      category === item.value && styles.chipOn,
                     ]}
                   >
                     <Text
                       style={[
-                        styles.chipText,
-                        category === x.value &&
-                          styles.chipTextOn,
+                        styles.categoryButtonText,
+                        category === item.value && styles.chipTextOn,
                       ]}
                     >
-                      {x.label}
+                      {item.label}
                     </Text>
                   </TouchableOpacity>
                 ))}
@@ -1132,115 +983,95 @@ export default function HistoricalMigrationScreen({
 
               {needsMember(category) && (
                 <>
-                  <Text style={styles.label}>
-                    Member
-                  </Text>
-
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={
-                      false
-                    }
-                  >
-                    {members.map(m => (
-                      <TouchableOpacity
-                        key={m.id}
-                        onPress={() =>
-                          setMemberId(m.id)
-                        }
-                        style={[
-                          styles.memberChip,
-                          memberId === m.id &&
-                            styles.chipOn,
-                        ]}
-                      >
-                        <Text
+                  <Text style={styles.label}>Choose the member</Text>
+                  {members.length === 0 ? (
+                    <Text style={styles.empty}>
+                      No members found in this group.
+                    </Text>
+                  ) : (
+                    <View style={styles.memberList}>
+                      {members.map(member => (
+                        <TouchableOpacity
+                          key={member.id}
+                          onPress={() => setMemberId(member.id)}
                           style={[
-                            styles.chipText,
-                            memberId === m.id &&
-                              styles.chipTextOn,
+                            styles.memberButton,
+                            memberId === member.id && styles.memberButtonOn,
                           ]}
                         >
-                          {m.full_name}
-                          {' '}
-                          ({m.member_number})
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
+                          <Text
+                            style={[
+                              styles.memberButtonText,
+                              memberId === member.id && styles.chipTextOn,
+                            ]}
+                          >
+                            {memberId === member.id ? '✓ ' : ''}
+                            {member.full_name}
+                          </Text>
+                          <Text
+                            style={[
+                              styles.memberNumber,
+                              memberId === member.id && styles.memberNumberOn,
+                            ]}
+                          >
+                            {member.member_number}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
                 </>
               )}
 
-              <Text style={styles.label}>
-                Original transaction date
-                {' '}
-                (YYYY-MM-DD)
-              </Text>
+              <Text style={styles.label}>Date written in the old book</Text>
               <TextInput
                 value={date}
                 onChangeText={setDate}
                 style={styles.input}
-                placeholder="2021-04-17"
+                placeholder="YYYY-MM-DD  Example: 2021-04-17"
                 keyboardType="numbers-and-punctuation"
               />
 
-              <Text style={styles.label}>Amount (UGX)</Text>
+              <Text style={styles.label}>Amount in UGX</Text>
               <TextInput
                 value={amount}
                 onChangeText={setAmount}
                 style={styles.input}
-                placeholder="0"
+                placeholder="Enter amount"
                 keyboardType="decimal-pad"
               />
 
               <TouchableOpacity
-                onPress={() =>
-                  setOpening(v => !v)
-                }
+                onPress={() => setOpening(value => !value)}
                 style={styles.checkRow}
               >
                 <Text style={styles.checkbox}>
                   {opening ? '☑' : '☐'}
                 </Text>
                 <Text style={styles.chipText}>
-                  This is an opening balance,
-                  not a new transaction
+                  This is the amount the member already had
                 </Text>
               </TouchableOpacity>
 
-              <Text style={styles.label}>
-                Description / ledger details
-              </Text>
+              <Text style={styles.label}>Extra details (optional)</Text>
               <TextInput
                 value={description}
                 onChangeText={setDescription}
-                style={[
-                  styles.input,
-                  styles.multiline,
-                ]}
+                style={[styles.input, styles.multiline]}
                 multiline
-                placeholder="Enter exactly what the ledger shows"
+                placeholder="Enter any other details from the old book"
               />
 
               <TouchableOpacity
-                disabled={
-                  saving || !canManage
-                }
-                onPress={() =>
-                  void saveDraft()
-                }
+                disabled={saving || !canManage}
+                onPress={() => void saveDraft()}
                 style={[
                   styles.primary,
-                  (
-                    saving ||
-                    !canManage
-                  ) && styles.disabled,
+                  (saving || !canManage) && styles.disabled,
                 ]}
               >
                 <Text style={styles.primaryText}>
-                  {editing
-                    ? 'Update draft'
-                    : 'Add transaction draft'}
+                  {editing ? 'Save changes' : 'Add this old record'}
                 </Text>
               </TouchableOpacity>
 
@@ -1249,280 +1080,165 @@ export default function HistoricalMigrationScreen({
                   onPress={resetDraft}
                   style={styles.secondary}
                 >
-                  <Text
-                    style={
-                      styles.secondaryText
-                    }
-                  >
-                    Cancel editing
-                  </Text>
+                  <Text style={styles.secondaryText}>Cancel changes</Text>
                 </TouchableOpacity>
               )}
-            </View>
 
-            {drafts.map(d => (
-              <View
-                key={d.id}
-                style={styles.draftCard}
-              >
-                <Text style={styles.importTitle}>
-                  {
-                    categories.find(
-                      c =>
-                        c.value === d.category,
-                    )?.label ||
-                    d.category
-                  }
-                  {' • UGX '}
-                  {Number(d.amount)
-                    .toLocaleString()}
+              <Text style={styles.heading}>
+                Entries added ({drafts.length})
+              </Text>
+
+              {drafts.length === 0 ? (
+                <Text style={styles.empty}>
+                  No entries added to this book yet.
                 </Text>
-
-                <Text style={styles.meta}>
-                  {d.transaction_date}
-                  {' • '}
-                  {d.member_name ||
-                    'Group transaction'}
-                  {' '}
-                  {d.member_number
-                    ? `(${d.member_number})`
-                    : ''}
-                </Text>
-
-                {d.is_opening_balance ===
-                  1 && (
-                    <Text
-                      style={styles.opening}
-                    >
-                      Opening balance —
-                      not a new transaction
+              ) : (
+                drafts.map(draft => (
+                  <View key={draft.id} style={styles.draftCard}>
+                    <Text style={styles.importTitle}>
+                      {categoryLabel(draft.category)}
+                      {' • UGX '}
+                      {Number(draft.amount).toLocaleString()}
                     </Text>
-                  )}
 
-                {!!d.description && (
-                  <Text style={styles.meta}>
-                    {d.description}
+                    <Text style={styles.meta}>
+                      {draft.transaction_date}
+                      {' • '}
+                      {draft.member_name || 'Group record'}
+                      {draft.member_number
+                        ? ` (${draft.member_number})`
+                        : ''}
+                    </Text>
+
+                    {draft.is_opening_balance === 1 && (
+                      <Text style={styles.opening}>
+                        Old balance already held
+                      </Text>
+                    )}
+
+                    {!!draft.description && (
+                      <Text style={styles.meta}>
+                        {draft.description}
+                      </Text>
+                    )}
+
+                    <View style={styles.row}>
+                      <TouchableOpacity
+                        disabled={!canManage}
+                        onPress={() => editDraft(draft)}
+                        style={[
+                          styles.smallButton,
+                          !canManage && styles.disabled,
+                        ]}
+                      >
+                        <Text style={styles.smallText}>Change</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        disabled={!canManage}
+                        onPress={() => removeDraft(draft)}
+                        style={[
+                          styles.smallButton,
+                          styles.delete,
+                          !canManage && styles.disabled,
+                        ]}
+                      >
+                        <Text style={[styles.smallText, styles.deleteText]}>
+                          Remove
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))
+              )}
+
+              {selectedImport.status === 'awaiting_verification' && (
+                <View style={styles.approvalCard}>
+                  <Text style={styles.approvalTitle}>
+                    Check the entries
                   </Text>
-                )}
-
-                <View style={styles.row}>
-                  <TouchableOpacity
-                    disabled={!canManage}
-                    onPress={() =>
-                      editDraft(d)
-                    }
-                    style={[
-                      styles.smallButton,
-                      !canManage &&
-                        styles.disabled,
-                    ]}
-                  >
-                    <Text
-                      style={styles.smallText}
-                    >
-                      Edit
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    disabled={!canManage}
-                    onPress={() =>
-                      removeDraft(d)
-                    }
-                    style={[
-                      styles.smallButton,
-                      styles.delete,
-                      !canManage &&
-                        styles.disabled,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.smallText,
-                        { color: '#b91c1c' },
-                      ]}
-                    >
-                      Remove draft
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
-
-            {selectedImport.status ===
-              'awaiting_verification' && (
-                <View
-                  style={
-                    styles.approvalCard
-                  }
-                >
-                  <Text
-                    style={
-                      styles.approvalTitle
-                    }
-                  >
-                    STEP 3 — Member verification
-                    and administrator approval
-                  </Text>
-
                   <Text style={styles.help}>
-                    For every member-linked
-                    entry, compare the member
-                    name and number with the
-                    official group register.
-                    Enter the exact member
-                    number below.
+                    Compare every member name and number with the group member list. Check the old book, dates and amounts.
                   </Text>
 
                   {drafts
-                    .filter(d =>
-                      needsMember(
-                        d.category,
-                      ),
-                    )
-                    .map(d => (
-                      <View
-                        key={`verify-${d.id}`}
-                        style={
-                          styles.verifyRow
-                        }
-                      >
-                        <Text
-                          style={
-                            styles.verifyTitle
-                          }
-                        >
-                          {d.member_name ||
-                            'Member not selected'}
+                    .filter(draft => needsMember(draft.category))
+                    .map(draft => (
+                      <View key={`verify-${draft.id}`} style={styles.verifyRow}>
+                        <Text style={styles.verifyTitle}>
+                          {draft.member_name || 'Member not selected'}
                           {' • '}
-                          {
-                            categories.find(
-                              c =>
-                                c.value ===
-                                d.category,
-                            )?.label ||
-                            d.category
-                          }
+                          {categoryLabel(draft.category)}
                         </Text>
 
-                        <Text
-                          style={styles.meta}
-                        >
-                          Draft #{d.id}
+                        <Text style={styles.meta}>
+                          Entry #{draft.id}
                           {' • UGX '}
-                          {Number(d.amount)
-                            .toLocaleString()}
+                          {Number(draft.amount).toLocaleString()}
                           {' • '}
-                          {d.transaction_date}
+                          {draft.transaction_date}
                         </Text>
 
-                        <Text
-                          style={styles.label}
-                        >
-                          Confirm member number
+                        <Text style={styles.label}>
+                          Enter this member's number to confirm
                         </Text>
 
                         <TextInput
-                          value={
-                            memberConfirmations[
-                              d.id
-                            ] || ''
-                          }
-                          onChangeText={
-                            v =>
-                              setMemberConfirmations(
-                                old => ({
-                                  ...old,
-                                  [d.id]: v,
-                                }),
-                              )
+                          value={memberConfirmations[draft.id] || ''}
+                          onChangeText={value =>
+                            setMemberConfirmations(old => ({
+                              ...old,
+                              [draft.id]: value,
+                            }))
                           }
                           style={styles.input}
                           autoCapitalize="characters"
-                          placeholder="Enter exact KYA member number"
+                          placeholder="Member number"
                         />
                       </View>
                     ))}
 
                   <TouchableOpacity
                     onPress={() =>
-                      setEvidenceReviewed(
-                        v => !v,
-                      )
+                      setEvidenceReviewed(value => !value)
                     }
                     style={styles.checkRow}
                   >
-                    <Text
-                      style={styles.checkbox}
-                    >
-                      {evidenceReviewed
-                        ? '☑'
-                        : '☐'}
+                    <Text style={styles.checkbox}>
+                      {evidenceReviewed ? '☑' : '☐'}
                     </Text>
-                    <Text
-                      style={styles.chipText}
-                    >
-                      I checked the original
-                      ledger evidence.
+                    <Text style={styles.chipText}>
+                      I checked the old book or record.
                     </Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
                     onPress={() =>
-                      setAmountsReviewed(
-                        v => !v,
-                      )
+                      setAmountsReviewed(value => !value)
                     }
                     style={styles.checkRow}
                   >
-                    <Text
-                      style={styles.checkbox}
-                    >
-                      {amountsReviewed
-                        ? '☑'
-                        : '☐'}
+                    <Text style={styles.checkbox}>
+                      {amountsReviewed ? '☑' : '☐'}
                     </Text>
-                    <Text
-                      style={styles.chipText}
-                    >
-                      I verified every amount,
-                      original date and category.
+                    <Text style={styles.chipText}>
+                      I checked all names, dates and amounts.
                     </Text>
                   </TouchableOpacity>
 
-                  <View
-                    style={
-                      styles.validationNotice
-                    }
-                  >
-                    <Text
-                      style={
-                        styles.validationText
-                      }
-                    >
-                      Invalid dates, future dates,
-                      missing members, member-number
-                      mismatches, unsupported categories,
-                      duplicate approvals and conflicting
-                      opening balances are rejected.
+                  <View style={styles.validationNotice}>
+                    <Text style={styles.validationText}>
+                      Entries with wrong dates, wrong member numbers or missing information will not be approved.
                     </Text>
                   </View>
 
                   <TouchableOpacity
-                    disabled={
-                      !canManage
-                    }
-                    onPress={
-                      returnSelectedImportForCorrection
-                    }
+                    disabled={!canManage}
+                    onPress={returnSelectedImportForCorrection}
                     style={styles.secondary}
                   >
-                    <Text
-                      style={
-                        styles.secondaryText
-                      }
-                    >
-                      Return to Step 2 for corrections
+                    <Text style={styles.secondaryText}>
+                      Return entries for correction
                     </Text>
                   </TouchableOpacity>
 
@@ -1533,10 +1249,7 @@ export default function HistoricalMigrationScreen({
                       !evidenceReviewed ||
                       !amountsReviewed
                     }
-                    onPress={() =>
-                      void
-                      approveSelectedImport()
-                    }
+                    onPress={() => void approveSelectedImport()}
                     style={[
                       styles.primary,
                       (
@@ -1544,1147 +1257,431 @@ export default function HistoricalMigrationScreen({
                         saving ||
                         !evidenceReviewed ||
                         !amountsReviewed
-                      ) &&
-                        styles.disabled,
+                      ) && styles.disabled,
                     ]}
                   >
-                    <Text
-                      style={
-                        styles.primaryText
-                      }
-                    >
-                      {saving
-                        ? 'Approving…'
-                        : 'Approve and post verified records'}
+                    <Text style={styles.primaryText}>
+                      {saving ? 'Saving…' : 'Approve and save entries'}
                     </Text>
                   </TouchableOpacity>
                 </View>
               )}
 
-            {selectedImport.status ===
-              'approved' && (
-                <View
-                  style={
-                    styles.approvalCard
-                  }
-                >
-                  <Text
-                    style={
-                      styles.approvalTitle
-                    }
-                  >
-                    Approved and saved
+              {selectedImport.status === 'approved' && (
+                <View style={styles.approvalCard}>
+                  <Text style={styles.approvalTitle}>
+                    ✓ Entries approved and saved
                   </Text>
-                  <Text
-                    style={styles.help}
-                  >
-                    This import is locked
-                    against editing and
-                    duplicate posting.
+                  <Text style={styles.help}>
+                    These entries are saved and cannot be changed here.
                   </Text>
                 </View>
               )}
 
-            <TouchableOpacity
-              disabled={
-                !canManage ||
-                drafts.length === 0 ||
-                [
-                  'approved',
-                  'rejected',
-                  'awaiting_verification',
-                ].includes(
-                  selectedImport.status,
-                )
-              }
-              onPress={() =>
-                void
-                submitForVerification()
-              }
-              style={[
-                styles.primary,
-                (
+              <TouchableOpacity
+                disabled={
                   !canManage ||
-                  drafts.length ===
-                    0 ||
+                  drafts.length === 0 ||
                   [
                     'approved',
                     'rejected',
                     'awaiting_verification',
-                  ].includes(
-                    selectedImport.status,
-                  )
-                ) &&
-                  styles.disabled,
-              ]}
-            >
-              <Text
-                style={styles.primaryText}
+                  ].includes(selectedImport.status)
+                }
+                onPress={() => void submitForVerification()}
+                style={[
+                  styles.primary,
+                  (
+                    !canManage ||
+                    drafts.length === 0 ||
+                    [
+                      'approved',
+                      'rejected',
+                      'awaiting_verification',
+                    ].includes(selectedImport.status)
+                  ) && styles.disabled,
+                ]}
               >
-                Submit drafts for verification
+                <Text style={styles.primaryText}>
+                  Send entries for checking
+                </Text>
+              </TouchableOpacity>
+
+              <Text style={styles.help}>
+                Entries are not added to group records until they have been checked and approved.
               </Text>
-            </TouchableOpacity>
+            </>
+          )}
+        </View>
 
-            <Text style={styles.help}>
-              Submission changes workflow status
-              only. Financial posting and
-              administrator approval occur in
-              Step 3.
-            </Text>
-          </>
-        )}
-
-        {/* STEP 4: RECONCILIATION */}
-        <View style={styles.step4Card}>
-          <Text style={styles.step4Kicker}>
-            STEP 4 — RECONCILIATION
-          </Text>
-          <Text style={styles.step4Title}>
-            Historical migration reconciliation
-          </Text>
+        {/* STEP 3 */}
+        <View style={styles.stepCard}>
+          <Text style={styles.stepNumber}>STEP 3</Text>
+          <Text style={styles.stepTitle}>Check all the records</Text>
           <Text style={styles.help}>
-            Review approved imports,
-            outstanding drafts,
-            category totals and the
-            approval audit trail.
+            Check how many old books and entries have been saved and approved. Compare the figures with the original books.
           </Text>
 
           <TouchableOpacity
             style={styles.primary}
-            disabled={
-              reconciliationLoading
-            }
+            disabled={reconciliationLoading}
             onPress={() => {
-              setShowReconciliation(
-                v => !v,
-              );
+              setShowReconciliation(value => !value);
 
-              if (
-                !showReconciliation ||
-                !reconciliation
-              ) {
-                void
-                loadReconciliation();
+              if (!showReconciliation || !reconciliation) {
+                void loadReconciliation();
               }
             }}
           >
-            <Text
-              style={
-                styles.primaryText
-              }
-            >
+            <Text style={styles.primaryText}>
               {reconciliationLoading
                 ? 'Preparing report…'
                 : showReconciliation
-                  ? 'Hide reconciliation report'
-                  : 'Open reconciliation report'}
+                  ? 'Hide report'
+                  : 'Open checking report'}
             </Text>
           </TouchableOpacity>
         </View>
 
-        {showReconciliation &&
-          (
-            <View
-              style={styles.card}
-            >
-              <View
-                style={
-                  styles.reportHeaderRow
-                }
+        {showReconciliation && (
+          <View style={styles.card}>
+            <View style={styles.reportHeaderRow}>
+              <Text style={styles.approvalTitle}>Group records report</Text>
+              <TouchableOpacity
+                onPress={() => void loadReconciliation()}
+                disabled={reconciliationLoading}
               >
-                <Text
-                  style={
-                    styles.approvalTitle
-                  }
-                >
-                  Migration status report
-                </Text>
-
-                <TouchableOpacity
-                  onPress={() =>
-                    void
-                    loadReconciliation()
-                  }
-                  disabled={
-                    reconciliationLoading
-                  }
-                >
-                  <Text
-                    style={
-                      styles.reportRefresh
-                    }
-                  >
-                    Refresh
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {reconciliationLoading &&
-                !reconciliation ? (
-                  <ActivityIndicator
-                    size="small"
-                    color="#16a34a"
-                  />
-                ) : reconciliation ? (
-                  <>
-                    <Text
-                      style={
-                        styles.reportSection
-                      }
-                    >
-                      Evidence imports
-                    </Text>
-
-                    <View
-                      style={
-                        styles.reportGrid
-                      }
-                    >
-                      <View
-                        style={
-                          styles.reportMetric
-                        }
-                      >
-                        <Text
-                          style={
-                            styles.reportValue
-                          }
-                        >
-                          {
-                            reconciliation
-                              .imports
-                              .total
-                          }
-                        </Text>
-                        <Text
-                          style={
-                            styles.reportLabel
-                          }
-                        >
-                          Total
-                        </Text>
-                      </View>
-
-                      <View
-                        style={
-                          styles.reportMetric
-                        }
-                      >
-                        <Text
-                          style={
-                            styles.reportValue
-                          }
-                        >
-                          {
-                            reconciliation
-                              .imports
-                              .approved
-                          }
-                        </Text>
-                        <Text
-                          style={
-                            styles.reportLabel
-                          }
-                        >
-                          Approved
-                        </Text>
-                      </View>
-
-                      <View
-                        style={
-                          styles.reportMetric
-                        }
-                      >
-                        <Text
-                          style={
-                            styles.reportValue
-                          }
-                        >
-                          {
-                            reconciliation
-                              .imports
-                              .awaiting_verification
-                          }
-                        </Text>
-                        <Text
-                          style={
-                            styles.reportLabel
-                          }
-                        >
-                          Awaiting
-                        </Text>
-                      </View>
-
-                      <View
-                        style={
-                          styles.reportMetric
-                        }
-                      >
-                        <Text
-                          style={
-                            styles.reportValue
-                          }
-                        >
-                          {
-                            reconciliation
-                              .imports
-                              .pending_or_correction
-                          }
-                        </Text>
-                        <Text
-                          style={
-                            styles.reportLabel
-                          }
-                        >
-                          Pending
-                        </Text>
-                      </View>
-
-                      <View
-                        style={
-                          styles.reportMetric
-                        }
-                      >
-                        <Text
-                          style={
-                            styles.reportValue
-                          }
-                        >
-                          {
-                            reconciliation
-                              .imports
-                              .rejected
-                          }
-                        </Text>
-                        <Text
-                          style={
-                            styles.reportLabel
-                          }
-                        >
-                          Rejected
-                        </Text>
-                      </View>
-                    </View>
-
-                    <Text
-                      style={
-                        styles.reportSection
-                      }
-                    >
-                      Transaction drafts
-                    </Text>
-
-                    <View
-                      style={
-                        styles.reportGrid
-                      }
-                    >
-                      <View
-                        style={
-                          styles.reportMetric
-                        }
-                      >
-                        <Text
-                          style={
-                            styles.reportValue
-                          }
-                        >
-                          {
-                            reconciliation
-                              .drafts
-                              .total
-                          }
-                        </Text>
-                        <Text
-                          style={
-                            styles.reportLabel
-                          }
-                        >
-                          Total drafts
-                        </Text>
-                      </View>
-
-                      <View
-                        style={
-                          styles.reportMetric
-                        }
-                      >
-                        <Text
-                          style={
-                            styles.reportValue
-                          }
-                        >
-                          {
-                            reconciliation
-                              .drafts
-                              .approved
-                          }
-                        </Text>
-                        <Text
-                          style={
-                            styles.reportLabel
-                          }
-                        >
-                          Approved
-                        </Text>
-                      </View>
-
-                      <View
-                        style={
-                          styles.reportMetric
-                        }
-                      >
-                        <Text
-                          style={
-                            styles.reportValue
-                          }
-                        >
-                          {
-                            reconciliation
-                              .drafts
-                              .unapproved
-                          }
-                        </Text>
-                        <Text
-                          style={
-                            styles.reportLabel
-                          }
-                        >
-                          Not approved
-                        </Text>
-                      </View>
-                    </View>
-
-                    <Text
-                      style={
-                        styles.reportNote
-                      }
-                    >
-                      Approved
-                      {' '}
-                      transaction
-                      {' '}
-                      value:
-                      {' '}
-                      UGX
-                      {' '}
-                      {
-                        reconciliation
-                          .drafts
-                          .approved_value
-                          .toLocaleString()
-                      }
-                    </Text>
-
-                    <Text
-                      style={
-                        styles.reportSection
-                      }
-                    >
-                      Totals by category
-                    </Text>
-
-                    {reconciliation
-                      .categories
-                      .length === 0 ? (
-                        <Text
-                          style={styles.empty}
-                        >
-                          No transaction drafts
-                          registered.
-                        </Text>
-                      ) : (
-                        reconciliation.categories.map(
-                          row => (
-                            <View
-                              key={
-                                row.category
-                              }
-                              style={
-                                styles.reportCategoryRow
-                              }
-                            >
-                              <View
-                                style={{
-                                  flex:
-                                    1,
-                                }}
-                              >
-                                <Text
-                                  style={
-                                    styles.importTitle
-                                  }
-                                >
-                                  {
-                                    row
-                                      .category
-                                      .replace(
-                                        /_/g,
-                                        ' ',
-                                      )
-                                  }
-                                </Text>
-
-                                <Text
-                                  style={
-                                    styles.meta
-                                  }
-                                >
-                                  {
-                                    row
-                                      .approved_count
-                                  }
-                                  {' '}
-                                  approved
-                                  of
-                                  {' '}
-                                  {
-                                    row
-                                      .total_count
-                                  }
-                                  {' '}
-                                  drafts
-                                </Text>
-
-                                {row.opening_savings_amount >
-                                  0 && (
-                                  <Text
-                                    style={
-                                      styles.reportNote
-                                    }
-                                  >
-                                    Opening
-                                    savings:
-                                    {' '}
-                                    UGX
-                                    {' '}
-                                    {
-                                      row
-                                        .opening_savings_amount
-                                        .toLocaleString()
-                                    }
-                                  </Text>
-                                )}
-                              </View>
-
-                              <Text
-                                style={
-                                  styles.reportAmount
-                                }
-                              >
-                                {
-                                  row.category ===
-                                  'previous_loan_balance'
-                                    ? 'Snapshot: '
-                                    : 'UGX '
-                                }
-                                {
-                                  row
-                                    .approved_amount
-                                    .toLocaleString()
-                                }
-                              </Text>
-                            </View>
-                          ),
-                        )
-                      )}
-
-                    <Text
-                      style={
-                        styles.reportSection
-                      }
-                    >
-                      Recent approval audit
-                    </Text>
-
-                    {reconciliation
-                      .recent_approvals
-                      .length === 0 ? (
-                      <Text
-                        style={styles.empty}
-                      >
-                        No historical migration
-                        approvals recorded yet.
-                      </Text>
-                    ) : (
-                      reconciliation.recent_approvals.map(
-                        row => (
-                          <View
-                            key={
-                              row.draft_id
-                            }
-                            style={
-                              styles.reportAuditRow
-                            }
-                          >
-                            <Text
-                              style={
-                                styles.importTitle
-                              }
-                            >
-                              #
-                              {row.draft_id}
-                              {' • '}
-                              {
-                                row
-                                  .category
-                                  .replace(
-                                    /_/g,
-                                    ' ',
-                                  )
-                              }
-                            </Text>
-
-                            <Text
-                              style={
-                                styles.meta
-                              }
-                            >
-                              {
-                                row
-                                  .transaction_date
-                              }
-                              {' • '}
-                              {
-                                row.member_name
-                              }
-                              {row.member_number
-                                ? ` (${row.member_number})`
-                                : ''}
-                            </Text>
-
-                            <Text
-                              style={
-                                styles.meta
-                              }
-                            >
-                              UGX
-                              {' '}
-                              {
-                                row
-                                  .amount
-                                  .toLocaleString()
-                              }
-                              {' • '}
-                              Approved by
-                              {' '}
-                              {
-                                row
-                                  .approver_name
-                              }
-                            </Text>
-
-                            <Text
-                              style={
-                                styles.meta
-                              }
-                            >
-                              Source:
-                              {' '}
-                              {
-                                row.source_reference ||
-                                'Not specified'
-                              }
-                              {' • '}
-                              {
-                                row
-                                  .posting_kind
-                              }
-                              {' • '}
-                              {
-                                row
-                                  .approved_at
-                              }
-                            </Text>
-                          </View>
-                        ),
-                      )
-                    )}
-
-                    <View
-                      style={
-                        styles.reportWarning
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.reportWarningText
-                        }
-                      >
-                        Reconciliation is
-                        read-only. Compare
-                        these figures with
-                        original ledger books
-                        and physical funds.
-                        Resolve every
-                        unapproved or rejected
-                        import deliberately.
-                        This report does not
-                        certify that cash,
-                        insurance or outstanding
-                        loans match.
-                      </Text>
-                    </View>
-                  </>
-                ) : null}
+                <Text style={styles.reportRefresh}>Refresh</Text>
+              </TouchableOpacity>
             </View>
-          )}
 
-        {/* STEP 5: FINAL SIGN-OFF */}
-        <View style={styles.step5Card}>
-          <Text style={styles.step5Kicker}>
-            STEP 5 — FINAL STAGE
-          </Text>
-
-          <Text style={styles.step5Title}>
-            Historical migration sign-off
-            and digital ledger activation
-          </Text>
-
-          <Text style={styles.help}>
-            This one-time sign-off records
-            that paper ledgers, member
-            opening positions and group
-            funds have been checked.
-          </Text>
-
-          {closureStatus?.closed &&
-            closureStatus.closure ? (
-              <View
-                style={styles.closedPanel}
-              >
-                <Text
-                  style={styles.closedTitle}
-                >
-                  ✓ HISTORICAL MIGRATION CLOSED
-                </Text>
-
-                <Text
-                  style={styles.meta}
-                >
-                  Signed off by
-                  {' '}
-                  {
-                    closureStatus
-                      .closure
-                      .signed_off_by_name
-                  }
-                  {' '}
-                  (
-                  {
-                    closureStatus
-                      .closure
-                      .signed_off_by_number
-                  }
-                  )
-                </Text>
-
-                <Text
-                  style={styles.meta}
-                >
-                  Date:
-                  {' '}
-                  {
-                    closureStatus
-                      .closure
-                      .closure_date
-                  }
-                </Text>
-
-                <Text
-                  style={styles.closedFoot}
-                >
-                  Historical evidence and
-                  approved records remain
-                  available. Normal digital
-                  meetings and transactions
-                  continue normally.
-                </Text>
-              </View>
-            ) : (
+            {reconciliationLoading && !reconciliation ? (
+              <ActivityIndicator size="small" color="#16a34a" />
+            ) : reconciliation ? (
               <>
-                {closureStatus && (
-                  <View
-                    style={
-                      styles.reportGrid
-                    }
-                  >
-                    <View
-                      style={
-                        styles.reportMetric
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.reportValue
-                        }
-                      >
-                        {
-                          closureStatus
-                            .active_member_count
-                        }
-                      </Text>
-                      <Text
-                        style={
-                          styles.reportLabel
-                        }
-                      >
-                        Active members
-                      </Text>
-                    </View>
+                <Text style={styles.reportSection}>
+                  Old books and records
+                </Text>
 
-                    <View
-                      style={
-                        styles.reportMetric
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.reportValue
-                        }
-                      >
-                        {
-                          closureStatus
-                            .approved_imports
-                        }
-                      </Text>
-                      <Text
-                        style={
-                          styles.reportLabel
-                        }
-                      >
-                        Approved imports
-                      </Text>
-                    </View>
+                <View style={styles.reportGrid}>
+                  <Metric label="All books" value={reconciliation.imports.total} />
+                  <Metric label="Approved" value={reconciliation.imports.approved} />
+                  <Metric
+                    label="Waiting"
+                    value={reconciliation.imports.awaiting_verification}
+                  />
+                  <Metric
+                    label="Still being checked"
+                    value={reconciliation.imports.pending_or_correction}
+                  />
+                  <Metric label="Not approved" value={reconciliation.imports.rejected} />
+                </View>
 
-                    <View
-                      style={
-                        styles.reportMetric
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.reportValue
-                        }
-                      >
-                        {
-                          closureStatus
-                            .approved_drafts
-                        }
-                      </Text>
-                      <Text
-                        style={
-                          styles.reportLabel
-                        }
-                      >
-                        Approved entries
-                      </Text>
-                    </View>
+                <Text style={styles.reportSection}>Entries</Text>
 
-                    <View
-                      style={
-                        styles.reportMetric
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.reportValue
-                        }
-                      >
-                        {
-                          closureStatus
-                            .unresolved_imports
-                        }
-                      </Text>
-                      <Text
-                        style={
-                          styles.reportLabel
-                        }
-                      >
-                        Unresolved
-                      </Text>
-                    </View>
+                <View style={styles.reportGrid}>
+                  <Metric label="All entries" value={reconciliation.drafts.total} />
+                  <Metric label="Approved" value={reconciliation.drafts.approved} />
+                  <Metric label="Not approved yet" value={reconciliation.drafts.unapproved} />
+                </View>
 
-                    <View
-                      style={
-                        styles.reportMetric
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.reportValue
-                        }
-                      >
-                        {
-                          closureStatus
-                            .unapproved_drafts
-                        }
-                      </Text>
-                      <Text
-                        style={
-                          styles.reportLabel
-                        }
-                      >
-                        Unapproved drafts
-                      </Text>
-                    </View>
+                <Text style={styles.reportNote}>
+                  Total approved amount: UGX{' '}
+                  {reconciliation.drafts.approved_value.toLocaleString()}
+                </Text>
 
+                <Text style={styles.reportSection}>Entries by type</Text>
+
+                {reconciliation.categories.length === 0 ? (
+                  <Text style={styles.empty}>No entries have been added.</Text>
+                ) : (
+                  reconciliation.categories.map(row => (
                     <View
-                      style={
-                        styles.reportMetric
-                      }
+                      key={row.category}
+                      style={styles.reportCategoryRow}
                     >
-                      <Text
-                        style={
-                          styles.reportValue
-                        }
-                      >
-                        {
-                          closureStatus
-                            .rejected_imports
-                        }
-                      </Text>
-                      <Text
-                        style={
-                          styles.reportLabel
-                        }
-                      >
-                        Rejected imports
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.importTitle}>
+                          {categoryLabel(
+                            row.category as HistoricalMigrationCategory,
+                          )}
+                        </Text>
+
+                        <Text style={styles.meta}>
+                          {row.approved_count} approved out of{' '}
+                          {row.total_count}
+                        </Text>
+
+                        {row.opening_savings_amount > 0 && (
+                          <Text style={styles.reportNote}>
+                            Old savings: UGX{' '}
+                            {row.opening_savings_amount.toLocaleString()}
+                          </Text>
+                        )}
+                      </View>
+
+                      <Text style={styles.reportAmount}>
+                        {row.category === 'previous_loan_balance'
+                          ? 'Old balance: '
+                          : 'UGX '}
+                        {row.approved_amount.toLocaleString()}
                       </Text>
                     </View>
-                  </View>
+                  ))
                 )}
 
-                <Text style={styles.label}>
-                  Confirm group figures
-                  (UGX)
+                <Text style={styles.reportSection}>
+                  Recently approved entries
                 </Text>
 
-                <Text style={styles.label}>
-                  Group cash balance
-                </Text>
-                <TextInput
-                  value={closureCash}
-                  onChangeText={
-                    setClosureCash
-                  }
-                  keyboardType="decimal-pad"
-                  style={styles.input}
-                  placeholder="0"
-                />
-
-                <Text style={styles.label}>
-                  Insurance fund balance
-                </Text>
-                <TextInput
-                  value={
-                    closureInsurance
-                  }
-                  onChangeText={
-                    setClosureInsurance
-                  }
-                  keyboardType="decimal-pad"
-                  style={styles.input}
-                  placeholder="0"
-                />
-
-                <Text style={styles.label}>
-                  Fines fund balance
-                </Text>
-                <TextInput
-                  value={closureFines}
-                  onChangeText={
-                    setClosureFines
-                  }
-                  keyboardType="decimal-pad"
-                  style={styles.input}
-                  placeholder="0"
-                />
-
-                <Text style={styles.label}>
-                  Outstanding member loans
-                </Text>
-                <TextInput
-                  value={closureLoans}
-                  onChangeText={
-                    setClosureLoans
-                  }
-                  keyboardType="decimal-pad"
-                  style={styles.input}
-                  placeholder="0"
-                />
-
-                <Text style={styles.label}>
-                  Final sign-off checklist
-                </Text>
-
-                {([
-                  [
-                    'paper',
-                    'I compared the evidence and imported entries against the original paper-ledger books.',
-                  ],
-                  [
-                    'members',
-                    'I checked every active member opening balance.',
-                  ],
-                  [
-                    'funds',
-                    'I reconciled cash, insurance, fines and outstanding loans.',
-                  ],
-                  [
-                    'unresolved',
-                    'All unresolved imports have been resolved.',
-                  ],
-                  [
-                    'rejected',
-                    'Every rejected import was deliberately reviewed.',
-                  ],
-                  [
-                    'backup',
-                    'A fresh verified group backup was completed.',
-                  ],
-                ] as const).map(
-                  ([key, label]) => (
-                    <TouchableOpacity
-                      key={key}
-                      onPress={() =>
-                        setClosureChecks(
-                          old => ({
-                            ...old,
-                            [key]:
-                              !old[key],
-                          }),
-                        )
-                      }
-                      style={
-                        styles.checkRow
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.checkbox
-                        }
-                      >
-                        {
-                          closureChecks[
-                            key
-                          ]
-                            ? '☑'
-                            : '☐'
-                        }
-                      </Text>
-                      <Text
-                        style={
-                          styles.chipText
-                        }
-                      >
-                        {label}
-                      </Text>
-                    </TouchableOpacity>
-                  ),
-                )}
-
-                <Text style={styles.label}>
-                  Final sign-off notes *
-                </Text>
-                <TextInput
-                  value={closureNotes}
-                  onChangeText={
-                    setClosureNotes
-                  }
-                  style={[
-                    styles.input,
-                    styles.multiline,
-                  ]}
-                  multiline
-                  placeholder="Record the final ledger comparison and decision."
-                />
-
-                {closureStatus &&
-                  (
-                    closureStatus.unresolved_imports >
-                      0 ||
-                    closureStatus.unapproved_drafts >
-                      0 ||
-                    closureStatus.approved_drafts ===
-                      0
-                  ) && (
+                {reconciliation.recent_approvals.length === 0 ? (
+                  <Text style={styles.empty}>
+                    No entries have been approved yet.
+                  </Text>
+                ) : (
+                  reconciliation.recent_approvals.map(row => (
                     <View
-                      style={
-                        styles.notice
-                      }
+                      key={row.draft_id}
+                      style={styles.reportAuditRow}
                     >
-                      <Text
-                        style={
-                          styles.noticeText
-                        }
-                      >
-                        Closure is not ready.
-                        Resolve unresolved imports
-                        and approve at least one
-                        historical entry.
+                      <Text style={styles.importTitle}>
+                        Entry #{row.draft_id}
+                        {' • '}
+                        {categoryLabel(
+                          row.category as HistoricalMigrationCategory,
+                        )}
+                      </Text>
+
+                      <Text style={styles.meta}>
+                        {row.transaction_date}
+                        {' • '}
+                        {row.member_name}
+                        {row.member_number
+                          ? ` (${row.member_number})`
+                          : ''}
+                      </Text>
+
+                      <Text style={styles.meta}>
+                        UGX {row.amount.toLocaleString()}
+                        {' • '}
+                        Checked by {row.approver_name}
+                      </Text>
+
+                      <Text style={styles.meta}>
+                        Book: {row.source_reference || 'Not given'}
+                        {' • '}
+                        {row.approved_at}
                       </Text>
                     </View>
-                  )}
+                  ))
+                )}
 
+                <View style={styles.reportWarning}>
+                  <Text style={styles.reportWarningText}>
+                    Compare these figures with the old books and the actual money held by the group. This report does not prove that the cash or loans are correct.
+                  </Text>
+                </View>
+              </>
+            ) : null}
+          </View>
+        )}
+
+        {/* STEP 4 */}
+        <View style={styles.finalCard}>
+          <Text style={styles.finalKicker}>STEP 4</Text>
+          <Text style={styles.finalTitle}>Finish and open the digital records</Text>
+          <Text style={styles.help}>
+            Complete the final checks before the group starts using its digital records.
+          </Text>
+
+          {closureStatus?.closed && closureStatus.closure ? (
+            <View style={styles.closedPanel}>
+              <Text style={styles.closedTitle}>
+                ✓ OLD RECORDS CLOSED
+              </Text>
+
+              <Text style={styles.meta}>
+                Finished by {closureStatus.closure.signed_off_by_name}
+                {' '}({closureStatus.closure.signed_off_by_number})
+              </Text>
+
+              <Text style={styles.meta}>
+                Date: {closureStatus.closure.closure_date}
+              </Text>
+
+              <Text style={styles.closedFoot}>
+                The old records are saved. The group can continue using Ebadsave for normal meetings and new transactions.
+              </Text>
+            </View>
+          ) : (
+            <>
+              {closureStatus && (
+                <View style={styles.reportGrid}>
+                  <Metric
+                    label="Group members"
+                    value={closureStatus.active_member_count}
+                  />
+                  <Metric
+                    label="Approved books"
+                    value={closureStatus.approved_imports}
+                  />
+                  <Metric
+                    label="Approved entries"
+                    value={closureStatus.approved_drafts}
+                  />
+                  <Metric
+                    label="Books still waiting"
+                    value={closureStatus.unresolved_imports}
+                  />
+                  <Metric
+                    label="Entries not approved"
+                    value={closureStatus.unapproved_drafts}
+                  />
+                  <Metric
+                    label="Not approved"
+                    value={closureStatus.rejected_imports}
+                  />
+                </View>
+              )}
+
+              <Text style={styles.label}>Check the group's money (UGX)</Text>
+
+              <Text style={styles.label}>Cash held by the group</Text>
+              <TextInput
+                value={closureCash}
+                onChangeText={setClosureCash}
+                keyboardType="decimal-pad"
+                style={styles.input}
+                placeholder="0"
+              />
+
+              <Text style={styles.label}>Insurance money</Text>
+              <TextInput
+                value={closureInsurance}
+                onChangeText={setClosureInsurance}
+                keyboardType="decimal-pad"
+                style={styles.input}
+                placeholder="0"
+              />
+
+              <Text style={styles.label}>Fines money</Text>
+              <TextInput
+                value={closureFines}
+                onChangeText={setClosureFines}
+                keyboardType="decimal-pad"
+                style={styles.input}
+                placeholder="0"
+              />
+
+              <Text style={styles.label}>Money members still owe</Text>
+              <TextInput
+                value={closureLoans}
+                onChangeText={setClosureLoans}
+                keyboardType="decimal-pad"
+                style={styles.input}
+                placeholder="0"
+              />
+
+              <Text style={styles.label}>Final checks</Text>
+
+              {([
+                ['paper', 'I checked the old books against the entries.'],
+                ['members', 'I checked every member’s savings and loan balance.'],
+                ['funds', 'I checked the group cash, insurance and fines money.'],
+                ['unresolved', 'All books and entries have been checked.'],
+                ['rejected', 'I checked every entry that was not approved.'],
+                ['backup', 'A new group backup has been made.'],
+              ] as const).map(([key, label]) => (
                 <TouchableOpacity
-                  disabled={
+                  key={key}
+                  onPress={() =>
+                    setClosureChecks(old => ({
+                      ...old,
+                      [key]: !old[key],
+                    }))
+                  }
+                  style={styles.checkRow}
+                >
+                  <Text style={styles.checkbox}>
+                    {closureChecks[key] ? '☑' : '☐'}
+                  </Text>
+                  <Text style={styles.chipText}>{label}</Text>
+                </TouchableOpacity>
+              ))}
+
+              <Text style={styles.label}>Final note *</Text>
+              <TextInput
+                value={closureNotes}
+                onChangeText={setClosureNotes}
+                style={[styles.input, styles.multiline]}
+                multiline
+                placeholder="Write what was checked and agreed by the group."
+              />
+
+              {closureStatus && (
+                (
+                  closureStatus.unresolved_imports > 0 ||
+                  closureStatus.unapproved_drafts > 0 ||
+                  closureStatus.approved_drafts === 0
+                ) && (
+                  <View style={styles.notice}>
+                    <Text style={styles.noticeText}>
+                      Not ready yet. Finish checking all books and entries, and approve at least one entry before closing.
+                    </Text>
+                  </View>
+                )
+              )}
+
+              <TouchableOpacity
+                disabled={
+                  !canManage ||
+                  saving ||
+                  !closureStatus ||
+                  closureStatus.closed ||
+                  closureStatus.unresolved_imports > 0 ||
+                  closureStatus.unapproved_drafts > 0 ||
+                  closureStatus.approved_drafts === 0 ||
+                  !Object.values(closureChecks).every(Boolean)
+                }
+                onPress={finalizeHistoricalMigration}
+                style={[
+                  styles.primary,
+                  (
                     !canManage ||
                     saving ||
                     !closureStatus ||
                     closureStatus.closed ||
-                    closureStatus.unresolved_imports >
-                      0 ||
-                    closureStatus.unapproved_drafts >
-                      0 ||
-                    closureStatus.approved_drafts ===
-                      0 ||
-                    !Object.values(
-                      closureChecks,
-                    ).every(
-                      Boolean,
-                    )
-                  }
-                  onPress={
-                    finalizeHistoricalMigration
-                  }
-                  style={[
-                    styles.primary,
-                    (
-                      !canManage ||
-                      saving ||
-                      !closureStatus ||
-                      closureStatus.closed ||
-                      closureStatus.unresolved_imports >
-                        0 ||
-                      closureStatus.unapproved_drafts >
-                        0 ||
-                      closureStatus.approved_drafts ===
-                        0 ||
-                      !Object.values(
-                        closureChecks,
-                      ).every(
-                        Boolean,
-                      )
-                    ) &&
-                      styles.disabled,
-                  ]}
-                >
-                  <Text
-                    style={
-                      styles.primaryText
-                    }
-                  >
-                    {saving
-                      ? 'Finalising…'
-                      : 'Finalise migration'}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            )}
+                    closureStatus.unresolved_imports > 0 ||
+                    closureStatus.unapproved_drafts > 0 ||
+                    closureStatus.approved_drafts === 0 ||
+                    !Object.values(closureChecks).every(Boolean)
+                  ) && styles.disabled,
+                ]}
+              >
+                <Text style={styles.primaryText}>
+                  {saving ? 'Finishing…' : 'FINISH AND CLOSE OLD RECORDS'}
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function Metric({
+  label,
+  value,
+}: {
+  label: string;
+  value: number;
+}) {
+  return (
+    <View style={styles.reportMetric}>
+      <Text style={styles.reportValue}>{value}</Text>
+      <Text style={styles.reportLabel}>{label}</Text>
+    </View>
   );
 }
 
@@ -2695,10 +1692,8 @@ const styles = StyleSheet.create({
   },
   center: {
     flex: 1,
-    alignItems:
-      'center',
-    justifyContent:
-      'center',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   content: {
     padding: 13,
@@ -2709,7 +1704,8 @@ const styles = StyleSheet.create({
   },
   backText: {
     color: '#166534',
-    fontWeight: '600',
+    fontWeight: '300',
+    fontSize: 14,
   },
   header: {
     backgroundColor: '#14532d',
@@ -2720,12 +1716,12 @@ const styles = StyleSheet.create({
   kicker: {
     color: '#bbf7d0',
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: '400',
   },
   title: {
     color: '#fff',
-    fontSize: 20,
-    fontWeight: '600',
+    fontSize: 21,
+    fontWeight: '400',
     marginTop: 7,
   },
   sub: {
@@ -2734,16 +1730,28 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     marginTop: 8,
   },
-  stepHeading: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#111827',
-    marginTop: 13,
-    marginBottom: 9,
+  stepCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 13,
+    borderWidth: 1,
+    borderColor: '#dbe4dc',
+    marginBottom: 13,
+  },
+  stepNumber: {
+    color: '#16a34a',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  stepTitle: {
+    color: '#14532d',
+    fontSize: 18,
+    fontWeight: '400',
+    marginTop: 4,
   },
   heading: {
-    fontSize: 17,
-    fontWeight: '600',
+    fontSize: 16,
+    fontWeight: '400',
     color: '#111827',
     marginTop: 13,
     marginBottom: 9,
@@ -2757,40 +1765,38 @@ const styles = StyleSheet.create({
     marginBottom: 11,
   },
   notice: {
-    backgroundColor:
-      '#fef3c7',
-    borderColor:
-      '#f59e0b',
+    backgroundColor: '#fef3c7',
+    borderColor: '#f59e0b',
     borderWidth: 1,
-    borderRadius:
-      10,
-    padding:
-      11,
+    borderRadius: 10,
+    padding: 11,
+    marginBottom: 10,
   },
   noticeText: {
     color: '#92400e',
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '300',
+    lineHeight: 17,
   },
   label: {
-    fontSize: 12,
-    fontWeight: '500',
+    fontSize: 13,
+    fontWeight: '300',
     color: '#334155',
-    marginTop: 11,
-    marginBottom: 6,
+    marginTop: 12,
+    marginBottom: 7,
   },
   input: {
-    minHeight: 44,
+    minHeight: 46,
     borderWidth: 1,
     borderColor: '#cbd5e1',
     borderRadius: 10,
     paddingHorizontal: 11,
     color: '#111827',
-    fontSize: 13,
+    fontSize: 14,
     backgroundColor: '#fff',
   },
   multiline: {
-    minHeight: 70,
+    minHeight: 75,
     textAlignVertical: 'top',
     paddingTop: 10,
   },
@@ -2803,8 +1809,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#cbd5e1',
     borderRadius: 18,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
+    paddingHorizontal: 11,
+    paddingVertical: 10,
     backgroundColor: '#f8fafc',
   },
   chipOn: {
@@ -2812,21 +1818,81 @@ const styles = StyleSheet.create({
     borderColor: '#166534',
   },
   chipText: {
-    fontSize: 12,
+    fontSize: 13,
     color: '#334155',
-    fontWeight: '600',
+    fontWeight: '300',
+    flexShrink: 1,
   },
   chipTextOn: {
     color: '#fff',
   },
-  memberChip: {
+  categoryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+  },
+  categoryButton: {
+    width: '48%',
+    minHeight: 52,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    borderRadius: 10,
+    padding: 10,
+    justifyContent: 'center',
+    backgroundColor: '#f0fdf4',
+  },
+  categoryButtonText: {
+    color: '#14532d',
+    fontSize: 13,
+    fontWeight: '400',
+    textAlign: 'center',
+  },
+  memberList: {
+    gap: 7,
+  },
+  memberButton: {
     borderWidth: 1,
     borderColor: '#cbd5e1',
-    borderRadius: 12,
-    padding: 9,
-    marginRight: 7,
-    marginBottom: 3,
+    borderRadius: 10,
+    padding: 11,
     backgroundColor: '#f8fafc',
+  },
+  memberButtonOn: {
+    backgroundColor: '#166534',
+    borderColor: '#166534',
+  },
+  memberButtonText: {
+    fontSize: 14,
+    color: '#334155',
+    fontWeight: '400',
+  },
+  memberNumber: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 3,
+  },
+  memberNumberOn: {
+    color: '#dcfce7',
+  },
+  selectedBook: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#86efac',
+    borderWidth: 1,
+    borderRadius: 9,
+    padding: 10,
+    marginTop: 10,
+  },
+  selectedBookTitle: {
+    color: '#166534',
+    fontSize: 11,
+    fontWeight: '400',
+  },
+  selectedBookName: {
+    color: '#14532d',
+    fontSize: 14,
+    fontWeight: '400',
+    marginTop: 3,
   },
   primary: {
     minHeight: 49,
@@ -2840,7 +1906,8 @@ const styles = StyleSheet.create({
   primaryText: {
     color: '#fff',
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '400',
+    textAlign: 'center',
   },
   secondary: {
     padding: 12,
@@ -2848,7 +1915,8 @@ const styles = StyleSheet.create({
   },
   secondaryText: {
     color: '#475569',
-    fontWeight: '500',
+    fontWeight: '300',
+    fontSize: 13,
   },
   disabled: {
     opacity: 0.35,
@@ -2867,7 +1935,7 @@ const styles = StyleSheet.create({
   },
   importTitle: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '300',
     color: '#111827',
   },
   meta: {
@@ -2882,7 +1950,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fef3c7',
     color: '#92400e',
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: '300',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 7,
@@ -2891,15 +1959,33 @@ const styles = StyleSheet.create({
   empty: {
     color: '#64748b',
     fontSize: 13,
+    lineHeight: 18,
+  },
+  enterRecordsButton: {
+    minHeight: 52,
+    backgroundColor: '#14532d',
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 12,
+    paddingHorizontal: 12,
+    borderWidth: 2,
+    borderColor: '#16a34a',
+  },
+  enterRecordsButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '400',
+    textAlign: 'center',
   },
   checkRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 9,
     marginTop: 12,
   },
   checkbox: {
-    fontSize: 20,
+    fontSize: 21,
     color: '#166534',
   },
   draftCard: {
@@ -2907,24 +1993,24 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#dbe4dc',
     borderRadius: 10,
-    padding: 10,
-    marginBottom: 8,
+    padding: 11,
+    marginTop: 8,
   },
   opening: {
     color: '#92400e',
-    fontWeight: '600',
+    fontWeight: '400',
     fontSize: 11,
     marginTop: 5,
   },
   row: {
     flexDirection: 'row',
-    gap: 7,
-    marginTop: 9,
+    gap: 8,
+    marginTop: 10,
   },
   smallButton: {
     flex: 1,
     backgroundColor: '#dbeafe',
-    padding: 10,
+    padding: 11,
     borderRadius: 8,
     alignItems: 'center',
   },
@@ -2933,12 +2019,15 @@ const styles = StyleSheet.create({
   },
   smallText: {
     color: '#1d4ed8',
-    fontWeight: '600',
+    fontWeight: '400',
+  },
+  deleteText: {
+    color: '#b91c1c',
   },
   help: {
-    fontSize: 11,
+    fontSize: 12,
     color: '#64748b',
-    lineHeight: 16,
+    lineHeight: 18,
     marginTop: 7,
   },
   approvalCard: {
@@ -2951,8 +2040,8 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   approvalTitle: {
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '400',
     color: '#14532d',
     marginBottom: 6,
   },
@@ -2961,43 +2050,24 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#bbf7d0',
     borderRadius: 9,
-    padding: 9,
+    padding: 10,
     marginTop: 9,
   },
   verifyTitle: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '300',
     color: '#14532d',
   },
   validationNotice: {
     backgroundColor: '#ecfdf5',
     borderRadius: 8,
-    padding: 9,
+    padding: 10,
     marginTop: 10,
   },
   validationText: {
-    fontSize: 11,
+    fontSize: 12,
     color: '#166534',
-    lineHeight: 15,
-  },
-  step4Card: {
-    backgroundColor: '#ecfdf5',
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#86efac',
-    marginBottom: 10,
-  },
-  step4Kicker: {
-    color: '#166534',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  step4Title: {
-    color: '#14532d',
-    fontSize: 15,
-    fontWeight: '600',
-    marginTop: 3,
+    lineHeight: 17,
   },
   reportHeaderRow: {
     flexDirection: 'row',
@@ -3006,46 +2076,47 @@ const styles = StyleSheet.create({
   },
   reportRefresh: {
     color: '#166534',
-    fontWeight: '600',
-    padding: 7,
+    fontWeight: '300',
+    padding: 8,
   },
   reportSection: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '400',
     color: '#14532d',
     marginTop: 17,
-    marginBottom: 7,
+    marginBottom: 8,
   },
   reportGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+    marginTop: 10,
   },
   reportMetric: {
     minWidth: '25%',
     flexGrow: 1,
     backgroundColor: '#f0fdf4',
     borderRadius: 8,
-    padding: 9,
+    padding: 10,
     borderWidth: 1,
     borderColor: '#bbf7d0',
   },
   reportValue: {
-    fontSize: 17,
-    fontWeight: '600',
+    fontSize: 18,
+    fontWeight: '400',
     color: '#14532d',
   },
   reportLabel: {
-    fontSize: 10,
+    fontSize: 11,
     color: '#475569',
-    fontWeight: '600',
-    marginTop: 2,
+    fontWeight: '300',
+    marginTop: 3,
   },
   reportNote: {
-    fontSize: 11,
+    fontSize: 12,
     color: '#64748b',
-    lineHeight: 15,
-    marginTop: 6,
+    lineHeight: 17,
+    marginTop: 7,
   },
   reportCategoryRow: {
     flexDirection: 'row',
@@ -3053,19 +2124,19 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
-    paddingVertical: 8,
+    paddingVertical: 9,
   },
   reportAmount: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '400',
     color: '#14532d',
   },
   reportAuditRow: {
     borderLeftWidth: 3,
     borderLeftColor: '#16a34a',
-    paddingLeft: 8,
-    paddingVertical: 7,
-    marginTop: 6,
+    paddingLeft: 9,
+    paddingVertical: 8,
+    marginTop: 7,
     backgroundColor: '#f8fafc',
   },
   reportWarning: {
@@ -3073,31 +2144,31 @@ const styles = StyleSheet.create({
     borderColor: '#fdba74',
     borderWidth: 1,
     borderRadius: 8,
-    padding: 9,
-    marginTop: 12,
+    padding: 10,
+    marginTop: 13,
   },
   reportWarningText: {
-    fontSize: 11,
+    fontSize: 12,
     color: '#9a3412',
-    lineHeight: 15,
+    lineHeight: 17,
   },
-  step5Card: {
+  finalCard: {
     backgroundColor: '#eff6ff',
     borderRadius: 12,
-    padding: 12,
+    padding: 13,
     borderWidth: 1,
     borderColor: '#93c5fd',
-    marginBottom: 11,
+    marginBottom: 12,
   },
-  step5Kicker: {
+  finalKicker: {
     color: '#1d4ed8',
-    fontSize: 11,
-    fontWeight: '600',
+    fontSize: 12,
+    fontWeight: '500',
   },
-  step5Title: {
+  finalTitle: {
     color: '#1e3a8a',
-    fontSize: 15,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '400',
     marginTop: 4,
   },
   closedPanel: {
@@ -3105,37 +2176,19 @@ const styles = StyleSheet.create({
     borderColor: '#86efac',
     borderWidth: 1,
     borderRadius: 10,
-    padding: 10,
-    marginTop: 9,
+    padding: 11,
+    marginTop: 10,
   },
   closedTitle: {
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '500',
     color: '#166534',
     marginBottom: 7,
   },
   closedFoot: {
-    fontSize: 11,
-    color: '#166534',
-    lineHeight: 16,
-    marginTop: 8,
-  },
-  enterRecordsButton: {
-    minHeight: 52,
-    backgroundColor: '#14532d',
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 7,
-    marginBottom: 11,
-    paddingHorizontal: 12,
-    borderWidth: 2,
-    borderColor: '#16a34a',
-  },
-  enterRecordsButtonText: {
-    color: '#fff',
     fontSize: 12,
-    fontWeight: '700',
-    textAlign: 'center',
+    color: '#166534',
+    lineHeight: 17,
+    marginTop: 9,
   },
 });
