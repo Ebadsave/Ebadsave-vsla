@@ -371,7 +371,7 @@ export default function HistoricalMigrationScreen({
     ) {
       Alert.alert(
         'Check the date',
-        'Enter the date as YYYY-MM-DD. Example: 2021-04-17.',
+        'Enter the date as DD-MM-YYYY. Example: 20-11-2026.',
       );
       return;
     }
@@ -971,7 +971,7 @@ export default function HistoricalMigrationScreen({
                 value={date}
                 onChangeText={setDate}
                 style={styles.input}
-                placeholder="YYYY-MM-DD  Example: 2021-04-17"
+                placeholder="DD-MM-YYYY Example: 20-11-2026"
                 keyboardType="numbers-and-punctuation"
                 editable={
                   !saving &&
@@ -1516,9 +1516,9 @@ function Metric({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#f3f6f4' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  content: { padding: 13, paddingBottom: 38 },
+  content: { padding: 11, paddingBottom: 28 },
   back: { paddingVertical: 10 },
-  backText: { color: '#166534', fontWeight: '200', fontSize: 14 },
+  backText: { color: '#166534', fontWeight: '200', fontSize: 12 },
   header: {
     backgroundColor: '#14532d',
     borderRadius: 16,
@@ -1526,20 +1526,20 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   kicker: { color: '#bbf7d0', fontSize: 11, fontWeight: '400' },
-  title: { color: '#fff', fontSize: 21, fontWeight: '400', marginTop: 7 },
+  title: { color: '#fff', fontSize: 20, fontWeight: '400', marginTop: 7 },
   sub: { color: '#f0fdf4', fontSize: 13, lineHeight: 19, marginTop: 8 },
   stepCard: {
     backgroundColor: '#fff',
     borderRadius: 14,
-    padding: 13,
+    padding: 10,
     borderWidth: 1,
     borderColor: '#dbe4dc',
-    marginBottom: 13,
+    marginBottom: 10,
   },
   stepNumber: { color: '#16a34a', fontSize: 12, fontWeight: '400' },
   stepTitle: { color: '#14532d', fontSize: 18, fontWeight: '400', marginTop: 4 },
   heading: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '400',
     color: '#111827',
     marginTop: 13,
