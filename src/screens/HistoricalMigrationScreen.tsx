@@ -371,7 +371,7 @@ export default function HistoricalMigrationScreen({
     ) {
       Alert.alert(
         'Check the date',
-        'Enter the date as DD-MM-YYYY. Example: 20-11-2026.',
+        'Enter the date as YYYY-MM-DD. Example: 2021-04-17.',
       );
       return;
     }
@@ -971,7 +971,7 @@ export default function HistoricalMigrationScreen({
                 value={date}
                 onChangeText={setDate}
                 style={styles.input}
-                placeholder="DD-MM-YYYY Example: 20-11-2026"
+                placeholder="YYYY-MM-DD  Example: 2021-04-17"
                 keyboardType="numbers-and-punctuation"
                 editable={
                   !saving &&
@@ -1516,31 +1516,31 @@ function Metric({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#f3f6f4' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  content: { padding: 11, paddingBottom: 28 },
+  content: { padding: 13, paddingBottom: 38 },
   back: { paddingVertical: 10 },
-  backText: { color: '#166534', fontWeight: '200', fontSize: 12 },
+  backText: { color: '#166534', fontWeight: '500', fontSize: 12 },
   header: {
     backgroundColor: '#14532d',
     borderRadius: 16,
     padding: 17,
     marginBottom: 16,
   },
-  kicker: { color: '#bbf7d0', fontSize: 11, fontWeight: '400' },
-  title: { color: '#fff', fontSize: 20, fontWeight: '400', marginTop: 7 },
-  sub: { color: '#f0fdf4', fontSize: 13, lineHeight: 19, marginTop: 8 },
+  kicker: { color: '#bbf7d0', fontSize: 10, fontWeight: '500' },
+  title: { color: '#fff', fontSize: 18, fontWeight: '500', lineHeight: 22, marginTop: 7 },
+  sub: { color: '#f0fdf4', fontSize: 12, lineHeight: 17, marginTop: 7 },
   stepCard: {
     backgroundColor: '#fff',
     borderRadius: 14,
-    padding: 10,
+    padding: 13,
     borderWidth: 1,
     borderColor: '#dbe4dc',
-    marginBottom: 10,
+    marginBottom: 13,
   },
-  stepNumber: { color: '#16a34a', fontSize: 12, fontWeight: '400' },
-  stepTitle: { color: '#14532d', fontSize: 18, fontWeight: '400', marginTop: 4 },
+  stepNumber: { color: '#16a34a', fontSize: 10, fontWeight: '500' },
+  stepTitle: { color: '#14532d', fontSize: 15, fontWeight: '700', lineHeight: 19, marginTop: 4 },
   heading: {
-    fontSize: 14,
-    fontWeight: '400',
+    fontSize: 16,
+    fontWeight: '600',
     color: '#111827',
     marginTop: 13,
     marginBottom: 9,
@@ -1561,10 +1561,10 @@ const styles = StyleSheet.create({
     padding: 11,
     marginBottom: 10,
   },
-  noticeText: { color: '#92400e', fontSize: 12, fontWeight: '200', lineHeight: 17 },
+  noticeText: { color: '#92400e', fontSize: 11, fontWeight: '400', lineHeight: 14 },
   label: {
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 12,
+    fontWeight: '500',
     color: '#334155',
     marginTop: 12,
     marginBottom: 7,
@@ -1576,7 +1576,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 11,
     color: '#111827',
-    fontSize: 14,
+    fontSize: 12,
     backgroundColor: '#fff',
   },
   multiline: { minHeight: 75, textAlignVertical: 'top', paddingTop: 10 },
@@ -1590,7 +1590,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
   },
   chipOn: { backgroundColor: '#166534', borderColor: '#166534' },
-  chipText: { fontSize: 13, color: '#334155', fontWeight: '200', flexShrink: 1 },
+  chipText: { fontSize: 12, color: '#334155', fontWeight: '500', flexShrink: 1 },
   chipTextOn: { color: '#fff' },
   categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
   categoryButton: {
@@ -1605,8 +1605,8 @@ const styles = StyleSheet.create({
   },
   categoryButtonText: {
     color: '#14532d',
-    fontSize: 13,
-    fontWeight: '700',
+    fontSize: 12,
+    fontWeight: '500',
     textAlign: 'center',
   },
   memberList: { gap: 7 },
@@ -1618,7 +1618,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
   },
   memberButtonOn: { backgroundColor: '#166534', borderColor: '#166534' },
-  memberButtonText: { fontSize: 14, color: '#334155', fontWeight: '300' },
+  memberButtonText: { fontSize: 12, color: '#334155', fontWeight: '500' },
   memberNumber: { fontSize: 11, color: '#64748b', marginTop: 3 },
   memberNumberOn: { color: '#dcfce7' },
   selectedBook: {
@@ -1629,8 +1629,8 @@ const styles = StyleSheet.create({
     padding: 10,
     marginTop: 10,
   },
-  selectedBookTitle: { color: '#166534', fontSize: 11, fontWeight: '300' },
-  selectedBookName: { color: '#14532d', fontSize: 14, fontWeight: '300', marginTop: 3 },
+  selectedBookTitle: { color: '#166534', fontSize: 10, fontWeight: '500' },
+  selectedBookName: { color: '#14532d', fontSize: 12, fontWeight: '400', marginTop: 3 },
   primary: {
     minHeight: 49,
     backgroundColor: '#16a34a',
@@ -1640,9 +1640,9 @@ const styles = StyleSheet.create({
     marginTop: 14,
     paddingHorizontal: 12,
   },
-  primaryText: { color: '#fff', fontSize: 14, fontWeight: '400', textAlign: 'center' },
+  primaryText: { color: '#fff', fontSize: 12, fontWeight: '500', textAlign: 'center' },
   secondary: { padding: 12, alignItems: 'center' },
-  secondaryText: { color: '#475569', fontWeight: '300', fontSize: 13 },
+  secondaryText: { color: '#475569', fontWeight: '500', fontSize: 12 },
   disabled: { opacity: 0.35 },
   importCard: {
     backgroundColor: '#fff',
@@ -1653,21 +1653,21 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   selected: { borderColor: '#16a34a', borderWidth: 2 },
-  importTitle: { fontSize: 13, fontWeight: '400', color: '#111827' },
-  meta: { fontSize: 12, color: '#64748b', marginTop: 4, lineHeight: 17 },
+  importTitle: { fontSize: 12, fontWeight: '500', color: '#111827' },
+  meta: { fontSize: 11, color: '#64748b', marginTop: 4, lineHeight: 14 },
   status: {
     alignSelf: 'flex-start',
     marginTop: 7,
     backgroundColor: '#fef3c7',
     color: '#92400e',
     fontSize: 11,
-    fontWeight: '400',
+    fontWeight: '500',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 7,
     overflow: 'hidden',
   },
-  empty: { color: '#64748b', fontSize: 13, lineHeight: 18 },
+  empty: { color: '#64748b', fontSize: 12, lineHeight: 17 },
   enterRecordsButton: {
     minHeight: 40,
     backgroundColor: '#14532d',
@@ -1681,12 +1681,12 @@ const styles = StyleSheet.create({
   },
   enterRecordsButtonText: {
     color: '#fff',
-    fontSize: 10,
-    fontWeight: '300',
+    fontSize: 12,
+    fontWeight: '500',
     textAlign: 'center',
   },
   checkRow: { flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 12 },
-  checkbox: { fontSize: 21, color: '#166534' },
+  checkbox: { fontSize: 18, color: '#166534' },
   draftCard: {
     backgroundColor: '#fff',
     borderWidth: 1,
@@ -1695,7 +1695,7 @@ const styles = StyleSheet.create({
     padding: 11,
     marginTop: 8,
   },
-  opening: { color: '#92400e', fontWeight: '300', fontSize: 11, marginTop: 5 },
+  opening: { color: '#92400e', fontWeight: '500', fontSize: 11, marginTop: 5 },
   row: { flexDirection: 'row', gap: 8, marginTop: 10 },
   smallButton: {
     flex: 1,
@@ -1705,9 +1705,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   delete: { backgroundColor: '#fee2e2' },
-  smallText: { color: '#1d4ed8', fontWeight: '200' },
+  smallText: { color: '#1d4ed8', fontWeight: '500', fontSize: 12 },
   deleteText: { color: '#b91c1c' },
-  help: { fontSize: 12, color: '#64748b', lineHeight: 18, marginTop: 7 },
+  help: { fontSize: 11, color: '#64748b', lineHeight: 14, marginTop: 7 },
   approvalCard: {
     backgroundColor: '#f0fdf4',
     borderWidth: 1,
@@ -1717,7 +1717,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginBottom: 10,
   },
-  approvalTitle: { fontSize: 15, fontWeight: '200', color: '#14532d', marginBottom: 6 },
+  approvalTitle: { fontSize: 15, fontWeight: '700', lineHeight: 19, color: '#14532d', marginBottom: 6 },
   verifyRow: {
     backgroundColor: '#fff',
     borderWidth: 1,
@@ -1726,18 +1726,18 @@ const styles = StyleSheet.create({
     padding: 10,
     marginTop: 9,
   },
-  verifyTitle: { fontSize: 13, fontWeight: '300', color: '#14532d' },
+  verifyTitle: { fontSize: 12, fontWeight: '500', color: '#14532d' },
   validationNotice: { backgroundColor: '#ecfdf5', borderRadius: 8, padding: 10, marginTop: 10 },
-  validationText: { fontSize: 12, color: '#166534', lineHeight: 17 },
+  validationText: { fontSize: 11, color: '#166534', lineHeight: 14 },
   reportHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  reportRefresh: { color: '#166534', fontWeight: '300', padding: 8 },
+  reportRefresh: { color: '#166534', fontWeight: '500', fontSize: 12, padding: 8 },
   reportSection: {
-    fontSize: 14,
-    fontWeight: '300',
+    fontSize: 12,
+    fontWeight: '500',
     color: '#14532d',
     marginTop: 17,
     marginBottom: 8,
@@ -1752,9 +1752,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#bbf7d0',
   },
-  reportValue: { fontSize: 18, fontWeight: '300', color: '#14532d' },
-  reportLabel: { fontSize: 11, color: '#475569', fontWeight: '300', marginTop: 3 },
-  reportNote: { fontSize: 12, color: '#64748b', lineHeight: 17, marginTop: 7 },
+  reportValue: { fontSize: 15, fontWeight: '700', lineHeight: 19, color: '#14532d' },
+  reportLabel: { fontSize: 11, color: '#475569', fontWeight: '500', marginTop: 3 },
+  reportNote: { fontSize: 11, color: '#64748b', lineHeight: 14, marginTop: 7 },
   reportCategoryRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1763,7 +1763,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#e2e8f0',
     paddingVertical: 9,
   },
-  reportAmount: { fontSize: 12, fontWeight: '300', color: '#14532d' },
+  reportAmount: { fontSize: 12, fontWeight: '500', color: '#14532d' },
   reportAuditRow: {
     borderLeftWidth: 3,
     borderLeftColor: '#16a34a',
@@ -1780,7 +1780,7 @@ const styles = StyleSheet.create({
     padding: 10,
     marginTop: 13,
   },
-  reportWarningText: { fontSize: 12, color: '#9a3412', lineHeight: 17 },
+  reportWarningText: { fontSize: 11, color: '#9a3412', lineHeight: 14 },
   finalCard: {
     backgroundColor: '#eff6ff',
     borderRadius: 12,
@@ -1789,8 +1789,8 @@ const styles = StyleSheet.create({
     borderColor: '#93c5fd',
     marginBottom: 12,
   },
-  finalKicker: { color: '#1d4ed8', fontSize: 12, fontWeight: '300' },
-  finalTitle: { color: '#1e3a8a', fontSize: 17, fontWeight: '300', marginTop: 4 },
+  finalKicker: { color: '#1d4ed8', fontSize: 10, fontWeight: '500' },
+  finalTitle: { color: '#1e3a8a', fontSize: 16, fontWeight: '600', marginTop: 4 },
   closedPanel: {
     backgroundColor: '#f0fdf4',
     borderColor: '#86efac',
@@ -1799,6 +1799,6 @@ const styles = StyleSheet.create({
     padding: 11,
     marginTop: 10,
   },
-  closedTitle: { fontSize: 13, fontWeight: '300', color: '#166534', marginBottom: 7 },
-  closedFoot: { fontSize: 10, color: '#166534', lineHeight: 17, marginTop: 9 },
+  closedTitle: { fontSize: 12, fontWeight: '500', color: '#166534', marginBottom: 7 },
+  closedFoot: { fontSize: 11, color: '#166534', lineHeight: 14, marginTop: 9 },
 });
