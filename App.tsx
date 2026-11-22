@@ -30,7 +30,7 @@ import OnboardingScreen from './src/screens/OnboardingScreen';
 import ExistingGroupOnboardingScreen from './src/screens/ExistingGroupOnboardingScreen';
 import HistoricalRecordsScreen from './src/screens/HistoricalRecordsScreen';
 import HistoricalMigrationScreen from './src/screens/HistoricalMigrationScreen';
-import HistoricalMigrationReviewScreeneeniewScreenistoricalMigrationReviewScreenistoricalMigrationReviewScreenMigrationReviewScreen from './src/screens/HistoricalMigrationReviewScreen';
+import HistoricalMigrationReviewScreen' from './src/screens/HistoricalMigrationReviewScreen';
 import ShareOutCalculationScreen from './src/screens/ShareOutCalculationScreen';
 import MemberPassbookLoginScreen from './src/screens/MemberPassbookLoginScreen';
 import MemberPassbookScreen from './src/screens/MemberPassbookScreen';
