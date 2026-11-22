@@ -30,6 +30,7 @@ import OnboardingScreen from './src/screens/OnboardingScreen';
 import ExistingGroupOnboardingScreen from './src/screens/ExistingGroupOnboardingScreen';
 import HistoricalRecordsScreen from './src/screens/HistoricalRecordsScreen';
 import HistoricalMigrationScreen from './src/screens/HistoricalMigrationScreen';
+import HistoricaMigrationReviewScreen from './src/screens/HistoricalMigrationRevoewScreen';
 import ShareOutCalculationScreen from './src/screens/ShareOutCalculationScreen';
 import MemberPassbookLoginScreen from './src/screens/MemberPassbookLoginScreen';
 import MemberPassbookScreen from './src/screens/MemberPassbookScreen';
@@ -46,6 +47,7 @@ export type RootStackParamList = {
   ExistingGroupOnboarding: { groupId: number };
   HistoricalRecords: { groupId: number; executiveMemberId: number };
   HistoricalMigration: { groupId: number; executiveMemberId: number };
+  HistoricalMigrationReview:  { groupId: number; executiveMemberId: number };
   ShareOutCalculation: { groupId: number; executiveMemberId: number };
   PreAppAuthorization: undefined;
   Home: undefined;
@@ -352,6 +354,7 @@ export default function App() {
         <Stack.Screen name="ExistingGroupOnboarding" component={ExistingGroupOnboardingScreen} />
         <Stack.Screen name="HistoricalRecords" component={HistoricalRecordsScreen} />
         <Stack.Screen name="HistoricalMigration" component={HistoricalMigrationScreen} />
+        <Stack.Screen name="HistoricalMigrationReview" component={HistoricalMigrationReviewScreen} />
         <Stack.Screen name="ShareOutCalculation" component={ShareOutCalculationScreen} />
         <Stack.Screen name="PreAppAuthorization" component={PreAppAuthorizationScreen} />
         <Stack.Screen name="Home" component={HomeScreen} />
