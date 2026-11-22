@@ -1,9 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 import * as FileSystem from 'expo-file-system';
 import * as Crypto from 'expo-crypto';
-import { signInAnonymously } from 'firebase/auth';
-import { doc, runTransaction } from 'firebase/firestore';
-import { auth, db as firestoreDb } from '../firestore/firestore';
 function generateLocalId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 }
