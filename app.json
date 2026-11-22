@@ -13,6 +13,13 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon/app_icon.png",
         "backgroundColor": "#FFFFFF"
+         "permissions":  "BLUETOOTH",
+    "BLUETOOTH_CONNECT",
+    "BLUETOOTH_SCAN",
+    "BLUETOOTH_ADMIN",
+    "ACCESS_FINE_LOCATION"
+  
+      }
       }
     },
     "plugins": [
