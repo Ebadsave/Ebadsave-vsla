@@ -230,6 +230,17 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.back}><Text style={styles.backText}>‹ Back</Text></TouchableOpacity>
+        <TouchableOpacity
+  onPress={() => navigation.navigate('HistoricalMigrationReview', {
+    groupId,
+    executiveMemberId,
+    bookName,
+    adminPin: '1234', // change to your real admin PIN
+  })}
+  style={[styles.primary, { backgroundColor: '#1d4ed8' }]}
+>
+  <Text style={styles.primaryText}>CHECK ALL MEMBERS - REVIEW PAGE</Text>
+</TouchableOpacity>
 
         {/* BOOK NAME AS TITLE - NO REGISTER, NO LIST */}
         <View style={styles.header}>
