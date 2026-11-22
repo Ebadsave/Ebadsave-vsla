@@ -15,6 +15,7 @@ import {
   getMembersByGroupId,
   getHistoricalMigrationImports,
   getHistoricalMigrationDrafts,
+  createHistoricalMigrationImport,
   createHistoricalMigrationDraft,
   updateHistoricalMigrationDraft,
   deleteHistoricalMigrationDraft,
@@ -24,8 +25,18 @@ import {
 } from '../database/database';
 
 type Props = {
-  route: { params: { groupId: number; executiveMemberId: number } };
-  navigation: { goBack: () => void };
+  route: {
+    params: {
+      groupId: number;
+      executiveMemberId: number;
+      bookName?: string;
+      groupName?: string;
+    };
+  };
+  navigation: {
+    goBack: () => void;
+    navigate: (screen: string, params: any) => void;
+  };
 };
 
 type Member = { id: number; full_name: string; member_number: string };
@@ -57,8 +68,21 @@ const isValidDDMMYYYY = (v: string) => {
   return Number.isFinite(dt.getTime()) && dt.toISOString().slice(0, 10) === iso;
 };
 
+// OVERDUE - as per setup rules. Due date < today and amount > 0 = OVERDUE
+const isOverdue = (isoDate: string, amount: number) => {
+  if (!isoDate || amount <= 0) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return new Date(`${isoDate.slice(0, 10)}T00:00:00`) < today;
+};
+
+const isImportOpen = (imp: HistoricalMigrationImport | null) => {
+  if (!imp) return false;
+  return ['pending_review', 'processing', 'needs_correction'].includes(imp.status);
+};
+
 export default function HistoricalMigrationScreen({ route, navigation }: Props) {
-  const { groupId } = route.params;
+  const { groupId, executiveMemberId, bookName, groupName } = route.params;
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [imports, setImports] = useState<HistoricalMigrationImport[]>([]);
@@ -75,6 +99,7 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
   const [prevLoanDate, setPrevLoanDate] = useState('');
   const [currentLoanAmount, setCurrentLoanAmount] = useState('');
   const [currentLoanDate, setCurrentLoanDate] = useState('');
+  const [dueDate, setDueDate] = useState('');
 
   const amountPaid = (() => {
     const p = Number(prevLoanAmount.replace(/,/g, '')) || 0;
@@ -83,24 +108,43 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
     return paid < 0 ? 0 : paid;
   })();
 
+  const ensureOpenImport = useCallback(async (bookTitle: string): Promise<HistoricalMigrationImport | null> => {
+    const all = await getHistoricalMigrationImports(groupId);
+    setImports(all);
+    const openOne = all.find(i => isImportOpen(i));
+    if (openOne) {
+      setSelectedImport(openOne);
+      setDrafts(await getHistoricalMigrationDrafts(openOne.id, groupId));
+      return openOne;
+    }
+    const newId = await createHistoricalMigrationImport({
+      group_id: groupId,
+      evidence_type: 'manual',
+      evidence_name: bookTitle,
+      evidence_uri: '',
+      source_reference: '',
+      notes: 'Auto-created - old import was closed',
+      created_by_member_id: executiveMemberId,
+    });
+    const refreshed = await getHistoricalMigrationImports(groupId);
+    setImports(refreshed);
+    const created = refreshed.find(i => i.id === newId) || null;
+    setSelectedImport(created);
+    setDrafts(created ? await getHistoricalMigrationDrafts(created.id, groupId) : []);
+    return created;
+  }, [groupId, executiveMemberId]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [loadedImports, loadedMembers] = await Promise.all([
-        getHistoricalMigrationImports(groupId),
-        getMembersByGroupId(groupId),
-      ]);
-      setImports(loadedImports);
+      const loadedMembers = await getMembersByGroupId(groupId);
       setMembers((loadedMembers as Member[]).slice().sort((a, b) => a.full_name.localeCompare(b.full_name)));
-      if (loadedImports.length > 0) {
-        const first = loadedImports[0];
-        setSelectedImport(first);
-        setDrafts(await getHistoricalMigrationDrafts(first.id, groupId));
-      }
+      const bookTitle = bookName || groupName || 'Old Book';
+      await ensureOpenImport(bookTitle);
     } catch (e) {
       Alert.alert('Could not load', e instanceof Error ? e.message : 'Try again.');
     } finally { setLoading(false); }
-  }, [groupId]);
+  }, [groupId, bookName, groupName, ensureOpenImport]);
 
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
@@ -109,10 +153,20 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
     setDate(''); setAmount(''); setDescription('');
     setPrevLoanAmount(''); setPrevLoanDate('');
     setCurrentLoanAmount(''); setCurrentLoanDate('');
+    setDueDate('');
   };
 
   const saveRecord = async () => {
-    if (!selectedImport || !selectedMemberView) return;
+    if (!selectedMemberView) return;
+    const bookTitle = bookName || groupName || 'Old Book';
+    let imp = selectedImport;
+    if (!isImportOpen(imp)) {
+      imp = await ensureOpenImport(bookTitle);
+    }
+    if (!imp) {
+      Alert.alert('Could not save', 'No open book found. Try again.');
+      return;
+    }
     if (category === 'previous_loan_balance') {
       if (!isValidDDMMYYYY(prevLoanDate)) {
         Alert.alert('Check date', 'Enter Previous Loan date as DD-MM-YYYY. Example: 17-04-2021.');
@@ -120,6 +174,10 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
       }
       if (!isValidDDMMYYYY(currentLoanDate)) {
         Alert.alert('Check date', 'Enter Current Loan date as DD-MM-YYYY.');
+        return;
+      }
+      if (dueDate && !isValidDDMMYYYY(dueDate)) {
+        Alert.alert('Check date', 'Enter Due Date as DD-MM-YYYY.');
         return;
       }
       const prev = Number(prevLoanAmount.replace(/,/g, ''));
@@ -134,33 +192,40 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
       }
       setSaving(true);
       try {
+        const dueISO = dueDate ? toISO(dueDate) : toISO(currentLoanDate);
         await createHistoricalMigrationDraft({
-          import_id: selectedImport.id,
+          import_id: imp.id,
           group_id: groupId,
           member_id: selectedMemberView.id,
           category: 'previous_loan_balance',
           transaction_date: toISO(prevLoanDate),
           amount: prev,
           is_opening_balance: false,
-          description: `Previous Loan Taken (with interest). Current / Balance Loan: ${curr}. Amount Paid: ${amountPaid}. ${description.trim()}`,
-          source_reference: selectedImport.source_reference || '',
+          description: `Previous Loan Taken (with interest). Current / Balance Loan: ${curr}. Amount Paid: ${amountPaid}. Due: ${dueDate || currentLoanDate}. ${description.trim()}`,
+          source_reference: imp.source_reference || '',
         });
         await createHistoricalMigrationDraft({
-          import_id: selectedImport.id,
+          import_id: imp.id,
           group_id: groupId,
           member_id: selectedMemberView.id,
           category: 'loan_issued',
-          transaction_date: toISO(currentLoanDate),
+          transaction_date: dueISO,
           amount: curr,
           is_opening_balance: false,
-          description: `Current / Balance Loan. From Previous Loan of ${prev}. Amount Paid: ${amountPaid}.`,
-          source_reference: selectedImport.source_reference || '',
+          description: `Current / Balance Loan. From Previous Loan of ${prev}. Amount Paid: ${amountPaid}. Due: ${dueDate || currentLoanDate}.`,
+          source_reference: imp.source_reference || '',
         });
-        setDrafts(await getHistoricalMigrationDrafts(selectedImport.id, groupId));
+        setDrafts(await getHistoricalMigrationDrafts(imp.id, groupId));
         resetForm();
         Alert.alert('Saved', 'Previous Loan and Current Loan saved.');
       } catch (e) {
-        Alert.alert('Could not save', e instanceof Error ? e.message : 'Try again.');
+        const msg = e instanceof Error ? e.message : 'Try again.';
+        if (msg.includes('not open')) {
+          await ensureOpenImport(bookTitle);
+          Alert.alert('Try again', 'Book was closed. A new open book is ready. Tap SAVE again.');
+        } else {
+          Alert.alert('Could not save', msg);
+        }
       } finally { setSaving(false); }
       return;
     }
@@ -176,7 +241,7 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
     setSaving(true);
     try {
       const payload = {
-        import_id: selectedImport.id,
+        import_id: imp.id,
         group_id: groupId,
         member_id: selectedMemberView.id,
         category,
@@ -184,15 +249,21 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
         amount: value,
         is_opening_balance: false,
         description: description.trim(),
-        source_reference: selectedImport.source_reference || '',
+        source_reference: imp.source_reference || '',
       };
       if (editing) await updateHistoricalMigrationDraft({ ...payload, id: editing.id });
       else await createHistoricalMigrationDraft(payload);
-      setDrafts(await getHistoricalMigrationDrafts(selectedImport.id, groupId));
+      setDrafts(await getHistoricalMigrationDrafts(imp.id, groupId));
       resetForm();
       Alert.alert('Saved', 'Record saved.');
     } catch (e) {
-      Alert.alert('Could not save', e instanceof Error ? e.message : 'Try again.');
+      const msg = e instanceof Error ? e.message : 'Try again.';
+      if (msg.includes('not open')) {
+        await ensureOpenImport(bookTitle);
+        Alert.alert('Try again', 'Book was closed. A new open book is ready. Tap SAVE again.');
+      } else {
+        Alert.alert('Could not save', msg);
+      }
     } finally { setSaving(false); }
   };
 
@@ -208,8 +279,12 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
     Alert.alert('Remove?', 'Remove this entry?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Remove', style: 'destructive', onPress: async () => {
-        await deleteHistoricalMigrationDraft(draft.id, draft.import_id, groupId);
-        setDrafts(await getHistoricalMigrationDrafts(draft.import_id, groupId));
+        try {
+          await deleteHistoricalMigrationDraft(draft.id, draft.import_id, groupId);
+          if (selectedImport) setDrafts(await getHistoricalMigrationDrafts(selectedImport.id, groupId));
+        } catch (e) {
+          Alert.alert('Could not remove', e instanceof Error ? e.message : 'Try again.');
+        }
       } },
     ]);
   };
@@ -224,30 +299,36 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
   const totalPrev = prevDrafts.reduce((s, d) => s + Number(d.amount), 0);
   const totalCurr = currDrafts.reduce((s, d) => s + Number(d.amount), 0);
   const totalPaid = totalPrev - totalCurr < 0 ? 0 : totalPrev - totalCurr;
-  const bookName = selectedImport?.evidence_name || 'Old Book';
+  const displayBookName = bookName || selectedImport?.evidence_name || groupName || 'Old Book';
+  const importOpen = isImportOpen(selectedImport);
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.back}><Text style={styles.backText}>‹ Back</Text></TouchableOpacity>
         <TouchableOpacity
-  onPress={() => navigation.navigate('HistoricalMigrationReview', {
-    groupId,
-    executiveMemberId,
-    bookName,
-    adminPin: '1234', // change to your real admin PIN
-  })}
-  style={[styles.primary, { backgroundColor: '#1d4ed8' }]}
->
-  <Text style={styles.primaryText}>CHECK ALL MEMBERS - REVIEW PAGE</Text>
-</TouchableOpacity>
+          onPress={() => navigation.navigate('HistoricalMigrationReview', {
+            groupId,
+            executiveMemberId,
+            bookName: displayBookName,
+            adminPin: '1234',
+          })}
+          style={[styles.primary, { backgroundColor: '#1d4ed8' }]}
+        >
+          <Text style={styles.primaryText}>CHECK ALL MEMBERS - REVIEW PAGE</Text>
+        </TouchableOpacity>
 
-        {/* BOOK NAME AS TITLE - NO REGISTER, NO LIST */}
         <View style={styles.header}>
           <Text style={styles.kicker}>EBADSAVE VSLA</Text>
-          <Text style={styles.title}>{bookName}</Text>
+          <Text style={styles.title}>{displayBookName}</Text>
           <Text style={styles.sub}>Enter old records. Then finish.</Text>
         </View>
+
+        {!importOpen && (
+          <View style={styles.notice}>
+            <Text style={styles.noticeText}>Old book was closed. A new open book is ready. You can save again.</Text>
+          </View>
+        )}
 
         <View style={styles.stepCard}>
           <Text style={styles.stepNumber}>STEP 1</Text>
@@ -301,6 +382,9 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
                   <TextInput value={currentLoanAmount} onChangeText={setCurrentLoanAmount} style={styles.input} placeholder="Enter amount" keyboardType="decimal-pad" />
                   <Text style={styles.label}>Date (DD-MM-YYYY)</Text>
                   <TextInput value={currentLoanDate} onChangeText={setCurrentLoanDate} style={styles.input} placeholder="DD-MM-YYYY" keyboardType="numbers-and-punctuation" />
+                  <Text style={styles.label}>Due Date (DD-MM-YYYY) - for Overdue check</Text>
+                  <TextInput value={dueDate} onChangeText={setDueDate} style={styles.input} placeholder="DD-MM-YYYY - when loan should be paid" keyboardType="numbers-and-punctuation" />
+                  <Text style={styles.help}>If Due Date is before today and balance is more than 0, it will show OVERDUE in red.</Text>
                   <Text style={styles.label}>Amount Paid - Auto, do not edit</Text>
                   <View style={styles.autoBox}>
                     <Text style={styles.autoText}>UGX {amountPaid.toLocaleString()}</Text>
@@ -334,19 +418,28 @@ export default function HistoricalMigrationScreen({ route, navigation }: Props) 
               </View>
 
               <Text style={styles.heading}>Records for this member ({visibleDrafts.length})</Text>
-              {visibleDrafts.map(draft => (
-                <View key={draft.id} style={styles.draftCard}>
-                  <Text style={styles.importTitle}>
-                    {draft.category === 'previous_loan_balance' ? 'Previous Loan' : draft.category === 'loan_issued' ? 'Current Loan' : draft.category} • UGX {Number(draft.amount).toLocaleString()}
-                  </Text>
-                  <Text style={styles.meta}>{formatDDMMYYYY(draft.transaction_date)}</Text>
-                  {!!draft.description && (<Text style={styles.meta}>{draft.description}</Text>)}
-                  <View style={styles.row}>
-                    <TouchableOpacity onPress={() => editDraft(draft)} style={styles.smallButton}><Text style={styles.smallText}>Change</Text></TouchableOpacity>
-                    <TouchableOpacity onPress={() => removeDraft(draft)} style={[styles.smallButton, styles.delete]}><Text style={[styles.smallText, styles.deleteText]}>Remove</Text></TouchableOpacity>
+              {visibleDrafts.map(draft => {
+                const overdue = (draft.category === 'previous_loan_balance' || draft.category === 'loan_issued')
+                  ? isOverdue(draft.transaction_date, draft.amount)
+                  : false;
+                return (
+                  <View key={draft.id} style={[styles.draftCard, overdue && styles.overdueCard]}>
+                    <View style={styles.detailRow}>
+                      <Text style={styles.importTitle}>
+                        {draft.category === 'previous_loan_balance' ? 'Previous Loan' : draft.category === 'loan_issued' ? 'Current Loan' : draft.category} • UGX {Number(draft.amount).toLocaleString()}
+                      </Text>
+                      {overdue && <Text style={styles.overdueText}>OVERDUE</Text>}
+                    </View>
+                    <Text style={styles.meta}>{formatDDMMYYYY(draft.transaction_date)}</Text>
+                    {overdue && <Text style={styles.overdueText}>Due date passed - still owing</Text>}
+                    {!!draft.description && (<Text style={styles.meta}>{draft.description}</Text>)}
+                    <View style={styles.row}>
+                      <TouchableOpacity onPress={() => editDraft(draft)} style={styles.smallButton}><Text style={styles.smallText}>Change</Text></TouchableOpacity>
+                      <TouchableOpacity onPress={() => removeDraft(draft)} style={[styles.smallButton, styles.delete]}><Text style={[styles.smallText, styles.deleteText]}>Remove</Text></TouchableOpacity>
+                    </View>
                   </View>
-                </View>
-              ))}
+                );
+              })}
 
               <TouchableOpacity onPress={() => { Alert.alert('Finished', `All records for ${selectedMemberView.full_name} are saved.`); setSelectedMemberView(null); }} style={[styles.primary, { backgroundColor: '#14532d' }]}>
                 <Text style={styles.primaryText}>FINISH - DONE FOR THIS MEMBER</Text>
@@ -410,4 +503,8 @@ const styles = StyleSheet.create({
   delete: { backgroundColor: '#fee2e2' },
   smallText: { color: '#1d4ed8', fontWeight: '500', fontSize: 12 },
   deleteText: { color: '#b91c1c' },
+  notice: { backgroundColor: '#fef3c7', borderColor: '#f59e0b', borderWidth: 1, borderRadius: 10, padding: 11, marginBottom: 10 },
+  noticeText: { color: '#92400e', fontSize: 11, fontWeight: '400', lineHeight: 14 },
+  overdueText: { fontSize: 12, fontWeight: '700', color: '#dc2626' },
+  overdueCard: { borderColor: '#dc2626', borderWidth: 1, backgroundColor: '#fef2f2' },
 });
