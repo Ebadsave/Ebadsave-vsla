@@ -18,6 +18,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - name: Apply pending Ebadsave D1 migrations
         working-directory: Cloudflare-worker
         shell: bash
@@ -32,49 +43,48 @@ jobs:
           npx wrangler d1 migrations apply ebadsave-vsla-db --remote
           echo "D1 migration step completed."
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
       - name: Install Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
           if [ ! -x "$SDKMANAGER" ]; then
             SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort | tail -n 1)"
           fi
+
           if [ -z "${SDKMANAGER:-}" ] || [ ! -x "$SDKMANAGER" ]; then
             echo "ERROR: Android sdkmanager was not found."
             exit 1
           fi
+
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.1.12297006"
+
+          "$SDKMANAGER" --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.1.12297006"
+
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
       - name: Install JavaScript dependencies
         shell: bash
         run: |
           set -euo pipefail
+
           if [ ! -f package.json ]; then
             echo "ERROR: package.json was not found in the repository root."
             exit 1
           fi
-          npm install
-          # Do not run npx expo install expo-image-picker here.
-          # crypto-js is already declared in package.json.
 
-      - name: Fix Bluetooth printer HTTP repositories
+          npm install
+
+      - name: Fix Bluetooth printer Gradle compatibility
         shell: bash
         run: |
           set -euo pipefail
+
           FILE="node_modules/react-native-bluetooth-escpos-printer/android/build.gradle"
 
           if [ ! -f "$FILE" ]; then
@@ -88,23 +98,28 @@ jobs:
           import sys
 
           path = Path(sys.argv[1])
-          original = path.read_text()
+          text = path.read_text()
 
-          # Gradle rejects HTTP Maven/JCenter repositories. Change only the
-          # repository URL scheme; do not alter dependencies or app signing.
-          updated, count = re.subn(
-              r'(?i)(https?://)',
-              lambda match: "https://" if match.group(0).lower().startswith("http://") else match.group(0),
-              original
+          # Convert insecure HTTP repository URLs to HTTPS.
+          text = re.sub(r'(?i)http://', 'https://', text)
+
+          # Gradle 8 removed the old compile dependency configuration.
+          text, count = re.subn(
+              r'(?m)^(\s*)compile(\s+)(?=fileTree\b|files\b|["\'])',
+              r'\1implementation\2',
+              text
           )
 
-          if "http://" in updated.lower():
-              raise SystemExit(
-                  "ERROR: An HTTP URL remains in the Bluetooth printer Gradle file."
-              )
+          if re.search(r'(?i)http://', text):
+              raise SystemExit("ERROR: HTTP repository URL remains.")
 
-          path.write_text(updated)
-          print(f"Bluetooth Gradle file checked; HTTP URLs converted: {count}")
+          if re.search(r'(?m)^\s*compile\s+(fileTree|files)\b', text):
+              raise SystemExit("ERROR: Deprecated compile dependency remains.")
+
+          path.write_text(text)
+
+          print("Bluetooth printer Gradle compatibility patch completed.")
+          print(f"Deprecated compile declarations replaced: {count}")
           PYCODE
 
       - name: Verify Crypto-JS installation
@@ -127,9 +142,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           cat > "$RUNNER_TEMP/ebadsave-maven-mirror.init.gradle" <<'GRADLE'
-          // Add a Maven Central mirror to the main build and included builds,
-          // including Expo's expo-gradle-plugin.
           gradle.beforeSettings { settings ->
               settings.pluginManagement.repositories {
                   maven {
@@ -146,6 +160,7 @@ jobs:
                       url = uri("https://maven-central.storage-download.googleapis.com/maven2")
                   }
               }
+
               project.repositories {
                   maven {
                       name = "GoogleMavenCentralMirror"
@@ -154,12 +169,14 @@ jobs:
               }
           }
           GRADLE
-          echo "Created Gradle init script for plugin, buildscript, and project dependencies."
+
+          echo "Created Gradle Maven mirror configuration."
 
       - name: Check application icon
         shell: bash
         run: |
           set -euo pipefail
+
           if [ ! -f assets/icon/app_icon.png ]; then
             echo "ERROR: Ebadsave icon was not found."
             exit 1
@@ -178,6 +195,7 @@ jobs:
           fi
 
           KEYSTORE_FILE="$RUNNER_TEMP/ebadsave-vsla-release.jks"
+
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_FILE"
           chmod 600 "$KEYSTORE_FILE"
 
@@ -193,6 +211,7 @@ jobs:
           import re
 
           gradle_file = Path("android/app/build.gradle")
+
           if not gradle_file.exists():
               raise SystemExit("ERROR: android/app/build.gradle was not generated.")
 
@@ -200,12 +219,13 @@ jobs:
 
           if "signingConfigs.release" in text:
               raise SystemExit(
-                  "ERROR: Release signing configuration already exists; refusing to patch twice."
+                  "ERROR: Release signing configuration already exists."
               )
 
           marker = re.search(r"(?m)^\s*buildTypes\s*\{", text)
+
           if not marker:
-              raise SystemExit("ERROR: Could not find buildTypes block in generated build.gradle.")
+              raise SystemExit("ERROR: Could not find buildTypes block.")
 
           release_signing = """    signingConfigs {
               release {
@@ -243,12 +263,14 @@ jobs:
                       depth += 1
                   elif ch == "}":
                       depth -= 1
+
                       if depth == 0:
                           return opening_brace, i + 1
 
-              raise SystemExit("ERROR: Unbalanced Gradle braces while locating signing blocks.")
+              raise SystemExit("ERROR: Unbalanced Gradle braces.")
 
           build_types_match = re.search(r"\bbuildTypes\s*\{", text)
+
           if not build_types_match:
               raise SystemExit("ERROR: Could not find buildTypes block.")
 
@@ -257,6 +279,7 @@ jobs:
           build_block = text[build_start:build_end]
 
           release_match = re.search(r"\brelease\s*\{", build_block)
+
           if not release_match:
               raise SystemExit("ERROR: Could not find buildTypes.release block.")
 
@@ -272,12 +295,10 @@ jobs:
           )
 
           if count == 0:
-              if re.search(
+              if not re.search(
                   r"(?m)^\s*signingConfig\s+signingConfigs\.release\s*$",
                   release_block,
               ):
-                  print("Release build type already references signingConfigs.release")
-              else:
                   release_block = (
                       release_block[:-1]
                       + "        signingConfig signingConfigs.release\n    }"
@@ -288,10 +309,12 @@ jobs:
               + release_block
               + build_block[release_end:]
           )
+
           text = text[:build_start] + build_block + text[build_end:]
 
           gradle_file.write_text(text)
-          print("Configured permanent release signing in android/app/build.gradle")
+
+          print("Configured permanent release signing.")
           PYCODE
 
       - name: Build RELEASE APK
@@ -303,12 +326,18 @@ jobs:
         run: |
           set -euo pipefail
           cd android
-          ./gradlew -I "$RUNNER_TEMP/ebadsave-maven-mirror.init.gradle" assembleRelease --no-daemon --stacktrace
+
+          ./gradlew \
+            -I "$RUNNER_TEMP/ebadsave-maven-mirror.init.gradle" \
+            assembleRelease \
+            --no-daemon \
+            --stacktrace
 
       - name: Verify APK and check size
         shell: bash
         run: |
           set -euo pipefail
+
           APK="android/app/build/outputs/apk/release/app-release.apk"
 
           if [ ! -f "$APK" ]; then
@@ -320,27 +349,40 @@ jobs:
           ls -lh "$APK"
 
           APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+
           if [ ! -x "$APKSIGNER" ]; then
-            echo "ERROR: apksigner was not found at $APKSIGNER."
+            echo "ERROR: apksigner was not found."
             exit 1
           fi
 
           "$APKSIGNER" verify --verbose --print-certs "$APK"
 
-          ACTUAL_CERT_SHA256=$("$APKSIGNER" verify --print-certs "$APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest:/ {print tolower($2); exit}')
+          ACTUAL_CERT_SHA256=$(
+            "$APKSIGNER" verify --print-certs "$APK" |
+            awk -F': ' '/Signer #1 certificate SHA-256 digest:/ {
+              print tolower($2)
+              exit
+            }'
+          )
+
           EXPECTED_CERT_SHA256="16df7c1c99ac0c60da89ef0c6064a7d912f72f409c1a8c5df4a6b8c6340d04a7"
 
           if [ "$ACTUAL_CERT_SHA256" != "$EXPECTED_CERT_SHA256" ]; then
             echo "ERROR: APK was not signed with the approved permanent Ebadsave certificate."
             echo "Expected SHA-256: $EXPECTED_CERT_SHA256"
-            echo "Actual SHA-256:   ${ACTUAL_CERT_SHA256:-not detected}"
+            echo "Actual SHA-256: ${ACTUAL_CERT_SHA256:-not detected}"
             exit 1
           fi
 
-          echo "SUCCESS: APK signature matches the permanent Ebadsave release certificate."
+          echo "SUCCESS: APK signature matches the approved certificate."
 
           AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
-          PACKAGE_NAME=$("$AAPT" dump badging "$APK" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p" | head -n 1)
+
+          PACKAGE_NAME=$(
+            "$AAPT" dump badging "$APK" |
+            sed -n "s/^package: name='\([^']*\)'.*/\1/p" |
+            head -n 1
+          )
 
           if [ "$PACKAGE_NAME" != "com.ebadsave.vsla" ]; then
             echo "ERROR: Unexpected APK package name: ${PACKAGE_NAME:-not detected}"
