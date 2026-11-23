@@ -111,67 +111,107 @@ jobs:
           set -euo pipefail
           npx expo prebuild --platform android --clean --non-interactive
 
-      - name: Fix Bluetooth printer Gradle compatibility
+      - name: Fix Bluetooth printer AndroidX and Gradle compatibility
         shell: bash
         run: |
           set -euo pipefail
 
-          FILE="node_modules/react-native-bluetooth-escpos-printer/android/build.gradle"
+          LIBRARY="node_modules/react-native-bluetooth-escpos-printer/android"
+          GRADLE_FILE="$LIBRARY/build.gradle"
+          JAVA_FILE="$LIBRARY/src/main/java/cn/jystudio/bluetooth/RNBluetoothManagerModule.java"
 
-          if [ ! -f "$FILE" ]; then
-            echo "ERROR: Bluetooth Gradle file not found: $FILE"
+          if [ ! -f "$GRADLE_FILE" ]; then
+            echo "ERROR: Bluetooth printer Gradle file not found."
             exit 1
           fi
 
-          python3 - "$FILE" <<'PYCODE'
+          if [ ! -f "$JAVA_FILE" ]; then
+            echo "ERROR: Bluetooth manager Java source file not found."
+            exit 1
+          fi
+
+          python3 - "$GRADLE_FILE" "$JAVA_FILE" <<'PYCODE'
           from pathlib import Path
           import re
           import sys
 
-          path = Path(sys.argv[1])
-          text = path.read_text()
+          gradle_path = Path(sys.argv[1])
+          java_path = Path(sys.argv[2])
+
+          # --------------------------------------------------
+          # 1. Fix the Bluetooth library Gradle configuration.
+          # --------------------------------------------------
+
+          gradle_text = gradle_path.read_text()
 
           # Convert insecure HTTP repository URLs to HTTPS.
-          text = re.sub(r'(?i)http://', 'https://', text)
+          gradle_text = re.sub(
+              r'(?i)http://',
+              'https://',
+              gradle_text
+          )
 
-          # Replace every standalone legacy Gradle compile configuration.
-          # This catches fileTree(...), files(...), named AARs and other
-          # dependency notations, not just a limited list of arguments.
-          text, compile_count = re.subn(
+          # Replace legacy standalone Gradle compile declarations.
+          gradle_text, compile_count = re.subn(
               r'(?m)^([ \t]*)compile(?=[ \t(])',
               r'\1implementation',
-              text
+              gradle_text
           )
 
           # Set the Bluetooth library compile SDK to Android 35.
-          text, sdk_count = re.subn(
+          gradle_text, sdk_count = re.subn(
               r'(?m)^([ \t]*)compileSdk(?:Version)?[ \t]+.*$',
               r'\1compileSdkVersion 35',
-              text,
+              gradle_text,
               count=1
           )
 
-          # Add compileSdkVersion if it was missing.
           if sdk_count == 0:
-              android_match = re.search(r'(?m)^([ \t]*)android[ \t]*\{', text)
+              android_match = re.search(
+                  r'(?m)^([ \t]*)android[ \t]*\{',
+                  gradle_text
+              )
 
               if not android_match:
                   raise SystemExit(
-                      "ERROR: Could not find the Android block in Bluetooth build.gradle."
+                      "ERROR: Could not find Android block in Bluetooth build.gradle."
                   )
 
               insert_at = android_match.end()
 
-              text = (
-                  text[:insert_at]
+              gradle_text = (
+                  gradle_text[:insert_at]
                   + "\n    compileSdkVersion 35"
-                  + text[insert_at:]
+                  + gradle_text[insert_at:]
               )
 
-          # Check for any remaining standalone legacy compile declarations.
+          # Ensure the AndroidX Core dependency is present.
+          if 'androidx.core:core' not in gradle_text:
+              dependencies_match = re.search(
+                  r'(?m)^[ \t]*dependencies[ \t]*\{',
+                  gradle_text
+              )
+
+              if not dependencies_match:
+                  raise SystemExit(
+                      "ERROR: Could not find dependencies block in Bluetooth build.gradle."
+                  )
+
+              opening_brace = gradle_text.find(
+                  '{',
+                  dependencies_match.start()
+              )
+
+              gradle_text = (
+                  gradle_text[:opening_brace + 1]
+                  + "\n    implementation 'androidx.core:core:1.13.1'"
+                  + gradle_text[opening_brace + 1:]
+              )
+
+          # Verify no legacy compile declarations remain.
           remaining = re.findall(
               r'(?m)^[ \t]*compile(?=[ \t(]).*$',
-              text
+              gradle_text
           )
 
           if remaining:
@@ -180,31 +220,79 @@ jobs:
                   print(line)
               raise SystemExit(1)
 
-          if re.search(r'(?i)http://', text):
+          if re.search(r'(?i)http://', gradle_text):
               raise SystemExit("ERROR: HTTP repository URL remains.")
 
           if not re.search(
               r'(?m)^[ \t]*compileSdkVersion[ \t]+35[ \t]*$',
-              text
+              gradle_text
           ):
               raise SystemExit(
                   "ERROR: Bluetooth compile SDK 35 was not configured."
               )
 
-          path.write_text(text)
+          if 'androidx.core:core' not in gradle_text:
+              raise SystemExit(
+                  "ERROR: AndroidX Core dependency was not added."
+              )
 
-          print("Bluetooth printer Gradle compatibility configured.")
+          gradle_path.write_text(gradle_text)
+
+          print("Bluetooth Gradle configuration updated.")
           print(f"Legacy compile declarations replaced: {compile_count}")
-          print("Bluetooth printer compile SDK: 35")
-          print("Verification passed: no standalone legacy compile declarations.")
+          print("Compile SDK: 35")
+          print("AndroidX Core dependency: configured")
 
-          print("\nUpdated dependency declarations:")
-          for number, line in enumerate(text.splitlines(), start=1):
-              if "implementation" in line and (
-                  "fileTree" in line or "files" in line
-              ):
-                  print(f"{number}: {line.strip()}")
+          # --------------------------------------------------
+          # 2. Replace old Android Support imports with AndroidX.
+          # --------------------------------------------------
+
+          java_text = java_path.read_text()
+
+          replacements = {
+              'import android.support.v4.app.ActivityCompat;':
+                  'import androidx.core.app.ActivityCompat;',
+
+              'import android.support.v4.content.ContextCompat;':
+                  'import androidx.core.content.ContextCompat;',
+          }
+
+          for old_import, new_import in replacements.items():
+              java_text = java_text.replace(old_import, new_import)
+
+          # Check that the old imports no longer exist.
+          if 'android.support.v4.app.ActivityCompat' in java_text:
+              raise SystemExit(
+                  "ERROR: Old ActivityCompat import remains."
+              )
+
+          if 'android.support.v4.content.ContextCompat' in java_text:
+              raise SystemExit(
+                  "ERROR: Old ContextCompat import remains."
+              )
+
+          # Confirm both AndroidX imports are present.
+          required_imports = [
+              'import androidx.core.app.ActivityCompat;',
+              'import androidx.core.content.ContextCompat;',
+          ]
+
+          for required in required_imports:
+              if required not in java_text:
+                  raise SystemExit(
+                      f"ERROR: Required AndroidX import missing: {required}"
+                  )
+
+          java_path.write_text(java_text)
+
+          print("Bluetooth Java source updated.")
+          print("ActivityCompat: AndroidX")
+          print("ContextCompat: AndroidX")
+
+          print("\nBluetooth AndroidX and Gradle compatibility checks passed.")
           PYCODE
+
+          echo "Updated Bluetooth printer source and Gradle configuration."
 
       - name: Configure Maven mirror and AndroidX dependency exclusions
         shell: bash
