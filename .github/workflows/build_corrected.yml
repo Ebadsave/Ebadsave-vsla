@@ -1,0 +1,366 @@
+name: Build Ebadsave VSLA Release APK
+
+'on':
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Apply pending Ebadsave D1 migrations
+        working-directory: Cloudflare-worker
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          npm install --no-save wrangler@4.86.0
+          echo "Checking D1 migration history..."
+          npx wrangler d1 migrations list ebadsave-vsla-db --remote
+          echo "Applying pending D1 migrations..."
+          npx wrangler d1 migrations apply ebadsave-vsla-db --remote
+          echo "D1 migration step completed."
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort | tail -n 1)"
+          fi
+          if [ -z "${SDKMANAGER:-}" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "ERROR: Android sdkmanager was not found."
+            exit 1
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.1.12297006"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
+      - name: Install JavaScript dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f package.json ]; then
+            echo "ERROR: package.json was not found in the repository root."
+            exit 1
+          fi
+          npm install
+          # Do not run npx expo install expo-image-picker here.
+          # crypto-js is already declared in package.json.
+
+      - name: Fix Bluetooth printer HTTP repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="node_modules/react-native-bluetooth-escpos-printer/android/build.gradle"
+
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: Bluetooth Gradle file not found: $FILE"
+            exit 1
+          fi
+
+          python3 - "$FILE" <<'PYCODE'
+          from pathlib import Path
+          import re
+          import sys
+
+          path = Path(sys.argv[1])
+          original = path.read_text()
+
+          # Gradle rejects HTTP Maven/JCenter repositories. Change only the
+          # repository URL scheme; do not alter dependencies or app signing.
+          updated, count = re.subn(
+              r'(?i)(https?://)',
+              lambda match: "https://" if match.group(0).lower().startswith("http://") else match.group(0),
+              original
+          )
+
+          if "http://" in updated.lower():
+              raise SystemExit(
+                  "ERROR: An HTTP URL remains in the Bluetooth printer Gradle file."
+              )
+
+          path.write_text(updated)
+          print(f"Bluetooth Gradle file checked; HTTP URLs converted: {count}")
+          PYCODE
+
+      - name: Verify Crypto-JS installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "console.log('crypto-js:', require.resolve('crypto-js'))"
+          npm ls crypto-js @types/crypto-js
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Check Expo configuration
+        run: npx expo config --type public
+
+      - name: Generate Android project
+        run: npx expo prebuild --platform android --clean --non-interactive
+
+      - name: Configure Maven mirror for all Gradle builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ebadsave-maven-mirror.init.gradle" <<'GRADLE'
+          // Add a Maven Central mirror to the main build and included builds,
+          // including Expo's expo-gradle-plugin.
+          gradle.beforeSettings { settings ->
+              settings.pluginManagement.repositories {
+                  maven {
+                      name = "GoogleMavenCentralMirror"
+                      url = uri("https://maven-central.storage-download.googleapis.com/maven2")
+                  }
+              }
+          }
+
+          gradle.beforeProject { project ->
+              project.buildscript.repositories {
+                  maven {
+                      name = "GoogleMavenCentralMirror"
+                      url = uri("https://maven-central.storage-download.googleapis.com/maven2")
+                  }
+              }
+              project.repositories {
+                  maven {
+                      name = "GoogleMavenCentralMirror"
+                      url = uri("https://maven-central.storage-download.googleapis.com/maven2")
+                  }
+              }
+          }
+          GRADLE
+          echo "Created Gradle init script for plugin, buildscript, and project dependencies."
+
+      - name: Check application icon
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f assets/icon/app_icon.png ]; then
+            echo "ERROR: Ebadsave icon was not found."
+            exit 1
+          fi
+
+      - name: Prepare permanent Android release signing
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "ERROR: ANDROID_KEYSTORE_BASE64 GitHub Secret is missing."
+            exit 1
+          fi
+
+          KEYSTORE_FILE="$RUNNER_TEMP/ebadsave-vsla-release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_FILE"
+          chmod 600 "$KEYSTORE_FILE"
+
+          if [ ! -s "$KEYSTORE_FILE" ]; then
+            echo "ERROR: The release keystore could not be decoded."
+            exit 1
+          fi
+
+          echo "ANDROID_KEYSTORE_FILE=$KEYSTORE_FILE" >> "$GITHUB_ENV"
+
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import re
+
+          gradle_file = Path("android/app/build.gradle")
+          if not gradle_file.exists():
+              raise SystemExit("ERROR: android/app/build.gradle was not generated.")
+
+          text = gradle_file.read_text()
+
+          if "signingConfigs.release" in text:
+              raise SystemExit(
+                  "ERROR: Release signing configuration already exists; refusing to patch twice."
+              )
+
+          marker = re.search(r"(?m)^\s*buildTypes\s*\{", text)
+          if not marker:
+              raise SystemExit("ERROR: Could not find buildTypes block in generated build.gradle.")
+
+          release_signing = """    signingConfigs {
+              release {
+                  storeFile file(System.getenv("ANDROID_KEYSTORE_FILE"))
+                  storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                  keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                  keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+              }
+          }
+
+          """
+
+          text = text[:marker.start()] + release_signing + text[marker.start():]
+
+          def block_bounds(source, opening_brace):
+              depth = 0
+              quote = None
+              escaped = False
+
+              for i in range(opening_brace, len(source)):
+                  ch = source[i]
+
+                  if quote:
+                      if escaped:
+                          escaped = False
+                      elif ch == "\\":
+                          escaped = True
+                      elif ch == quote:
+                          quote = None
+                      continue
+
+                  if ch in ("'", '"'):
+                      quote = ch
+                  elif ch == "{":
+                      depth += 1
+                  elif ch == "}":
+                      depth -= 1
+                      if depth == 0:
+                          return opening_brace, i + 1
+
+              raise SystemExit("ERROR: Unbalanced Gradle braces while locating signing blocks.")
+
+          build_types_match = re.search(r"\bbuildTypes\s*\{", text)
+          if not build_types_match:
+              raise SystemExit("ERROR: Could not find buildTypes block.")
+
+          build_open = text.find("{", build_types_match.start())
+          build_start, build_end = block_bounds(text, build_open)
+          build_block = text[build_start:build_end]
+
+          release_match = re.search(r"\brelease\s*\{", build_block)
+          if not release_match:
+              raise SystemExit("ERROR: Could not find buildTypes.release block.")
+
+          release_open = build_block.find("{", release_match.start())
+          release_start, release_end = block_bounds(build_block, release_open)
+          release_block = build_block[release_start:release_end]
+
+          release_block, count = re.subn(
+              r"(?m)^(\s*)signingConfig\s+signingConfigs\.debug\s*$",
+              r"\1signingConfig signingConfigs.release",
+              release_block,
+              count=1,
+          )
+
+          if count == 0:
+              if re.search(
+                  r"(?m)^\s*signingConfig\s+signingConfigs\.release\s*$",
+                  release_block,
+              ):
+                  print("Release build type already references signingConfigs.release")
+              else:
+                  release_block = (
+                      release_block[:-1]
+                      + "        signingConfig signingConfigs.release\n    }"
+                  )
+
+          build_block = (
+              build_block[:release_start]
+              + release_block
+              + build_block[release_end:]
+          )
+          text = text[:build_start] + build_block + text[build_end:]
+
+          gradle_file.write_text(text)
+          print("Configured permanent release signing in android/app/build.gradle")
+          PYCODE
+
+      - name: Build RELEASE APK
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cd android
+          ./gradlew -I "$RUNNER_TEMP/ebadsave-maven-mirror.init.gradle" assembleRelease --no-daemon --stacktrace
+
+      - name: Verify APK and check size
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: Release APK was not created."
+            find android/app/build/outputs -type f -name "*.apk" || true
+            exit 1
+          fi
+
+          ls -lh "$APK"
+
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          if [ ! -x "$APKSIGNER" ]; then
+            echo "ERROR: apksigner was not found at $APKSIGNER."
+            exit 1
+          fi
+
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+
+          ACTUAL_CERT_SHA256=$("$APKSIGNER" verify --print-certs "$APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest:/ {print tolower($2); exit}')
+          EXPECTED_CERT_SHA256="16df7c1c99ac0c60da89ef0c6064a7d912f72f409c1a8c5df4a6b8c6340d04a7"
+
+          if [ "$ACTUAL_CERT_SHA256" != "$EXPECTED_CERT_SHA256" ]; then
+            echo "ERROR: APK was not signed with the approved permanent Ebadsave certificate."
+            echo "Expected SHA-256: $EXPECTED_CERT_SHA256"
+            echo "Actual SHA-256:   ${ACTUAL_CERT_SHA256:-not detected}"
+            exit 1
+          fi
+
+          echo "SUCCESS: APK signature matches the permanent Ebadsave release certificate."
+
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          PACKAGE_NAME=$("$AAPT" dump badging "$APK" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p" | head -n 1)
+
+          if [ "$PACKAGE_NAME" != "com.ebadsave.vsla" ]; then
+            echo "ERROR: Unexpected APK package name: ${PACKAGE_NAME:-not detected}"
+            exit 1
+          fi
+
+          echo "SUCCESS: APK package name is $PACKAGE_NAME."
+
+          SIZE=$(stat -c%s "$APK")
+          LIMIT=$((30 * 1024 * 1024))
+
+          if [ "$SIZE" -ge "$LIMIT" ]; then
+            echo "WARNING: APK is 30 MiB or larger."
+          else
+            echo "SUCCESS: APK is smaller than 30 MiB."
+          fi
+
+      - name: Upload RELEASE APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ebadsave-vsla-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
