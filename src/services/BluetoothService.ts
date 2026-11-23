@@ -40,7 +40,7 @@ const BluetoothService = {
   async sendFile(address: string, file: { fileName: string; fileUri: string; content: string }): Promise<void> {
     let device: BluetoothDevice | null = null;
     try {
-      device = await BluetoothClassic.connectToDevice(address, { DELIMITER: '\n', CHARACTER_DELIMITER: '\n' });
+      device = await BluetoothClassic.connectToDevice(address, { delimiter: '\n' } as any);
       await device.write(file.content + '\n---END---\n', 'utf-8');
     } finally {
       try { if (device) await device.disconnect(); } catch {}
