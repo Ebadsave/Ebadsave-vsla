@@ -74,6 +74,31 @@ jobs:
           npm install --save-dev @types/crypto-js@4.2.2
           npx expo install expo-crypto expo-secure-store expo-image-picker
 
+      - name: Fix legacy Bluetooth printer Maven repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+          GRADLE_FILE="node_modules/react-native-bluetooth-escpos-printer/android/build.gradle"
+          if [ ! -f "$GRADLE_FILE" ]; then
+            echo "ERROR: Bluetooth printer Android build.gradle was not found at $GRADLE_FILE."
+            exit 1
+          fi
+          python3 - "$GRADLE_FILE" <<'PYCODE'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+          updated = text.replace("http://jcenter.bintray.com/", "https://jcenter.bintray.com/")
+          updated = updated.replace("http://repo.spring.io/plugins-release/", "https://repo.spring.io/plugins-release/")
+          if updated == text and ("http://" in text):
+              raise SystemExit("ERROR: Found an HTTP repository URL that this patch does not recognize; refusing to continue.")
+          if "http://" in updated:
+              raise SystemExit("ERROR: An insecure HTTP repository remains in the Bluetooth printer Gradle file.")
+          path.write_text(updated)
+          print("Bluetooth printer Maven repositories now use HTTPS.")
+          PYCODE
+
       - name: Verify Crypto-JS installation
         run: |
           node -e "console.log('crypto-js:', require.resolve('crypto-js'))"
