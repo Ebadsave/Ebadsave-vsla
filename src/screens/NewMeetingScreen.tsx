@@ -14,6 +14,13 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import * as FileSystem from 'expo-file-system';
 
 import { RootStackParamList } from '../../App';
+import { autoOpenMeeting, autoCloseMeeting } from './services/BluetoothNearby';
+
+// When meeting OPENS:
+await autoOpenMeeting({ date: '23-11-2026', totalAmount: 500000, message: 'Meeting Opened' });
+
+// When meeting CLOSES:
+await autoCloseMeeting({ date: '23-11-2026', totalAmount: 500000, message: 'Meeting Closed' });
 import {
   getGroupById,
   getOpenMeeting,
