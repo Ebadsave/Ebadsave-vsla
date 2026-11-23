@@ -70,16 +70,17 @@ jobs:
           npm install
           # DO NOT run npx expo install expo-image-picker here - it breaks versions
           # crypto-js is already in package.json, no need to reinstall
-
-      - name: Fix Bluetooth printer legacy HTTP repositories
+      - name: Fix Bluetooth printer HTTP repositories
         shell: bash
         run: |
           set -euo pipefail
           FILE="node_modules/react-native-bluetooth-escpos-printer/android/build.gradle"
+
           if [ ! -f "$FILE" ]; then
-            echo "ERROR: Bluetooth printer Gradle file not found: $FILE"
+            echo "ERROR: Bluetooth Gradle file not found."
             exit 1
           fi
+
           python3 - "$FILE" <<'PYCODE'
           from pathlib import Path
           import re
@@ -87,30 +88,62 @@ jobs:
 
           path = Path(sys.argv[1])
           text = path.read_text()
-          changed = [0]
+          pattern = re.compile(r'\b(maven|jcenter)\s*\{')
+          matches = list(pattern.finditer(text))
+          patches = 0
+          offset = 0
 
-          # The package uses both jcenter { ... } and maven { ... } blocks.
-          # Patch every repository block that declares an HTTP URL.
-          pattern = re.compile(r'\b(?:jcenter|maven)\s*\{[^{}]*\}', re.DOTALL)
+          for match in matches:
+              start = match.end() - 1
+              depth = 0
+              quote = None
+              escaped = False
+              end = None
 
-          def patch_repository(match):
-              block = match.group(0)
-              if re.search(r'\burl\s*(?:=\s*)?[\'\"]http://', block):
-                  if not re.search(r'\ballowInsecureProtocol\s*(?:=\s*)?(?:true)?', block):
-                      closing = block.rfind('}')
-                      block = block[:closing] + '\n        allowInsecureProtocol = true\n    ' + block[closing:]
-                      changed[0] += 1
-              return block
+              for i in range(start, len(text)):
+                  c = text[i]
 
-          updated = pattern.sub(patch_repository, text)
-          remaining = re.findall(r'\b(?:jcenter|maven)\s*\{[^{}]*http://[^{}]*\}', updated, re.DOTALL)
-          if remaining:
-              raise SystemExit('ERROR: A Bluetooth Maven/JCenter HTTP repository remains unpatched.')
+                  if quote:
+                      if escaped:
+                          escaped = False
+                      elif c == '\\':
+                          escaped = True
+                      elif c == quote:
+                          quote = None
+                      continue
 
-          path.write_text(updated)
-          print(f'Bluetooth repository patch completed; repositories patched: {changed[0]}')
+                  if c in ("'", '"'):
+                      quote = c
+                  elif c == '{':
+                      depth += 1
+                  elif c == '}':
+                      depth -= 1
+                      if depth == 0:
+                          end = i
+                          break
+
+              if end is None:
+                  raise SystemExit("ERROR: Unbalanced repository block.")
+
+              block = text[match.start():end + 1]
+
+              if re.search(r'http://', block):
+                  if not re.search(r'allowInsecureProtocol\s*=\s*true', block):
+                      insertion = start + 1
+                      text = (
+                          text[:insertion]
+                          + '\n        allowInsecureProtocol = true\n'
+                          + text[insertion:]
+                      )
+                      patches += 1
+
+          path.write_text(text)
+
+          print(f"Bluetooth repositories patched: {patches}")
+
+          if 'http://' in text:
+              print("WARNING: HTTP references remain; inspect repository configuration.")
           PYCODE
-
       - name: Add Maven Central mirror for React Native Gradle plugin
         shell: bash
         run: |
