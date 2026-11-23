@@ -71,7 +71,7 @@ jobs:
           # DO NOT run npx expo install expo-image-picker here - it breaks versions
           # crypto-js is already in package.json, no need to reinstall
 
-      - name: Allow legacy Bluetooth printer Maven repository protocol
+      - name: Fix Bluetooth printer legacy HTTP repositories
         shell: bash
         run: |
           set -euo pipefail
@@ -87,24 +87,28 @@ jobs:
 
           path = Path(sys.argv[1])
           text = path.read_text()
+          changed = [0]
 
-          # Gradle requires explicit opt-in for legacy HTTP Maven repositories.
-          # Add the opt-in only inside Maven repository blocks that use HTTP.
-          pattern = re.compile(r'maven\s*\{[^{}]*?\}', re.DOTALL)
-          changed = [False]
+          # The package uses both jcenter { ... } and maven { ... } blocks.
+          # Patch every repository block that declares an HTTP URL.
+          pattern = re.compile(r'\b(?:jcenter|maven)\s*\{[^{}]*\}', re.DOTALL)
 
           def patch_repository(match):
               block = match.group(0)
-              if re.search(r'url\s*(?:=\s*)?[\'\"]http://', block) and 'allowInsecureProtocol' not in block:
-                  block = block[:-1] + '\n        allowInsecureProtocol = true\n    }'
-                  changed[0] = True
+              if re.search(r'\burl\s*(?:=\s*)?[\'\"]http://', block):
+                  if not re.search(r'\ballowInsecureProtocol\s*(?:=\s*)?(?:true)?', block):
+                      closing = block.rfind('}')
+                      block = block[:closing] + '\n        allowInsecureProtocol = true\n    ' + block[closing:]
+                      changed[0] += 1
               return block
 
           updated = pattern.sub(patch_repository, text)
-          if 'http://' in updated and 'allowInsecureProtocol' not in updated:
-              raise SystemExit('ERROR: An HTTP repository remains but no Maven block was patched; inspect the dependency Gradle file.')
+          remaining = re.findall(r'\b(?:jcenter|maven)\s*\{[^{}]*http://[^{}]*\}', updated, re.DOTALL)
+          if remaining:
+              raise SystemExit('ERROR: A Bluetooth Maven/JCenter HTTP repository remains unpatched.')
+
           path.write_text(updated)
-          print('Bluetooth printer Maven repository protocol check completed; patched:', changed[0])
+          print(f'Bluetooth repository patch completed; repositories patched: {changed[0]}')
           PYCODE
 
       - name: Add Maven Central mirror for React Native Gradle plugin
