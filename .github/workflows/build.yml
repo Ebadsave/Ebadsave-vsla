@@ -156,20 +156,33 @@ jobs:
           python3 - "$FILE" <<'PYCODE'
           from pathlib import Path
           import sys
-          import re
+      - name: Fix Bluetooth printer Maven repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="node_modules/react-native-bluetooth-escpos-printer/android/build.gradle"
+
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: Bluetooth Gradle file not found."
+            exit 1
+          fi
+
+          python3 - "$FILE" <<'PYCODE'
+          from pathlib import Path
+          import sys
+
           path = Path(sys.argv[1])
           text = path.read_text()
-          mirror = 'maven { url = uri("https://maven-central.storage-download.googleapis.com/maven2") }'
-          if mirror in text:
-              print("Maven Central mirror already configured.")
-              raise SystemExit(0)
-          match = re.search(r'(?s)pluginManagement\s*\{.*?repositories\s*\{', text)
-          if not match:
-              raise SystemExit("ERROR: Could not find pluginManagement repositories block.")
-          position = match.end()
-          text = text[:position] + "\n        " + mirror + text[position:]
-          path.write_text(text)
-          print("Successfully added Maven Central mirror.")
+
+          updated = text.replace("http://", "https://")
+
+          if "http://" in updated:
+              raise SystemExit("ERROR: Insecure HTTP repository remains.")
+
+          path.write_text(updated)
+
+          print("Bluetooth Maven repositories converted to HTTPS.")
           PYCODE
 
       - name: Verify Crypto-JS installation
