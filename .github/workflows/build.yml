@@ -149,27 +149,38 @@ jobs:
       - name: Generate Android project
         run: npx expo prebuild --platform android --clean --non-interactive
 
-      - name: Fix Kotlin Maven dependency resolution
+      - name: Configure Maven mirror for all Gradle builds
         shell: bash
         run: |
           set -euo pipefail
-          FILE="android/settings.gradle"
-          python3 - "$FILE" <<'PY'
-          from pathlib import Path
-          import re
-          import sys
-          path = Path(sys.argv[1])
-          text = path.read_text()
-          mirror = 'maven { url "https://maven-central.storage-download.googleapis.com/maven2" }'
-          if mirror not in text:
-              match = re.search(r'pluginManagement\s*\{', text)
-              if match:
-                  text = text[:match.end()] + '\n    repositories {\n        ' + mirror + '\n    }\n' + text[match.end():]
-              else:
-                  text = 'pluginManagement {\n    repositories {\n        ' + mirror + '\n        google()\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\n\n' + text
-              path.write_text(text)
-          print("Kotlin Maven mirror configured.")
-          PY
+          cat > "$RUNNER_TEMP/ebadsave-maven-mirror.init.gradle" <<'GRADLE'
+          // Apply to the main Android build and included builds such as Expo's
+          // expo-gradle-plugin. Put the mirror first to avoid Maven Central 429s.
+          gradle.beforeSettings { settings ->
+              settings.pluginManagement.repositories {
+                  maven {
+                      name = "GoogleMavenCentralMirror"
+                      url = uri("https://maven-central.storage-download.googleapis.com/maven2")
+                  }
+              }
+          }
+
+          gradle.beforeProject { project ->
+              project.buildscript.repositories {
+                  maven {
+                      name = "GoogleMavenCentralMirror"
+                      url = uri("https://maven-central.storage-download.googleapis.com/maven2")
+                  }
+              }
+              project.repositories {
+                  maven {
+                      name = "GoogleMavenCentralMirror"
+                      url = uri("https://maven-central.storage-download.googleapis.com/maven2")
+                  }
+              }
+          }
+          GRADLE
+          echo "Created Gradle init script for plugin, buildscript, and project dependencies."
 
       - name: Check application icon
         run: |
@@ -280,7 +291,7 @@ jobs:
         run: |
           set -euo pipefail
           cd android
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          ./gradlew -I "$RUNNER_TEMP/ebadsave-maven-mirror.init.gradle" assembleRelease --no-daemon --stacktrace
 
       - name: Verify APK and check size
         shell: bash
