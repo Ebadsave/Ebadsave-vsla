@@ -36,17 +36,22 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
+
           npm install --no-save wrangler@4.86.0
+
           echo "Checking D1 migration history..."
           npx wrangler d1 migrations list ebadsave-vsla-db --remote
+
           echo "Applying pending D1 migrations..."
           npx wrangler d1 migrations apply ebadsave-vsla-db --remote
+
           echo "D1 migration step completed."
 
       - name: Install Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
+
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 
           if [ ! -x "$SDKMANAGER" ]; then
@@ -104,11 +109,37 @@ jobs:
           text = re.sub(r'(?i)http://', 'https://', text)
 
           # Gradle 8 removed the old compile dependency configuration.
-          text, count = re.subn(
+          text, compile_count = re.subn(
               r'(?m)^(\s*)compile(\s+)(?=fileTree\b|files\b|["\'])',
               r'\1implementation\2',
               text
           )
+
+          # Android Gradle Plugin requires compile SDK 30 or higher.
+          # Force this library to use the same Android 35 SDK as the app.
+          text, sdk_count = re.subn(
+              r'(?m)^(\s*)compileSdk(?:Version)?\s+.*$',
+              r'\1compileSdkVersion 35',
+              text,
+              count=1
+          )
+
+          # If the library has no compile SDK declaration, add one.
+          if sdk_count == 0:
+              android_match = re.search(r'(?m)^(\s*)android\s*\{', text)
+
+              if not android_match:
+                  raise SystemExit(
+                      "ERROR: Could not find the Android block in Bluetooth build.gradle."
+                  )
+
+              insert_at = android_match.end()
+
+              text = (
+                  text[:insert_at]
+                  + "\n    compileSdkVersion 35"
+                  + text[insert_at:]
+              )
 
           if re.search(r'(?i)http://', text):
               raise SystemExit("ERROR: HTTP repository URL remains.")
@@ -116,27 +147,46 @@ jobs:
           if re.search(r'(?m)^\s*compile\s+(fileTree|files)\b', text):
               raise SystemExit("ERROR: Deprecated compile dependency remains.")
 
+          if not re.search(
+              r'(?m)^\s*compileSdkVersion\s+35\s*$',
+              text
+          ):
+              raise SystemExit(
+                  "ERROR: Bluetooth library compileSdkVersion 35 was not configured."
+              )
+
           path.write_text(text)
 
-          print("Bluetooth printer Gradle compatibility patch completed.")
-          print(f"Deprecated compile declarations replaced: {count}")
+          print("Bluetooth printer Gradle compatibility configured.")
+          print(f"Deprecated compile declarations replaced: {compile_count}")
+          print("Bluetooth printer compile SDK: 35")
           PYCODE
 
       - name: Verify Crypto-JS installation
         shell: bash
         run: |
           set -euo pipefail
+
           node -e "console.log('crypto-js:', require.resolve('crypto-js'))"
           npm ls crypto-js @types/crypto-js
 
       - name: TypeScript check
-        run: npx tsc --noEmit
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx tsc --noEmit
 
       - name: Check Expo configuration
-        run: npx expo config --type public
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx expo config --type public
 
       - name: Generate Android project
-        run: npx expo prebuild --platform android --clean --non-interactive
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx expo prebuild --platform android --clean --non-interactive
 
       - name: Configure Maven mirror for all Gradle builds
         shell: bash
@@ -213,13 +263,16 @@ jobs:
           gradle_file = Path("android/app/build.gradle")
 
           if not gradle_file.exists():
-              raise SystemExit("ERROR: android/app/build.gradle was not generated.")
+              raise SystemExit(
+                  "ERROR: android/app/build.gradle was not generated."
+              )
 
           text = gradle_file.read_text()
 
           if "signingConfigs.release" in text:
               raise SystemExit(
-                  "ERROR: Release signing configuration already exists."
+                  "ERROR: Release signing configuration already exists. "
+                  "Check the generated Gradle signing configuration."
               )
 
           marker = re.search(r"(?m)^\s*buildTypes\s*\{", text)
@@ -281,10 +334,16 @@ jobs:
           release_match = re.search(r"\brelease\s*\{", build_block)
 
           if not release_match:
-              raise SystemExit("ERROR: Could not find buildTypes.release block.")
+              raise SystemExit(
+                  "ERROR: Could not find buildTypes.release block."
+              )
 
           release_open = build_block.find("{", release_match.start())
-          release_start, release_end = block_bounds(build_block, release_open)
+          release_start, release_end = block_bounds(
+              build_block,
+              release_open
+          )
+
           release_block = build_block[release_start:release_end]
 
           release_block, count = re.subn(
@@ -325,6 +384,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+
           cd android
 
           ./gradlew \
