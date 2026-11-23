@@ -108,15 +108,14 @@ jobs:
           # Convert insecure HTTP repository URLs to HTTPS.
           text = re.sub(r'(?i)http://', 'https://', text)
 
-          # Gradle 8 removed the old compile dependency configuration.
+          # Replace deprecated Gradle compile dependencies.
           text, compile_count = re.subn(
               r'(?m)^(\s*)compile(\s+)(?=fileTree\b|files\b|["\'])',
               r'\1implementation\2',
               text
           )
 
-          # Android Gradle Plugin requires compile SDK 30 or higher.
-          # Force this library to use the same Android 35 SDK as the app.
+          # Set the Bluetooth library compile SDK to Android 35.
           text, sdk_count = re.subn(
               r'(?m)^(\s*)compileSdk(?:Version)?\s+.*$',
               r'\1compileSdkVersion 35',
@@ -124,7 +123,7 @@ jobs:
               count=1
           )
 
-          # If the library has no compile SDK declaration, add one.
+          # Add compileSdkVersion if it was missing.
           if sdk_count == 0:
               android_match = re.search(r'(?m)^(\s*)android\s*\{', text)
 
@@ -147,13 +146,8 @@ jobs:
           if re.search(r'(?m)^\s*compile\s+(fileTree|files)\b', text):
               raise SystemExit("ERROR: Deprecated compile dependency remains.")
 
-          if not re.search(
-              r'(?m)^\s*compileSdkVersion\s+35\s*$',
-              text
-          ):
-              raise SystemExit(
-                  "ERROR: Bluetooth library compileSdkVersion 35 was not configured."
-              )
+          if not re.search(r'(?m)^\s*compileSdkVersion\s+35\s*$', text):
+              raise SystemExit("ERROR: Bluetooth compile SDK 35 was not configured.")
 
           path.write_text(text)
 
@@ -188,12 +182,12 @@ jobs:
           set -euo pipefail
           npx expo prebuild --platform android --clean --non-interactive
 
-      - name: Configure Maven mirror for all Gradle builds
+      - name: Configure Maven mirror and AndroidX dependency exclusions
         shell: bash
         run: |
           set -euo pipefail
 
-          cat > "$RUNNER_TEMP/ebadsave-maven-mirror.init.gradle" <<'GRADLE'
+          cat > "$RUNNER_TEMP/ebadsave-gradle.init.gradle" <<'GRADLE'
           gradle.beforeSettings { settings ->
               settings.pluginManagement.repositories {
                   maven {
@@ -217,10 +211,19 @@ jobs:
                       url = uri("https://maven-central.storage-download.googleapis.com/maven2")
                   }
               }
+
+              // The legacy Bluetooth printer library pulls in support-compat.
+              // Exclude it from that library to prevent duplicate AndroidX classes.
+              if (project.name == "react-native-bluetooth-escpos-printer") {
+                  project.configurations.configureEach {
+                      exclude group: "com.android.support", module: "support-compat"
+                  }
+              }
           }
           GRADLE
 
-          echo "Created Gradle Maven mirror configuration."
+          echo "Created Gradle configuration."
+          echo "Legacy support-compat exclusion configured for Bluetooth printer."
 
       - name: Check application icon
         shell: bash
@@ -271,8 +274,7 @@ jobs:
 
           if "signingConfigs.release" in text:
               raise SystemExit(
-                  "ERROR: Release signing configuration already exists. "
-                  "Check the generated Gradle signing configuration."
+                  "ERROR: Release signing configuration already exists."
               )
 
           marker = re.search(r"(?m)^\s*buildTypes\s*\{", text)
@@ -388,7 +390,7 @@ jobs:
           cd android
 
           ./gradlew \
-            -I "$RUNNER_TEMP/ebadsave-maven-mirror.init.gradle" \
+            -I "$RUNNER_TEMP/ebadsave-gradle.init.gradle" \
             assembleRelease \
             --no-daemon \
             --stacktrace
