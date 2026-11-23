@@ -138,24 +138,20 @@ jobs:
           gradle_path = Path(sys.argv[1])
           java_path = Path(sys.argv[2])
 
-          # Fix the Bluetooth library Gradle configuration.
           gradle_text = gradle_path.read_text()
 
-          # Convert insecure HTTP repository URLs to HTTPS.
           gradle_text = re.sub(
               r'(?i)http://',
               'https://',
               gradle_text
           )
 
-          # Replace legacy standalone Gradle compile declarations.
           gradle_text, compile_count = re.subn(
               r'(?m)^([ \t]*)compile(?=[ \t(])',
               r'\1implementation',
               gradle_text
           )
 
-          # Set the Bluetooth library compile SDK to Android 35.
           gradle_text, sdk_count = re.subn(
               r'(?m)^([ \t]*)compileSdk(?:Version)?[ \t]+.*$',
               r'\1compileSdkVersion 35',
@@ -182,7 +178,6 @@ jobs:
                   + gradle_text[insert_at:]
               )
 
-          # Confirm that no legacy compile declarations remain.
           remaining = re.findall(
               r'(?m)^[ \t]*compile(?=[ \t(]).*$',
               gradle_text
@@ -211,7 +206,6 @@ jobs:
           print(f"Legacy compile declarations replaced: {compile_count}")
           print("Bluetooth compile SDK: 35")
 
-          # Replace old Android Support imports with AndroidX.
           java_text = java_path.read_text()
 
           replacements = {
@@ -252,7 +246,7 @@ jobs:
           print("Bluetooth AndroidX and Gradle source checks passed.")
           PYCODE
 
-      - name: Configure Maven mirror and AndroidX dependency
+      - name: Configure Maven mirror and AndroidX dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -289,13 +283,14 @@ jobs:
               }
 
               if (project.name == "react-native-bluetooth-escpos-printer") {
-                  // Exclude the obsolete Android Support dependency.
+
+                  // Exclude obsolete Android Support libraries that
+                  // duplicate classes already supplied by AndroidX.
                   project.configurations.configureEach {
                       exclude group: "com.android.support", module: "support-compat"
+                      exclude group: "com.android.support", module: "support-media-compat"
                   }
 
-                  // Add AndroidX Core to the Android library module.
-                  // Do not add it to buildscript.dependencies.
                   project.afterEvaluate {
                       def implementationConfig =
                           project.configurations.findByName("implementation")
@@ -314,14 +309,19 @@ jobs:
                       project.logger.lifecycle(
                           "Ebadsave: AndroidX Core added to Bluetooth printer module."
                       )
+
+                      project.logger.lifecycle(
+                          "Ebadsave: support-compat and support-media-compat exclusions configured."
+                      )
                   }
               }
           }
           GRADLE
 
           echo "Gradle initialization script created."
-          echo "AndroidX Core will be added to the Bluetooth library module."
+          echo "AndroidX Core dependency configured."
           echo "Legacy support-compat exclusion configured."
+          echo "Legacy support-media-compat exclusion configured."
 
       - name: Check application icon
         shell: bash
