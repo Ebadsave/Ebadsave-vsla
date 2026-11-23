@@ -85,77 +85,6 @@ jobs:
 
           npm install
 
-      - name: Fix Bluetooth printer Gradle compatibility
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FILE="node_modules/react-native-bluetooth-escpos-printer/android/build.gradle"
-
-          if [ ! -f "$FILE" ]; then
-            echo "ERROR: Bluetooth Gradle file not found: $FILE"
-            exit 1
-          fi
-
-          python3 - "$FILE" <<'PYCODE'
-          from pathlib import Path
-          import re
-          import sys
-
-          path = Path(sys.argv[1])
-          text = path.read_text()
-
-          # Convert insecure HTTP repository URLs to HTTPS.
-          text = re.sub(r'(?i)http://', 'https://', text)
-
-          # Replace deprecated Gradle compile dependencies.
-          text, compile_count = re.subn(
-              r'(?m)^(\s*)compile(\s+)(?=fileTree\b|files\b|["\'])',
-              r'\1implementation\2',
-              text
-          )
-
-          # Set the Bluetooth library compile SDK to Android 35.
-          text, sdk_count = re.subn(
-              r'(?m)^(\s*)compileSdk(?:Version)?\s+.*$',
-              r'\1compileSdkVersion 35',
-              text,
-              count=1
-          )
-
-          # Add compileSdkVersion if it was missing.
-          if sdk_count == 0:
-              android_match = re.search(r'(?m)^(\s*)android\s*\{', text)
-
-              if not android_match:
-                  raise SystemExit(
-                      "ERROR: Could not find the Android block in Bluetooth build.gradle."
-                  )
-
-              insert_at = android_match.end()
-
-              text = (
-                  text[:insert_at]
-                  + "\n    compileSdkVersion 35"
-                  + text[insert_at:]
-              )
-
-          if re.search(r'(?i)http://', text):
-              raise SystemExit("ERROR: HTTP repository URL remains.")
-
-          if re.search(r'(?m)^\s*compile\s+(fileTree|files)\b', text):
-              raise SystemExit("ERROR: Deprecated compile dependency remains.")
-
-          if not re.search(r'(?m)^\s*compileSdkVersion\s+35\s*$', text):
-              raise SystemExit("ERROR: Bluetooth compile SDK 35 was not configured.")
-
-          path.write_text(text)
-
-          print("Bluetooth printer Gradle compatibility configured.")
-          print(f"Deprecated compile declarations replaced: {compile_count}")
-          print("Bluetooth printer compile SDK: 35")
-          PYCODE
-
       - name: Verify Crypto-JS installation
         shell: bash
         run: |
@@ -181,6 +110,101 @@ jobs:
         run: |
           set -euo pipefail
           npx expo prebuild --platform android --clean --non-interactive
+
+      - name: Fix Bluetooth printer Gradle compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="node_modules/react-native-bluetooth-escpos-printer/android/build.gradle"
+
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: Bluetooth Gradle file not found: $FILE"
+            exit 1
+          fi
+
+          python3 - "$FILE" <<'PYCODE'
+          from pathlib import Path
+          import re
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+
+          # Convert insecure HTTP repository URLs to HTTPS.
+          text = re.sub(r'(?i)http://', 'https://', text)
+
+          # Replace every standalone legacy Gradle compile configuration.
+          # This catches fileTree(...), files(...), named AARs and other
+          # dependency notations, not just a limited list of arguments.
+          text, compile_count = re.subn(
+              r'(?m)^([ \t]*)compile(?=[ \t(])',
+              r'\1implementation',
+              text
+          )
+
+          # Set the Bluetooth library compile SDK to Android 35.
+          text, sdk_count = re.subn(
+              r'(?m)^([ \t]*)compileSdk(?:Version)?[ \t]+.*$',
+              r'\1compileSdkVersion 35',
+              text,
+              count=1
+          )
+
+          # Add compileSdkVersion if it was missing.
+          if sdk_count == 0:
+              android_match = re.search(r'(?m)^([ \t]*)android[ \t]*\{', text)
+
+              if not android_match:
+                  raise SystemExit(
+                      "ERROR: Could not find the Android block in Bluetooth build.gradle."
+                  )
+
+              insert_at = android_match.end()
+
+              text = (
+                  text[:insert_at]
+                  + "\n    compileSdkVersion 35"
+                  + text[insert_at:]
+              )
+
+          # Check for any remaining standalone legacy compile declarations.
+          remaining = re.findall(
+              r'(?m)^[ \t]*compile(?=[ \t(]).*$',
+              text
+          )
+
+          if remaining:
+              print("ERROR: Legacy compile declarations remain:")
+              for line in remaining:
+                  print(line)
+              raise SystemExit(1)
+
+          if re.search(r'(?i)http://', text):
+              raise SystemExit("ERROR: HTTP repository URL remains.")
+
+          if not re.search(
+              r'(?m)^[ \t]*compileSdkVersion[ \t]+35[ \t]*$',
+              text
+          ):
+              raise SystemExit(
+                  "ERROR: Bluetooth compile SDK 35 was not configured."
+              )
+
+          path.write_text(text)
+
+          print("Bluetooth printer Gradle compatibility configured.")
+          print(f"Legacy compile declarations replaced: {compile_count}")
+          print("Bluetooth printer compile SDK: 35")
+          print("Verification passed: no standalone legacy compile declarations.")
+
+          print("\nUpdated dependency declarations:")
+          for number, line in enumerate(text.splitlines(), start=1):
+              if "implementation" in line and (
+                  "fileTree" in line or "files" in line
+              ):
+                  print(f"{number}: {line.strip()}")
+          PYCODE
 
       - name: Configure Maven mirror and AndroidX dependency exclusions
         shell: bash
@@ -212,8 +236,7 @@ jobs:
                   }
               }
 
-              // The legacy Bluetooth printer library pulls in support-compat.
-              // Exclude it from that library to prevent duplicate AndroidX classes.
+              // Exclude the old support library from the legacy Bluetooth module.
               if (project.name == "react-native-bluetooth-escpos-printer") {
                   project.configurations.configureEach {
                       exclude group: "com.android.support", module: "support-compat"
@@ -277,7 +300,7 @@ jobs:
                   "ERROR: Release signing configuration already exists."
               )
 
-          marker = re.search(r"(?m)^\s*buildTypes\s*\{", text)
+          marker = re.search(r"(?m)^[ \t]*buildTypes[ \t]*\{", text)
 
           if not marker:
               raise SystemExit("ERROR: Could not find buildTypes block.")
@@ -349,7 +372,7 @@ jobs:
           release_block = build_block[release_start:release_end]
 
           release_block, count = re.subn(
-              r"(?m)^(\s*)signingConfig\s+signingConfigs\.debug\s*$",
+              r"(?m)^([ \t]*)signingConfig[ \t]+signingConfigs\.debug[ \t]*$",
               r"\1signingConfig signingConfigs.release",
               release_block,
               count=1,
@@ -357,7 +380,7 @@ jobs:
 
           if count == 0:
               if not re.search(
-                  r"(?m)^\s*signingConfig\s+signingConfigs\.release\s*$",
+                  r"(?m)^[ \t]*signingConfig[ \t]+signingConfigs\.release[ \t]*$",
                   release_block,
               ):
                   release_block = (
