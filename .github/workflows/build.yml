@@ -91,21 +91,20 @@ jobs:
           # Gradle requires explicit opt-in for legacy HTTP Maven repositories.
           # Add the opt-in only inside Maven repository blocks that use HTTP.
           pattern = re.compile(r'maven\s*\{[^{}]*?\}', re.DOTALL)
-          changed = False
+          changed = [False]
 
           def patch_repository(match):
-              nonlocal changed
               block = match.group(0)
               if re.search(r'url\s*(?:=\s*)?[\'\"]http://', block) and 'allowInsecureProtocol' not in block:
                   block = block[:-1] + '\n        allowInsecureProtocol = true\n    }'
-                  changed = True
+                  changed[0] = True
               return block
 
           updated = pattern.sub(patch_repository, text)
           if 'http://' in updated and 'allowInsecureProtocol' not in updated:
               raise SystemExit('ERROR: An HTTP repository remains but no Maven block was patched; inspect the dependency Gradle file.')
           path.write_text(updated)
-          print('Bluetooth printer Maven repository protocol check completed; patched:', changed)
+          print('Bluetooth printer Maven repository protocol check completed; patched:', changed[0])
           PYCODE
 
       - name: Add Maven Central mirror for React Native Gradle plugin
