@@ -71,6 +71,43 @@ jobs:
           # DO NOT run npx expo install expo-image-picker here - it breaks versions
           # crypto-js is already in package.json, no need to reinstall
 
+      - name: Allow legacy Bluetooth printer Maven repository protocol
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="node_modules/react-native-bluetooth-escpos-printer/android/build.gradle"
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: Bluetooth printer Gradle file not found: $FILE"
+            exit 1
+          fi
+          python3 - "$FILE" <<'PYCODE'
+          from pathlib import Path
+          import re
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+
+          # Gradle requires explicit opt-in for legacy HTTP Maven repositories.
+          # Add the opt-in only inside Maven repository blocks that use HTTP.
+          pattern = re.compile(r'maven\s*\{[^{}]*?\}', re.DOTALL)
+          changed = False
+
+          def patch_repository(match):
+              nonlocal changed
+              block = match.group(0)
+              if re.search(r'url\s*(?:=\s*)?[\'\"]http://', block) and 'allowInsecureProtocol' not in block:
+                  block = block[:-1] + '\n        allowInsecureProtocol = true\n    }'
+                  changed = True
+              return block
+
+          updated = pattern.sub(patch_repository, text)
+          if 'http://' in updated and 'allowInsecureProtocol' not in updated:
+              raise SystemExit('ERROR: An HTTP repository remains but no Maven block was patched; inspect the dependency Gradle file.')
+          path.write_text(updated)
+          print('Bluetooth printer Maven repository protocol check completed; patched:', changed)
+          PYCODE
+
       - name: Add Maven Central mirror for React Native Gradle plugin
         shell: bash
         run: |
