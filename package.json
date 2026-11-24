@@ -33,6 +33,7 @@
 "react-native-bluetooth-classic": "latest",
 "expo-file-system": "~18.0.0",
   "react-native-screens": "~4.16.0"
+    "react-native-ble-manager": "..."
   },
 
   "devDependencies": {
