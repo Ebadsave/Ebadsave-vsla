@@ -12144,7 +12144,7 @@ export async function createHistoricalMigrationDraft(input: {
   if (!Number.isFinite(amount) || amount < 0) throw new Error('Amount must be zero or greater.');
   if (input.category === 'previous_loan_balance') {
     const issued = Number(input.loan_issued_plus_interest);
-    if (!Number.isFinite(issued) || issued < 0) throw new Error('Enter a valid original loan amount including interest.');
+    if (!Number.isFinite(issued) || issued <= 0) throw new Error('Enter a valid original loan amount including interest. The amount must be greater than zero.');
     if (!validIsoDateOnly(input.loan_issued_date)) throw new Error('Enter a valid loan issue date as YYYY-MM-DD.');
     if (!validIsoDateOnly(input.loan_due_date)) throw new Error('Enter a valid loan due date as YYYY-MM-DD.');
     if (!validIsoDateOnly(input.loan_balance_date || input.transaction_date)) throw new Error('Enter a valid loan balance date as YYYY-MM-DD.');
@@ -12203,7 +12203,7 @@ export async function updateHistoricalMigrationDraft(input: {
   if (!Number.isFinite(amount) || amount < 0) throw new Error('Amount must be zero or greater.');
   if (input.category === 'previous_loan_balance') {
     const issued = Number(input.loan_issued_plus_interest);
-    if (!Number.isFinite(issued) || issued < 0) throw new Error('Enter a valid original loan amount including interest.');
+    if (!Number.isFinite(issued) || issued <= 0) throw new Error('Enter a valid original loan amount including interest. The amount must be greater than zero.');
     if (!validIsoDateOnly(input.loan_issued_date)) throw new Error('Enter a valid loan issue date as YYYY-MM-DD.');
     if (!validIsoDateOnly(input.loan_due_date)) throw new Error('Enter a valid loan due date as YYYY-MM-DD.');
     if (!validIsoDateOnly(input.loan_balance_date || input.transaction_date)) throw new Error('Enter a valid loan balance date as YYYY-MM-DD.');
