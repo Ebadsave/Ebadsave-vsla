@@ -34,7 +34,7 @@
 "expo-file-system": "~18.0.0",
   "react-native-screens": "~4.16.0"
    
-  }
+  },
 
   "devDependencies": {
     "@types/crypto-js": "4.2.2",
