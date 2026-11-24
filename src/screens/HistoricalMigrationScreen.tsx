@@ -363,16 +363,10 @@ export default function HistoricalMigrationScreen({
           'Invalid Current Loan',
           'Enter a valid outstanding loan balance. Enter 0 if the loan is fully paid.'
         );
-        return;
-      }
-
-      if (curr > prev) {
-        Alert.alert(
-          'Check amounts',
-          'Current Loan cannot exceed the Previous Loan amount INCLUDING interest.'
-        );
-        return;
-      }
+        // MIGRATION FIX: For historical records, Current Loan CAN be greater than Previous Loan
+// Because it includes accumulated default interest.
+// Example: Previous = 200,000, Current after default = 450,000 - This is CORRECT, allow it.
+// No check here - allow any Current Loan in migration.
 
       // No additional interest is calculated or added.
       // The entered previous loan amount is already inclusive of interest.
