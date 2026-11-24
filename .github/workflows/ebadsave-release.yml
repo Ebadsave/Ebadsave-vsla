@@ -183,6 +183,48 @@ jobs:
           print("Configured permanent release signing.")
           PYCODE
 
+      - name: Configure Gradle plugin repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > "$RUNNER_TEMP/ebadsave-gradle.init.gradle" <<'GRADLE'
+          gradle.beforeSettings { settings ->
+              settings.pluginManagement.repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+                  maven {
+                      name = "MavenCentralGoogleMirror"
+                      url = uri("https://maven-central.storage-download.googleapis.com/maven2")
+                  }
+              }
+          }
+
+          gradle.beforeProject { project ->
+              project.buildscript.repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+                  maven {
+                      name = "MavenCentralGoogleMirror"
+                      url = uri("https://maven-central.storage-download.googleapis.com/maven2")
+                  }
+              }
+
+              project.repositories {
+                  google()
+                  mavenCentral()
+                  maven {
+                      name = "MavenCentralGoogleMirror"
+                      url = uri("https://maven-central.storage-download.googleapis.com/maven2")
+                  }
+              }
+          }
+          GRADLE
+
+          echo "Configured Google Maven, Maven Central, Gradle Plugin Portal, and Maven Central mirror."
+
       - name: Build RELEASE APK
         shell: bash
         env:
@@ -193,7 +235,11 @@ jobs:
           set -euo pipefail
           cd android
           for attempt in 1 2 3; do
-            if ./gradlew assembleRelease --no-daemon --stacktrace; then exit 0; fi
+            if ./gradlew \\
+              -I "$RUNNER_TEMP/ebadsave-gradle.init.gradle" \\
+              assembleRelease \\
+              --no-daemon \\
+              --stacktrace; then exit 0; fi
             if [ "$attempt" -lt 3 ]; then
               echo "Gradle build failed; retrying in 20 seconds."
               sleep 20
