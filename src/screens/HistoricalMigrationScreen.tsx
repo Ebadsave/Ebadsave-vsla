@@ -363,6 +363,9 @@ export default function HistoricalMigrationScreen({
           'Invalid Current Loan',
           'Enter a valid outstanding loan balance. Enter 0 if the loan is fully paid.'
         );
+        return;
+  }
+      
         // MIGRATION FIX: For historical records, Current Loan CAN be greater than Previous Loan
 // Because it includes accumulated default interest.
 // Example: Previous = 200,000, Current after default = 450,000 - This is CORRECT, allow it.
