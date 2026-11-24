@@ -88,8 +88,9 @@ export default function HistoricalMigrationReviewScreen({ route, navigation }: P
     const fines = list.filter(d => d.category === 'fine').reduce((s, d) => s + Number(d.amount), 0);
     const insurance = list.filter(d => d.category === 'insurance').reduce((s, d) => s + Number(d.amount), 0);
     const paid = prev - curr < 0 ? 0 : prev - curr;
-    const overdue = list.some(d => (d.category === 'previous_loan_balance' || d.category === 'loan_issued') && isOverdue(d.transaction_date, d.amount));
-    return { savings, prev, curr, fines, insurance, paid, overdue, count: list.length };
+    const loanDueDate = list.find(d => d.category === 'previous_loan_balance' && d.loan_due_date)?.loan_due_date || '';
+    const overdue = isOverdue(loanDueDate, curr);
+    return { savings, prev, curr, fines, insurance, paid, loanDueDate, overdue, count: list.length };
   };
 
   const totalSavings = drafts.filter(d => d.category === 'savings').reduce((s, d) => s + Number(d.amount), 0);
@@ -167,6 +168,7 @@ export default function HistoricalMigrationReviewScreen({ route, navigation }: P
               <View style={styles.detailRow}><Text style={styles.rowLabel}>Savings</Text><Text style={styles.rowValue}>UGX {s.savings.toLocaleString()}</Text></View>
               <View style={styles.detailRow}><Text style={styles.rowLabel}>Previous Loan</Text><Text style={styles.rowValue}>UGX {s.prev.toLocaleString()}</Text></View>
               <View style={styles.detailRow}><Text style={styles.rowLabel}>Current Loan</Text><Text style={s.overdue ? styles.overdueText : styles.rowValue}>UGX {s.curr.toLocaleString()}</Text></View>
+              {!!s.loanDueDate && <View style={styles.detailRow}><Text style={styles.rowLabel}>Loan Due Date</Text><Text style={s.overdue ? styles.overdueText : styles.rowValue}>{formatDDMMYYYY(s.loanDueDate)}</Text></View>}
               <View style={styles.detailRow}><Text style={styles.rowLabel}>Amount Paid</Text><Text style={styles.rowValue}>UGX {s.paid.toLocaleString()}</Text></View>
               <View style={styles.detailRow}><Text style={styles.rowLabel}>Fines</Text><Text style={styles.rowValue}>UGX {s.fines.toLocaleString()}</Text></View>
               <View style={styles.detailRow}><Text style={styles.rowLabel}>Insurance</Text><Text style={styles.rowValue}>UGX {s.insurance.toLocaleString()}</Text></View>

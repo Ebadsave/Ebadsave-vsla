@@ -20,6 +20,7 @@ import {
   createHistoricalMigrationDraft,
   updateHistoricalMigrationDraft,
   deleteHistoricalMigrationDraft,
+  getVSLASetupRules,
   type HistoricalMigrationImport,
   type HistoricalMigrationDraft,
   type HistoricalMigrationCategory,
@@ -98,6 +99,26 @@ const isValidDDMMYYYY = (v: string) => {
   );
 };
 
+// Default the historical loan due date from the group's configured maximum
+// repayment period. Month-end dates are clamped to the last day of the target month.
+const addMonthsToISODate = (iso: string, months: number): string => {
+  const [year, month, day] = iso.split('-').map(Number);
+  const firstOfTargetMonth = new Date(Date.UTC(year, month - 1 + months, 1, 12));
+  const lastDay = new Date(Date.UTC(
+    firstOfTargetMonth.getUTCFullYear(),
+    firstOfTargetMonth.getUTCMonth() + 1,
+    0,
+    12,
+  )).getUTCDate();
+  const targetDay = Math.min(day, lastDay);
+  return `${firstOfTargetMonth.getUTCFullYear()}-${String(firstOfTargetMonth.getUTCMonth() + 1).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
+};
+
+const autoDueDateFromIssueDate = (issueDate: string, months: number): string => {
+  if (!isValidDDMMYYYY(issueDate)) return '';
+  return formatDDMMYYYY(addMonthsToISODate(toISO(issueDate), months));
+};
+
 // OVERDUE - due date < today and amount > 0
 const isOverdue = (isoDate: string, amount: number) => {
   if (!isoDate || amount <= 0) return false;
@@ -160,6 +181,7 @@ export default function HistoricalMigrationScreen({
   const [currentLoanDate, setCurrentLoanDate] = useState('');
 
   const [dueDate, setDueDate] = useState('');
+  const [maximumLoanRepaymentMonths, setMaximumLoanRepaymentMonths] = useState(12);
 
   // Calculate amount paid automatically.
   // Previous Loan Amount already includes interest.
@@ -233,6 +255,11 @@ export default function HistoricalMigrationScreen({
           .sort((a, b) =>
             a.full_name.localeCompare(b.full_name)
           )
+      );
+
+      const setupRules = await getVSLASetupRules(groupId);
+      setMaximumLoanRepaymentMonths(
+        Math.max(1, Number(setupRules?.maximum_loan_repayment_period ?? 12))
       );
 
       const bookTitle = bookName || groupName || 'Old Book';
@@ -310,10 +337,10 @@ export default function HistoricalMigrationScreen({
         return;
       }
 
-      if (dueDate && !isValidDDMMYYYY(dueDate)) {
+      if (!isValidDDMMYYYY(dueDate)) {
         Alert.alert(
-          'Check date',
-          'Enter Due Date as DD-MM-YYYY.'
+          'Due date unavailable',
+          'Enter a valid loan issue date first so Ebadsave can calculate the due date from the group setup rules.'
         );
         return;
       }
@@ -354,9 +381,9 @@ export default function HistoricalMigrationScreen({
       setSaving(true);
 
       try {
-        const dueISO = dueDate
-          ? toISO(dueDate)
-          : toISO(currentLoanDate);
+        const dueISO = toISO(dueDate);
+        const issueISO = toISO(prevLoanDate);
+        const balanceISO = toISO(currentLoanDate);
 
         await createHistoricalMigrationDraft({
           import_id: imp.id,
@@ -366,6 +393,10 @@ export default function HistoricalMigrationScreen({
           transaction_date: toISO(prevLoanDate),
           amount: prev,
           is_opening_balance: false,
+          loan_issued_plus_interest: prev,
+          loan_issued_date: issueISO,
+          loan_due_date: dueISO,
+          loan_balance_date: balanceISO,
           description:
             `Previous Loan Taken (TOTAL INCLUDING INTEREST): UGX ${prev}. ` +
             `Current / Balance Loan: UGX ${curr}. ` +
@@ -380,7 +411,7 @@ export default function HistoricalMigrationScreen({
           group_id: groupId,
           member_id: selectedMemberView.id,
           category: 'loan_issued',
-          transaction_date: dueISO,
+          transaction_date: balanceISO,
           amount: curr,
           is_opening_balance: false,
           description:
@@ -760,7 +791,10 @@ export default function HistoricalMigrationScreen({
 
                   <TextInput
                     value={prevLoanDate}
-                    onChangeText={setPrevLoanDate}
+                    onChangeText={value => {
+                      setPrevLoanDate(value);
+                      setDueDate(autoDueDateFromIssueDate(value, maximumLoanRepaymentMonths));
+                    }}
                     style={styles.input}
                     placeholder="DD-MM-YYYY Example: 17-04-2021"
                     keyboardType="numbers-and-punctuation"
@@ -799,20 +833,18 @@ export default function HistoricalMigrationScreen({
                   />
 
                   <Text style={styles.label}>
-                    Due Date (DD-MM-YYYY) - for Overdue check
+                    Automatically Calculated Due Date
                   </Text>
 
                   <TextInput
                     value={dueDate}
-                    onChangeText={setDueDate}
-                    style={styles.input}
-                    placeholder="DD-MM-YYYY - when loan should be paid"
-                    keyboardType="numbers-and-punctuation"
+                    editable={false}
+                    style={[styles.input, styles.autoDateInput]}
+                    placeholder="Enter loan issue date to calculate due date"
                   />
 
                   <Text style={styles.help}>
-                    If Due Date is before today and balance is
-                    more than 0, it will show OVERDUE in red.
+                    Calculated automatically from the loan issue date using the group's maximum repayment period ({maximumLoanRepaymentMonths} months). An outstanding balance after this date is marked OVERDUE in red.
                   </Text>
 
                   <Text style={styles.label}>
@@ -936,14 +968,11 @@ export default function HistoricalMigrationScreen({
               </Text>
 
               {visibleDrafts.map(draft => {
+                const savedLoanDueDate =
+                  prevDrafts.find(item => item.loan_due_date)?.loan_due_date || '';
                 const overdue =
-                  draft.category === 'previous_loan_balance' ||
-                  draft.category === 'loan_issued'
-                    ? isOverdue(
-                        draft.transaction_date,
-                        draft.amount
-                      )
-                    : false;
+                  draft.category === 'loan_issued' &&
+                  isOverdue(savedLoanDueDate, totalCurr);
 
                 return (
                   <View
@@ -973,6 +1002,12 @@ export default function HistoricalMigrationScreen({
                     <Text style={styles.meta}>
                       {formatDDMMYYYY(draft.transaction_date)}
                     </Text>
+
+                    {draft.category === 'loan_issued' && !!savedLoanDueDate && (
+                      <Text style={styles.meta}>
+                        Due date: {formatDDMMYYYY(savedLoanDueDate)}
+                      </Text>
+                    )}
 
                     {overdue && (
                       <Text style={styles.overdueText}>
