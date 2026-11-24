@@ -1287,6 +1287,12 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 11,
   },
+  autoDateInput: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#86efac',
+    color: '#14532d',
+    fontWeight: '700',
+  },
   autoText: {
     fontSize: 15,
     fontWeight: '700',
