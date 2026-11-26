@@ -12860,3 +12860,8 @@ export async function closeHistoricalMigration(input: {
   return closureId;
 }
 
+
+/** Shared SQLite handle for small service modules (e.g. SMS history). */
+export async function getAppDatabase(): Promise<SQLite.SQLiteDatabase> {
+  return getDatabase();
+}
