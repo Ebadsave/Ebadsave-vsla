@@ -1,4 +1,4 @@
-.package expo.modules.ebadsavesms
+package expo.modules.ebadsavesms
 
 import android.Manifest
 import android.app.Activity
