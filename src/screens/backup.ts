@@ -342,7 +342,7 @@ async function cloudflareBinaryRequest(
       authorization: `Bearer ${token}`,
       ...extraHeaders,
     },
-    body: body ? body as unknown as BodyInit : undefined,
+    body: body ? (body as any) : undefined,
   });
 
   if (!response.ok) {
