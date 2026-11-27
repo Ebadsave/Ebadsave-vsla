@@ -341,6 +341,11 @@ export default function App() {
         screenOptions={{
           headerShown: false,
         }}
+        <Stack.Navigator
+  id={undefined}
+  initialRouteName="Onboarding"
+  screenOptions={{ headerShown: false }}
+>
       >
         <Stack.Screen name="Onboarding" component={OnboardingScreen} />
         <Stack.Screen name="Welcome" component={WelcomeScreen} />
