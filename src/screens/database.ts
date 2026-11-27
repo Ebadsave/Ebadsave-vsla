@@ -1,14 +1,7 @@
+type BodyInit = any;
 import * as SQLite from 'expo-sqlite';
 import * as FileSystem from 'expo-file-system';
 import * as Crypto from 'expo-crypto';
-import {
-  BACK4APP_APPLICATION_ID,
-  BACK4APP_JAVASCRIPT_KEY,
-  BACK4APP_SERVER_URL,
-} from '../config/back4app';
-function generateLocalId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
-}
 
 export type GroupRecord = {
   id: number;
