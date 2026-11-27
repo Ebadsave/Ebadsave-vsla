@@ -3,13 +3,14 @@ import {
   ActivityIndicator, Alert, SafeAreaView, ScrollView, StyleSheet,
   Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
-import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import type { RootStackParamList } from '../../App';
 import { sendGroupAnnouncement, type SmsRunResult } from '../services/meetingSms';
 import { getRecentSmsHistory, type SmsHistoryRow } from '../services/smsSender';
 
-type Props = NativeStackScreenProps<RootStackParamList, 'GroupAnnouncement'>;
+type Props = {
+  route: { params: { groupId: number } };
+  navigation: { goBack: () => void };
+};
 
 const MAX_LENGTH = 300;
 
