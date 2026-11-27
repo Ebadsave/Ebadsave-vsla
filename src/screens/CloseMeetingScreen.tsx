@@ -16,11 +16,15 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../App';
 import {
   applyMeetingDayLoanInterest,
+  approveMeetingSummary,
   closeMeeting,
   getGroupById,
   getMeetingCashReconciliation,
+  getMembersByGroupId,
   getOpenMeeting,
+  verifyMemberPasscode,
 } from '../database/database';
+import { getExecutivePost, sendMeetingClosingSms } from '../services/meetingSms';
 import { exportDatabaseBackup, runAutomaticCloudBackup } from '../database/backup';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CloseMeeting'>;
@@ -53,15 +57,28 @@ export default function CloseMeetingScreen({ route, navigation }: Props) {
   const [checkingCash, setCheckingCash] = useState(false);
   const [creatingBackup, setCreatingBackup] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [executiveName, setExecutiveName] = useState('');
+  const [executivePost, setExecutivePost] = useState('Executive');
+  const [pin, setPin] = useState('');
+  const [signing, setSigning] = useState(false);
+  const [signed, setSigned] = useState(false);
+  const [smsProgress, setSmsProgress] = useState<{ done: number; total: number } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [group, openMeeting] = await Promise.all([
+      const [group, openMeeting, members] = await Promise.all([
         getGroupById(groupId),
         getOpenMeeting(groupId),
+        getMembersByGroupId(groupId),
       ]);
       if (group?.group_name) setGroupName(group.group_name);
+      // Responsible executive and their post come from the registered member records.
+      const executive = members.find((m) => m.id === executiveMemberId);
+      if (executive) {
+        setExecutiveName(executive.full_name);
+        setExecutivePost(getExecutivePost(executive));
+      }
       if (!openMeeting || Number(openMeeting.id) !== Number(meetingId)) {
         setMeeting(null);
         throw new Error('This meeting is not currently open. Return to the meeting page and refresh it.');
@@ -72,7 +89,7 @@ export default function CloseMeetingScreen({ route, navigation }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [groupId, meetingId]);
+  }, [groupId, meetingId, executiveMemberId]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -90,6 +107,7 @@ export default function CloseMeetingScreen({ route, navigation }: Props) {
       // Database uniqueness makes repeat cash checks safe for the same meeting.
       const interestResult = await applyMeetingDayLoanInterest(groupId, meetingId);
       const result = await getMeetingCashReconciliation(meetingId, amount);
+      setSigned(false);
       setCashCheck({ expectedCash: result.expectedCash, difference: result.difference, balanced: result.balanced });
       setBackupReceipt(null);
       if (result.balanced) {
@@ -168,9 +186,32 @@ export default function CloseMeetingScreen({ route, navigation }: Props) {
     return JSON.stringify({ ...backupReceipt, verified: true, verifiedAtClose: new Date().toISOString() });
   };
 
+  const handleSign = async () => {
+    try {
+      setSigning(true);
+      const result = await verifyMemberPasscode(executiveMemberId, groupId, pin.trim(), { requirePhone: false });
+      if (!result.success) {
+        const reasons: Record<string, string> = {
+          invalid_passcode: 'Enter the 6 to 12 digit PIN.',
+          not_activated: 'This executive has not set a PIN yet.',
+          locked: 'Too many wrong attempts. Try again in 15 minutes.',
+          incorrect_passcode: 'Incorrect PIN.',
+        };
+        Alert.alert('Signature Failed', reasons[result.reason] ?? 'The executive could not be verified.');
+        return;
+      }
+      setSigned(true);
+      setPin('');
+    } catch (error) {
+      Alert.alert('Signature Failed', error instanceof Error ? error.message : 'The PIN could not be checked.');
+    } finally {
+      setSigning(false);
+    }
+  };
+
   const handleCloseMeeting = () => {
-    if (!meeting || !cashCheck?.balanced || !backupReceipt) {
-      Alert.alert('Closing Requirements', 'Cash must balance and a verified backup must exist before closing.');
+    if (!meeting || !cashCheck?.balanced || !backupReceipt || !signed) {
+      Alert.alert('Closing Requirements', 'Cash must balance, a verified backup must exist and the executive must sign with their PIN before closing.');
       return;
     }
     Alert.alert('Close Meeting', 'Cash has been checked and the backup verified. Close this meeting now?', [
@@ -186,10 +227,30 @@ export default function CloseMeetingScreen({ route, navigation }: Props) {
             const latestCashCheck = await getMeetingCashReconciliation(meetingId, cashAmount);
             if (!latestCashCheck.balanced) throw new Error('Cash no longer balances. Recheck the cash before closing.');
             const receipt = await verifyBackupBeforeClose();
+
+            // Automatic individual SMS through this phone's SIM (no internet needed).
+            // Each result is recorded in the local SMS history. A failed SMS never
+            // blocks closing the meeting.
+            let smsStatus = '';
+            try {
+              const sms = await sendMeetingClosingSms({
+                groupId, meetingId, executiveMemberId,
+                onProgress: (done, total) => setSmsProgress({ done, total }),
+              });
+              smsStatus = `\n\nSMS report: Sent ${sms.sent}, Failed ${sms.failed}.`;
+              if (sms.noPhone > 0) smsStatus += ` ${sms.noPhone} member(s) have no valid phone number.`;
+              if (sms.permissionDenied) smsStatus += ' SMS permission was not allowed.';
+            } catch (smsError) {
+              setSmsProgress(null);
+              smsStatus = `\n\nSMS could not be prepared: ${smsError instanceof Error ? smsError.message : 'unknown error'}.`;
+            }
             // Trigger the Cloudflare automatic backup ONLY after closeMeeting
             // has completed successfully. The pre-close local backup above
             // remains unchanged and is still required to close the meeting.
+            setSmsProgress(null);
             await closeMeeting(meetingId, executiveMemberId, cashAmount, true, receipt);
+            // The executive's PIN signature approves the closed meeting summary.
+            await approveMeetingSummary(meetingId, executiveMemberId).catch(() => undefined);
 
             const cloudBackup = await runAutomaticCloudBackup(true);
             const cloudBackupStatus = cloudBackup.success && !cloudBackup.skipped
@@ -200,7 +261,7 @@ export default function CloseMeetingScreen({ route, navigation }: Props) {
 
             Alert.alert(
               'Meeting Closed',
-              `The meeting has been closed successfully. Its verified local backup is saved.${cloudBackupStatus}`,
+              `The meeting has been closed successfully. Its verified local backup is saved.${smsStatus}${cloudBackupStatus}`,
               [{ text: 'OK', onPress: () => navigation.navigate('Home') }],
             );
           } catch (error) {
@@ -228,6 +289,14 @@ export default function CloseMeetingScreen({ route, navigation }: Props) {
         return;
       }
       setStep(2);
+      return;
+    }
+    if (step === 2) {
+      if (!signed) {
+        Alert.alert('Signature Required', 'The executive must enter their PIN to sign the meeting summary.');
+        return;
+      }
+      setStep(3);
     }
   };
 
@@ -247,13 +316,13 @@ export default function CloseMeetingScreen({ route, navigation }: Props) {
           <Text style={styles.subtitle}>{groupName}</Text>
           <Text style={styles.subtitle}>Meeting #{meeting.meeting_number ?? meeting.id}</Text>
         </View>
-        <View style={styles.stepBar}><Text style={[styles.stepText, step === 0 && styles.activeStep]}>1. Cash</Text><Text style={[styles.stepText, step === 1 && styles.activeStep]}>2. Backup</Text><Text style={[styles.stepText, step === 2 && styles.activeStep]}>3. Close</Text></View>
+        <View style={styles.stepBar}><Text style={[styles.stepText, step === 0 && styles.activeStep]}>1. Cash</Text><Text style={[styles.stepText, step === 1 && styles.activeStep]}>2. Backup</Text><Text style={[styles.stepText, step === 2 && styles.activeStep]}>3. Sign</Text><Text style={[styles.stepText, step === 3 && styles.activeStep]}>4. Close</Text></View>
 
         {step === 0 && <View style={styles.card}>
           <Text style={styles.sectionTitle}>Step 1 — Check Cash in the Box</Text>
           <Text style={styles.body}>Count the actual cash physically available and enter the amount below. The app compares it with expected cash from recorded transactions.</Text>
           <Text style={styles.label}>Actual cash in box (UGX)</Text>
-          <TextInput value={cashInBox} onChangeText={(value) => { setCashInBox(value); setCashCheck(null); setBackupReceipt(null); }} keyboardType="decimal-pad" placeholder="0" placeholderTextColor="#9ca3af" style={styles.input} />
+          <TextInput value={cashInBox} onChangeText={(value) => { setCashInBox(value); setCashCheck(null); setBackupReceipt(null); setSigned(false); }} keyboardType="decimal-pad" placeholder="0" placeholderTextColor="#9ca3af" style={styles.input} />
           <TouchableOpacity style={styles.primaryButton} onPress={() => void handleCheckCash()} disabled={checkingCash}>
             {checkingCash ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Check Cash</Text>}
           </TouchableOpacity>
@@ -274,17 +343,29 @@ export default function CloseMeetingScreen({ route, navigation }: Props) {
         </View>}
 
         {step === 2 && <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Step 3 — Close Meeting</Text>
-          <Text style={styles.body}>The app will recheck cash and verify the backup again immediately before closing. If either check fails, the meeting stays open.</Text>
-          <View style={styles.goodBox}><Text style={styles.resultTitle}>✓ Cash balanced</Text><Text style={styles.body}>✓ Backup verified</Text></View>
+          <Text style={styles.sectionTitle}>Step 3 — Executive Signature</Text>
+          <Text style={styles.body}>Responsible executive: {executiveName || 'Executive'} ({executivePost}). Enter your PIN to sign this meeting summary.</Text>
+          {signed ? <View style={styles.goodBox}><Text style={styles.resultTitle}>✓ SIGNED</Text><Text style={styles.body}>{executiveName}, {executivePost}</Text></View> : <>
+            <Text style={styles.label}>Executive PIN</Text>
+            <TextInput value={pin} onChangeText={setPin} keyboardType="number-pad" secureTextEntry maxLength={12} placeholder="••••••" placeholderTextColor="#9ca3af" style={styles.input} />
+            <TouchableOpacity style={styles.primaryButton} onPress={() => void handleSign()} disabled={signing || pin.length < 6}>
+              {signing ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Sign Summary</Text>}
+            </TouchableOpacity>
+          </>}
+        </View>}
+
+        {step === 3 && <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Step 4 — Close Meeting</Text>
+          <Text style={styles.body}>The app will recheck cash, verify the backup, send each member their individual SMS from this phone's SIM (no internet needed), record the results, then close the meeting. If a check fails, the meeting stays open.</Text>
+          <View style={styles.goodBox}><Text style={styles.resultTitle}>✓ Cash balanced</Text><Text style={styles.body}>✓ Backup verified</Text><Text style={styles.body}>✓ Signed by {executiveName}, {executivePost}</Text></View>
           <TouchableOpacity style={[styles.primaryButton, closing && styles.disabled]} onPress={handleCloseMeeting} disabled={closing}>
-            {closing ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Close Meeting</Text>}
+            {closing ? (smsProgress ? <Text style={styles.primaryText}>Sending SMS {smsProgress.done}/{smsProgress.total}...</Text> : <ActivityIndicator color="#fff" />) : <Text style={styles.primaryText}>Close Meeting</Text>}
           </TouchableOpacity>
         </View>}
 
         <View style={styles.footerButtons}>
           <TouchableOpacity style={styles.secondaryButton} onPress={() => step === 0 ? navigation.goBack() : setStep((current) => current - 1)} disabled={closing}><Text style={styles.secondaryText}>Back</Text></TouchableOpacity>
-          {step < 2 && <TouchableOpacity style={[styles.primaryButton, styles.nextButton, ((step === 0 && !cashCheck?.balanced) || (step === 1 && !backupReceipt)) && styles.disabled]} onPress={goNext} disabled={(step === 0 && !cashCheck?.balanced) || (step === 1 && !backupReceipt)}><Text style={styles.primaryText}>Next</Text></TouchableOpacity>}
+          {step < 3 && <TouchableOpacity style={[styles.primaryButton, styles.nextButton, ((step === 0 && !cashCheck?.balanced) || (step === 1 && !backupReceipt) || (step === 2 && !signed)) && styles.disabled]} onPress={goNext} disabled={(step === 0 && !cashCheck?.balanced) || (step === 1 && !backupReceipt) || (step === 2 && !signed)}><Text style={styles.primaryText}>Next</Text></TouchableOpacity>}
         </View>
       </ScrollView>
     </SafeAreaView>
