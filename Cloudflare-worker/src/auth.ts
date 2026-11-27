@@ -171,7 +171,11 @@ export async function issueAccessToken(
   user: { userId: string; groupId: string; role: AuthRole },
 ): Promise<{ accessToken: string; expiresIn: number }> {
   const now = Math.floor(Date.now() / 1000);
-  const expiresIn = 15 * 60;
+  // Admins and executives work offline for days, then sync backups and SMS when
+  // internet returns, so their sessions last 7 days. Logout revocation and the
+  // per-request active-user/role check still apply. Members stay at 15 minutes.
+  const expiresIn =
+    user.role === 'admin' || user.role === 'executive' ? 7 * 24 * 60 * 60 : 15 * 60;
 
   const claims: JwtClaims = {
     sub: user.userId,
