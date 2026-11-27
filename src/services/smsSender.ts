@@ -5,6 +5,7 @@
 import { PermissionsAndroid, Platform } from 'react-native';
 import SimSms from '../../modules/ebadsave-sms';
 import { getAppDatabase } from '../database/database';
+import { sendSmsViaSim } from './smsSim';
 
 export type SmsKind = 'meeting_summary' | 'announcement';
 
@@ -180,8 +181,8 @@ export async function sendSmsList(
         else if (!allowed) { error = 'E_NO_PERMISSION'; summary.permissionDenied = true; }
         else {
           try {
-await sendSmsViaSim(phone, message);
-          } catch (e) {
+  await sendSmsViaSim(phone, item.text);
+} catch (e) { {
             error = (e as { code?: string })?.code || 'E_GENERIC';
           }
         }
