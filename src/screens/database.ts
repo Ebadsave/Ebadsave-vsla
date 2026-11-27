@@ -3388,16 +3388,6 @@ async function syncExistingGroupsToBack4App(groups: GroupRecord[]): Promise<void
     }))
     .filter((group) => group.groupNumber >= GROUP_START && group.groupNumber <= GROUP_END);
 
-  // Small batches avoid oversized Cloud Code requests on devices with many local groups.
-  for (let index = 0; index < productionGroups.length; index += 100) {
-      { groups: productionGroups.slice(index, index + 100) },
-    );
-  }
-}
-
-/**
- * Production registration is coordinated through Back4App, never Firebase.
- * The local SQLite record is only marked active after Back4App finalizes the reservation.
  */
 async function getOrCreatePendingGroupRegistration(
   localDb: SQLite.SQLiteDatabase,
