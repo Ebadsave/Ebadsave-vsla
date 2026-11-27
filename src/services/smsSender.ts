@@ -180,10 +180,11 @@ export async function sendSmsList(
         else if (!allowed) { error = 'E_NO_PERMISSION'; summary.permissionDenied = true; }
         else {
           try {
-  await SimSms(phone, item.text);
-} catch (e) {
-  error = (e as { code?: string })?.code || 'E_GENERIC';
-    }
+            await SimSms(phone, item.text);
+          } catch (e) {
+            error = (e as { code?: string })?.code || 'E_GENERIC';
+          }
+        }
 
         const now = new Date().toISOString();
         await database.runAsync(
