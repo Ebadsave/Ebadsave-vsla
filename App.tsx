@@ -336,17 +336,13 @@ export default function App() {
       initialState={initialNavigationState}
       onStateChange={persistNavigationState}
     >
-      <Stack.Navigator
+            <Stack.Navigator
         initialRouteName="Onboarding"
         screenOptions={{
           headerShown: false,
         }}
-        <Stack.Navigator
-  id={undefined}
-  initialRouteName="Onboarding"
-  screenOptions={{ headerShown: false }}
->
       >
+      
         <Stack.Screen name="Onboarding" component={OnboardingScreen} />
         <Stack.Screen name="Welcome" component={WelcomeScreen} />
         <Stack.Screen name="CreateGroupStart" component={EntryFlowScreen} />
