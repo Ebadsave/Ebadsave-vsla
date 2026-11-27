@@ -3390,8 +3390,6 @@ async function syncExistingGroupsToBack4App(groups: GroupRecord[]): Promise<void
 
   // Small batches avoid oversized Cloud Code requests on devices with many local groups.
   for (let index = 0; index < productionGroups.length; index += 100) {
-    await callBack4AppFunction<{ synced: number }>(
-      'syncKyaGroupReservations',
       { groups: productionGroups.slice(index, index + 100) },
     );
   }
