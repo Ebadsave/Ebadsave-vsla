@@ -3388,7 +3388,7 @@ async function syncExistingGroupsToBack4App(groups: GroupRecord[]): Promise<void
     }))
     .filter((group) => group.groupNumber >= GROUP_START && group.groupNumber <= GROUP_END);
 
- */
+ *//
 async function getOrCreatePendingGroupRegistration(
   localDb: SQLite.SQLiteDatabase,
   groupName: string,
