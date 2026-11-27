@@ -47,7 +47,7 @@ export type RootStackParamList = {
   ExistingGroupOnboarding: { groupId: number };
   HistoricalRecords: { groupId: number; executiveMemberId: number };
   HistoricalMigration: { groupId: number; executiveMemberId: number };
-  HistoricalMigrationReview:  { groupId: number; executiveMemberId: number };
+  HistoricalMigrationReview: { groupId: number; executiveMemberId: number };
   ShareOutCalculation: { groupId: number; executiveMemberId: number };
   PreAppAuthorization: undefined;
   Home: undefined;
@@ -60,87 +60,71 @@ export type RootStackParamList = {
   CloudflarePassbookSync: undefined;
   MemberPassbookLogin: undefined;
   MemberPassbook: undefined;
-
   SetupRules: {
     groupId: number;
   };
-
   GroupManagement: {
     groupId: number;
     executiveMemberId: number;
   };
-
   AddMembers: {
     groupId: number;
   };
-
   NewMeeting: {
     groupId: number;
     executiveMemberId: number;
   };
-
   CloseMeeting: {
     groupId: number;
     executiveMemberId: number;
     meetingId: number;
   };
-
   MeetingRollCall: {
     groupId: number;
     meetingId: number;
     executiveMemberId: number;
   };
-
   FinancialTransactions: {
     groupId: number;
     meetingId: number;
     executiveMemberId?: number;
     currency?: string;
   };
-
   Savings: {
     groupId: number;
     executiveMemberId: number;
     meetingId: number;
   };
-
   LoanDisbursement: {
     groupId: number;
     meetingId: number;
     executiveMemberId?: number;
     currency?: string;
   };
-
   Fines: {
     groupId: number;
     executiveMemberId: number;
   };
-
   Insurance: {
     groupId: number;
     executiveMemberId: number;
   };
-
   ExternalFunds: {
     groupId: number;
     executiveMemberId: number;
   };
-
   Repayment: {
     groupId: number;
     executiveMemberId: number;
   };
-
   Loans: {
     groupId: number;
     executiveMemberId: number;
   };
-
   MiscellaneousExpense: {
     groupId: number;
     executiveMemberId: number;
   };
-
   Expenditure: {
     groupId: number;
     meetingId: number;
@@ -336,13 +320,13 @@ export default function App() {
       initialState={initialNavigationState}
       onStateChange={persistNavigationState}
     >
-            <Stack.Navigator
+      <Stack.Navigator
+        id="RootStack"
         initialRouteName="Onboarding"
         screenOptions={{
           headerShown: false,
         }}
       >
-      
         <Stack.Screen name="Onboarding" component={OnboardingScreen} />
         <Stack.Screen name="Welcome" component={WelcomeScreen} />
         <Stack.Screen name="CreateGroupStart" component={EntryFlowScreen} />
