@@ -187,27 +187,34 @@ export default function CloseMeetingScreen({ route, navigation }: Props) {
   };
 
   const handleSign = async () => {
-    try {
-      setSigning(true);
-      const result = await verifyMemberPasscode(executiveMemberId, groupId, pin.trim(), { requirePhone: false });
-      if (!result.success) {
-        const reasons: Record<string, string> = {
-          invalid_passcode: 'Enter the 6 to 12 digit PIN.',
-          not_activated: 'This executive has not set a PIN yet.',
-          locked: 'Too many wrong attempts. Try again in 15 minutes.',
-          incorrect_passcode: 'Incorrect PIN.',
-        };
-        Alert.alert('Signature Failed', reasons[result.reason] ?? 'The executive could not be verified.');
-        return;
-      }
-      setSigned(true);
-      setPin('');
-    } catch (error) {
-      Alert.alert('Signature Failed', error instanceof Error ? error.message : 'The PIN could not be checked.');
-    } finally {
-      setSigning(false);
+  try {
+    setSigning(true);
+    const result = await verifyMemberPasscode(executiveMemberId, groupId, pin.trim(), { requirePhone: false });
+    if (!result.success) {
+      const reasons: Record<string, string> = {
+        invalid_passcode: 'Enter the 6 to 12 digit PIN.',
+        not_activated: 'This executive has not set a PIN yet.',
+        locked: 'Too many wrong attempts. Try again in 15 minutes.',
+        incorrect_passcode: 'Incorrect PIN.',
+      };
+      const code =
+        (result as any).reason ??
+        (result as any).code ??
+        (result as any).errorCode ??
+        (result as any).error ??
+        (result as any).message ??
+        'incorrect_passcode';
+      Alert.alert('Signature Failed', reasons[code] ?? 'The executive could not be verified.');
+      return;
     }
-  };
+    setSigned(true);
+    setPin('');
+  } catch (error) {
+    Alert.alert('Signature Failed', error instanceof Error ? error.message : 'The PIN could not be checked.');
+  } finally {
+    setSigning(false);
+  }
+};
 
   const handleCloseMeeting = () => {
     if (!meeting || !cashCheck?.balanced || !backupReceipt || !signed) {
