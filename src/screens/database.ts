@@ -1,3 +1,4 @@
+type BodyInit = any;
 import * as SQLite from 'expo-sqlite';
 import * as FileSystem from 'expo-file-system';
 import * as Crypto from 'expo-crypto';
