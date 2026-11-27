@@ -181,8 +181,8 @@ export async function sendSmsList(
         else if (!allowed) { error = 'E_NO_PERMISSION'; summary.permissionDenied = true; }
         else {
           try {
-  await sendSmsViaSim(phone, item.text);
-} catch (e) { {
+            await sendSmsViaSim(phone, item.text);
+          } catch (e) {
             error = (e as { code?: string })?.code || 'E_GENERIC';
           }
         }
