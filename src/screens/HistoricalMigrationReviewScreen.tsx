@@ -247,7 +247,7 @@ export default function HistoricalMigrationReviewScreen({ route, navigation }: P
               <View style={styles.detailRow}><Text style={styles.rowLabel}>Insurance</Text><Text style={styles.rowValue}>UGX {s.insurance.toLocaleString()}</Text></View>
               <View style={styles.row}>
                 <TouchableOpacity onPress={() => navigation.navigate('HistoricalMigration', { groupId: groupId, executiveMemberId: executiveMemberId, bookName: bookName })} style={styles.smallButton}>
-                  <Text style={styles.smallText}>Edit This Member</Text>
+                  <Text style={styles.smallText}>Edit</Text>
                 </TouchableOpacity>
               </View>
             </View>
