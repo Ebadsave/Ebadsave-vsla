@@ -37,9 +37,8 @@ const isOverdue = (isoDate: string, amount: number) => {
   return new Date(`${isoDate.slice(0, 10)}T00:00:00`) < today;
 };
 
-// FIX 1 HELPER: parse amount safely "162,000" -> 162000
+// Helpers
 const toAmount = (v: any) => Number(String(v ?? 0).replace(/,/g, '')) || 0;
-// FIX 1 HELPER: get import_id safely
 const getImportId = (d: any) => Number(d.import_id ?? d.importId ?? d.importID ?? 0);
 
 export default function HistoricalMigrationReviewScreen({ route, navigation }: Props) {
@@ -52,7 +51,7 @@ export default function HistoricalMigrationReviewScreen({ route, navigation }: P
   const [confirmedUntil, setConfirmedUntil] = useState<string | null>(null);
 
   const CONFIRM_KEY = `hm_confirm_${groupId}`;
-  const TRUST_DAYS = 2;
+  const TRUST_DAYS = 20;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -68,7 +67,7 @@ export default function HistoricalMigrationReviewScreen({ route, navigation }: P
         allDrafts = [...allDrafts, ...d];
       }
       setDrafts(allDrafts);
-      // Check if still trusted for 20 days
+      // 2-day trust check - unchanged
       const saved = await AsyncStorage.getItem(CONFIRM_KEY);
       if (saved) {
         const until = new Date(saved);
@@ -85,9 +84,11 @@ export default function HistoricalMigrationReviewScreen({ route, navigation }: P
 
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
-  // FIX 1: Savings = latest intake only
-  const getLatestSavingsForMember = (memberId: number) => {
-    const list = drafts.filter(d => d.member_id === memberId && d.category === 'savings');
+  // ===== CORE FIX: Latest intake only, for ALL categories =====
+  // For one member + one category, take only drafts from that member's latest import_id.
+  // Old intakes are IGNORED, not added. If you re-enter a corrected analysis, only the new one counts.
+  const getLatestAmount = (memberId: number, category: string) => {
+    const list = drafts.filter(d => d.member_id === memberId && d.category === category);
     if (!list.length) return 0;
     const latestImportId = Math.max(...list.map(d => getImportId(d)));
     return list
@@ -97,22 +98,30 @@ export default function HistoricalMigrationReviewScreen({ route, navigation }: P
 
   const getMemberSummary = (memberId: number) => {
     const list = drafts.filter(d => d.member_id === memberId);
-    // FIX 1: was sum of all imports, now latest intake only
-    const savings = getLatestSavingsForMember(memberId);
-    const prev = list.filter(d => d.category === 'previous_loan_balance').reduce((s, d) => s + toAmount((d as any).amount), 0);
-    const curr = list.filter(d => d.category === 'loan_issued').reduce((s, d) => s + toAmount((d as any).amount), 0);
-    const fines = list.filter(d => d.category === 'fine').reduce((s, d) => s + toAmount((d as any).amount), 0);
-    const insurance = list.filter(d => d.category === 'insurance').reduce((s, d) => s + toAmount((d as any).amount), 0);
+
+    // Each one is separate - we NEVER add Previous + Current together
+    const savings = getLatestAmount(memberId, 'savings');
+    const prev = getLatestAmount(memberId, 'previous_loan_balance'); // Loan taken before app + interest
+    const curr = getLatestAmount(memberId, 'loan_issued'); // What he still owes now
+    const fines = getLatestAmount(memberId, 'fine');
+    const insurance = getLatestAmount(memberId, 'insurance');
+
+    // Paid logic - kept as you wanted:
+    // If paying well: curr < prev, paid = prev - curr
+    // If defaulting: curr > prev (interest accumulating), paid = 0, show OVERDUE
     const paid = prev - curr < 0 ? 0 : prev - curr;
+
     const loanDueDate = list.find(d => d.category === 'previous_loan_balance' && d.loan_due_date)?.loan_due_date || '';
     const overdue = isOverdue(loanDueDate, curr);
     return { savings, prev, curr, fines, insurance, paid, loanDueDate, overdue, count: list.length };
   };
 
-  // FIX 1: Group Total Savings = sum of each member's latest intake only
-  const totalSavings = members.reduce((total, m) => total + getLatestSavingsForMember(m.id), 0);
-  const totalPrev = drafts.filter(d => d.category === 'previous_loan_balance').reduce((s, d) => s + toAmount((d as any).amount), 0);
-  const totalCurr = drafts.filter(d => d.category === 'loan_issued').reduce((s, d) => s + toAmount((d as any).amount), 0);
+  // ===== Group Totals: sum of each member's LATEST only, not sum of all drafts =====
+  const totalSavings = members.reduce((t, m) => t + getLatestAmount(m.id, 'savings'), 0);
+  const totalPrev = members.reduce((t, m) => t + getLatestAmount(m.id, 'previous_loan_balance'), 0);
+  const totalCurr = members.reduce((t, m) => t + getLatestAmount(m.id, 'loan_issued'), 0);
+  const totalFines = members.reduce((t, m) => t + getLatestAmount(m.id, 'fine'), 0);
+  const totalInsurance = members.reduce((t, m) => t + getLatestAmount(m.id, 'insurance'), 0);
 
   const onConfirmPress = () => {
     if (confirmedUntil) {
@@ -123,7 +132,7 @@ export default function HistoricalMigrationReviewScreen({ route, navigation }: P
   };
 
   const confirmWithPin = async () => {
-    // FIX 2: PIN must be 6-12 characters
+    // PIN must be 6-12 characters
     const entered = pin.trim();
     if (entered.length < 6) {
       Alert.alert('PIN too short', 'Enter 6 to 12 characters.');
@@ -133,7 +142,7 @@ export default function HistoricalMigrationReviewScreen({ route, navigation }: P
       Alert.alert('PIN too long', 'Enter 6 to 12 characters.');
       return;
     }
-    // FIX 2: '6-12' was not a PIN, it was a length description. Use real default.
+    // '6-12' was not a PIN, it was a length description. Use real default.
     const correctPin = adminPin || '123456';
     if (entered !== correctPin) {
       Alert.alert('Wrong PIN', 'Enter correct Administrator PIN.');
@@ -175,12 +184,14 @@ export default function HistoricalMigrationReviewScreen({ route, navigation }: P
         )}
 
         <View style={styles.summaryCard}>
-          <Text style={styles.summaryTitle}>Group Totals</Text>
+          <Text style={styles.summaryTitle}>Group Totals - Latest Intake Only</Text>
           <View style={styles.detailRow}><Text style={styles.rowLabel}>Members</Text><Text style={styles.rowValue}>{members.length}</Text></View>
           <View style={styles.detailRow}><Text style={styles.rowLabel}>Total Savings</Text><Text style={styles.rowValue}>UGX {totalSavings.toLocaleString()}</Text></View>
           <View style={styles.detailRow}><Text style={styles.rowLabel}>Total Previous Loan</Text><Text style={styles.rowValue}>UGX {totalPrev.toLocaleString()}</Text></View>
           <View style={styles.detailRow}><Text style={styles.rowLabel}>Total Current Loan</Text><Text style={styles.rowValue}>UGX {totalCurr.toLocaleString()}</Text></View>
           <View style={styles.detailRow}><Text style={styles.rowLabel}>Total Paid</Text><Text style={styles.rowValue}>UGX {(totalPrev - totalCurr < 0 ? 0 : totalPrev - totalCurr).toLocaleString()}</Text></View>
+          <View style={styles.detailRow}><Text style={styles.rowLabel}>Total Fines</Text><Text style={styles.rowValue}>UGX {totalFines.toLocaleString()}</Text></View>
+          <View style={styles.detailRow}><Text style={styles.rowLabel}>Total Insurance</Text><Text style={styles.rowValue}>UGX {totalInsurance.toLocaleString()}</Text></View>
         </View>
 
         {members.map(m => {
@@ -246,24 +257,4 @@ const styles = StyleSheet.create({
   groupTitle: { fontSize: 18, fontWeight: '500', lineHeight: 22, color: '#111827' },
   groupCode: { fontSize: 12, fontWeight: '400', color: '#64748b', marginTop: 4 },
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
-  rowLabel: { fontSize: 12, fontWeight: '500', color: '#334155' },
-  rowValue: { fontSize: 12, fontWeight: '500', color: '#111827' },
-  summaryCard: { backgroundColor: '#eff6ff', borderWidth: 1, borderColor: '#93c5fd', borderRadius: 10, padding: 11, marginTop: 14 },
-  summaryTitle: { fontSize: 12, fontWeight: '700', color: '#1e3a8a' },
-  draftCard: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#dbe4dc', borderRadius: 10, padding: 11, marginTop: 8 },
-  overdueCard: { borderColor: '#dc2626', borderWidth: 1, backgroundColor: '#fef2f2' },
-  overdueText: { fontSize: 12, fontWeight: '700', color: '#dc2626' },
-  row: { flexDirection: 'row', gap: 8, marginTop: 10 },
-  smallButton: { flex: 1, backgroundColor: '#dbeafe', padding: 11, borderRadius: 8, alignItems: 'center' },
-  smallText: { color: '#1d4ed8', fontWeight: '500', fontSize: 12 },
-  primary: { minHeight: 49, backgroundColor: '#16a34a', borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginTop: 14, paddingHorizontal: 12 },
-  primaryText: { color: '#fff', fontSize: 12, fontWeight: '500', textAlign: 'center' },
-  secondary: { padding: 12, alignItems: 'center' },
-  secondaryText: { color: '#475569', fontWeight: '500', fontSize: 12 },
-  notice: { backgroundColor: '#fef3c7', borderColor: '#f59e0b', borderWidth: 1, borderRadius: 10, padding: 11, marginBottom: 10 },
-  noticeText: { color: '#92400e', fontSize: 11, fontWeight: '400', lineHeight: 14 },
-  confirmedBox: { backgroundColor: '#f0fdf4', borderColor: '#86efac', borderWidth: 1, borderRadius: 10, padding: 11, marginBottom: 10 },
-  confirmedText: { fontSize: 12, fontWeight: '700', color: '#166534' },
-  help: { fontSize: 11, color: '#64748b', lineHeight: 14, marginTop: 7 },
-  pinCard: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#dbe4dc', borderRadius: 10, padding: 11, marginTop: 14 },
-});
+  rowLabel: { fontSize: 12, fontWeight:
