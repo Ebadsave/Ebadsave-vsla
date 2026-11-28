@@ -2,13 +2,13 @@
   "expo": {
     "name": "Ebadsave VSLA",
     "slug": "ebadsave-vsla",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/icon/app_icon.png",
     "userInterfaceStyle": "light",
     "android": {
       "package": "com.ebadsave.vsla",
-      "versionCode": 3,
+      "versionCode": 4,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon/app_icon.png",
