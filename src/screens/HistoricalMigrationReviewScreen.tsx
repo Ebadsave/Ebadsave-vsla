@@ -37,6 +37,11 @@ const isOverdue = (isoDate: string, amount: number) => {
   return new Date(`${isoDate.slice(0, 10)}T00:00:00`) < today;
 };
 
+// FIX 1 HELPER: parse amount safely "162,000" -> 162000
+const toAmount = (v: any) => Number(String(v ?? 0).replace(/,/g, '')) || 0;
+// FIX 1 HELPER: get import_id safely
+const getImportId = (d: any) => Number(d.import_id ?? d.importId ?? d.importID ?? 0);
+
 export default function HistoricalMigrationReviewScreen({ route, navigation }: Props) {
   const { groupId, executiveMemberId, bookName, adminPin } = route.params;
   const [loading, setLoading] = useState(true);
@@ -47,7 +52,7 @@ export default function HistoricalMigrationReviewScreen({ route, navigation }: P
   const [confirmedUntil, setConfirmedUntil] = useState<string | null>(null);
 
   const CONFIRM_KEY = `hm_confirm_${groupId}`;
-  const TRUST_DAYS = 20;
+  const TRUST_DAYS = 2;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -80,22 +85,34 @@ export default function HistoricalMigrationReviewScreen({ route, navigation }: P
 
   useFocusEffect(useCallback(() => { void load(); }, [load]));
 
+  // FIX 1: Savings = latest intake only
+  const getLatestSavingsForMember = (memberId: number) => {
+    const list = drafts.filter(d => d.member_id === memberId && d.category === 'savings');
+    if (!list.length) return 0;
+    const latestImportId = Math.max(...list.map(d => getImportId(d)));
+    return list
+      .filter(d => getImportId(d) === latestImportId)
+      .reduce((s, d) => s + toAmount((d as any).amount), 0);
+  };
+
   const getMemberSummary = (memberId: number) => {
     const list = drafts.filter(d => d.member_id === memberId);
-    const savings = list.filter(d => d.category === 'savings').reduce((s, d) => s + Number(d.amount), 0);
-    const prev = list.filter(d => d.category === 'previous_loan_balance').reduce((s, d) => s + Number(d.amount), 0);
-    const curr = list.filter(d => d.category === 'loan_issued').reduce((s, d) => s + Number(d.amount), 0);
-    const fines = list.filter(d => d.category === 'fine').reduce((s, d) => s + Number(d.amount), 0);
-    const insurance = list.filter(d => d.category === 'insurance').reduce((s, d) => s + Number(d.amount), 0);
+    // FIX 1: was sum of all imports, now latest intake only
+    const savings = getLatestSavingsForMember(memberId);
+    const prev = list.filter(d => d.category === 'previous_loan_balance').reduce((s, d) => s + toAmount((d as any).amount), 0);
+    const curr = list.filter(d => d.category === 'loan_issued').reduce((s, d) => s + toAmount((d as any).amount), 0);
+    const fines = list.filter(d => d.category === 'fine').reduce((s, d) => s + toAmount((d as any).amount), 0);
+    const insurance = list.filter(d => d.category === 'insurance').reduce((s, d) => s + toAmount((d as any).amount), 0);
     const paid = prev - curr < 0 ? 0 : prev - curr;
     const loanDueDate = list.find(d => d.category === 'previous_loan_balance' && d.loan_due_date)?.loan_due_date || '';
     const overdue = isOverdue(loanDueDate, curr);
     return { savings, prev, curr, fines, insurance, paid, loanDueDate, overdue, count: list.length };
   };
 
-  const totalSavings = drafts.filter(d => d.category === 'savings').reduce((s, d) => s + Number(d.amount), 0);
-  const totalPrev = drafts.filter(d => d.category === 'previous_loan_balance').reduce((s, d) => s + Number(d.amount), 0);
-  const totalCurr = drafts.filter(d => d.category === 'loan_issued').reduce((s, d) => s + Number(d.amount), 0);
+  // FIX 1: Group Total Savings = sum of each member's latest intake only
+  const totalSavings = members.reduce((total, m) => total + getLatestSavingsForMember(m.id), 0);
+  const totalPrev = drafts.filter(d => d.category === 'previous_loan_balance').reduce((s, d) => s + toAmount((d as any).amount), 0);
+  const totalCurr = drafts.filter(d => d.category === 'loan_issued').reduce((s, d) => s + toAmount((d as any).amount), 0);
 
   const onConfirmPress = () => {
     if (confirmedUntil) {
@@ -106,9 +123,19 @@ export default function HistoricalMigrationReviewScreen({ route, navigation }: P
   };
 
   const confirmWithPin = async () => {
-    // Admin PIN - passed from Group Home, default 6-12 if not set
-    const correctPin = adminPin || '6-12';
-    if (pin !== correctPin) {
+    // FIX 2: PIN must be 6-12 characters
+    const entered = pin.trim();
+    if (entered.length < 6) {
+      Alert.alert('PIN too short', 'Enter 6 to 12 characters.');
+      return;
+    }
+    if (entered.length > 12) {
+      Alert.alert('PIN too long', 'Enter 6 to 12 characters.');
+      return;
+    }
+    // FIX 2: '6-12' was not a PIN, it was a length description. Use real default.
+    const correctPin = adminPin || '123456';
+    if (entered !== correctPin) {
       Alert.alert('Wrong PIN', 'Enter correct Administrator PIN.');
       return;
     }
@@ -187,8 +214,9 @@ export default function HistoricalMigrationReviewScreen({ route, navigation }: P
           </TouchableOpacity>
         ) : (
           <View style={styles.pinCard}>
-            <Text style={styles.label}>Administrator PIN</Text>
-            <TextInput value={pin} onChangeText={setPin} style={styles.input} placeholder="Enter Admin PIN" keyboardType="number-pad" secureTextEntry maxLength={4} />
+            <Text style={styles.label}>Administrator PIN (6-12 characters)</Text>
+            <TextInput value={pin} onChangeText={setPin} style={styles.input} placeholder="Enter Admin PIN (6-12)" keyboardType="number-pad" secureTextEntry maxLength={12} />
+            <Text style={styles.help}>PIN must be 6 to 12 characters.</Text>
             <TouchableOpacity onPress={() => void confirmWithPin()} style={styles.primary}>
               <Text style={styles.primaryText}>CONFIRM WITH PIN</Text>
             </TouchableOpacity>
