@@ -106,8 +106,8 @@ export default function HistoricalMigrationReviewScreen({ route, navigation }: P
   };
 
   const confirmWithPin = async () => {
-    // Admin PIN - passed from Group Home, default 1234 if not set
-    const correctPin = adminPin || '1234';
+    // Admin PIN - passed from Group Home, default 6-12 if not set
+    const correctPin = adminPin || '6-12';
     if (pin !== correctPin) {
       Alert.alert('Wrong PIN', 'Enter correct Administrator PIN.');
       return;
